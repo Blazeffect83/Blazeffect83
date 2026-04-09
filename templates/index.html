@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0f0f18">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Video Editor</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f0f18;
+      --surface:  #1a1a28;
+      --surface2: #22223a;
+      --border:   #2e2e4a;
+      --primary:  #7c6af7;
+      --primary-d:#5f4fd4;
+      --success:  #22d3a0;
+      --warn:     #fbbf24;
+      --error:    #f87171;
+      --text:     #e2e2f0;
+      --muted:    #6b6b90;
+      --radius:   12px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.5;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    .app {
+      max-width: 680px;
+      margin: 0 auto;
+      padding: 0 0 80px;
+    }
+
+    /* ── Header ───────────────────────────────────────────────────────── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 20px 20px 0;
+    }
+    header h1 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      flex: 1;
+    }
+    header .logo { font-size: 1.4rem; }
+    #reset-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+    #reset-btn:hover { border-color: var(--primary); color: var(--text); }
+
+    /* ── Step indicator ───────────────────────────────────────────────── */
+    .steps {
+      display: flex;
+      align-items: center;
+      padding: 20px 20px 0;
+      gap: 0;
+    }
+    .step-dot {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; font-weight: 600;
+      color: var(--muted);
+      flex-shrink: 0;
+      transition: border-color 0.2s, background 0.2s, color 0.2s;
+    }
+    .step-dot.active  { border-color: var(--primary); color: var(--primary); }
+    .step-dot.done    { border-color: var(--success); background: var(--success); color: #0f0f18; }
+    .step-line { flex: 1; height: 2px; background: var(--border); }
+
+    /* ── Cards ────────────────────────────────────────────────────────── */
+    .card {
+      margin: 16px 12px 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      display: none;
+    }
+    .card.active { display: block; }
+    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+
+    /* ── Tabs ─────────────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 9px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.875rem;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .tab-btn.active { background: var(--primary); color: #fff; }
+
+    /* ── Form controls ────────────────────────────────────────────────── */
+    label.field-label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    input[type="text"], textarea {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 0.95rem;
+      padding: 10px 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus, textarea:focus { border-color: var(--primary); }
+    textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
+
+    /* ── Drop zone ────────────────────────────────────────────────────── */
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 28px 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .dropzone.drag-over { border-color: var(--primary); background: rgba(124,106,247,.07); }
+    .dropzone .dz-icon { font-size: 2.2rem; display: block; margin-bottom: 8px; }
+    .dropzone p { color: var(--muted); font-size: 0.875rem; margin-bottom: 10px; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      min-height: 44px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .btn:hover { border-color: var(--primary); }
+    .btn:active { opacity: 0.8; }
+    .btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+      width: 100%;
+      margin-top: 14px;
+      font-size: 0.95rem;
+    }
+    .btn-primary:hover { background: var(--primary-d); border-color: var(--primary-d); }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-row { display: flex; gap: 10px; margin-top: 14px; }
+    .btn-row .btn { flex: 1; }
+    .btn-download {
+      display: flex; align-items: center; justify-content: center;
+      background: var(--success);
+      border: none;
+      color: #0f0f18;
+      border-radius: 10px;
+      padding: 14px;
+      font-size: 1rem;
+      font-weight: 700;
+      width: 100%;
+      text-decoration: none;
+      margin-top: 20px;
+      min-height: 54px;
+    }
+    .btn-download:hover { filter: brightness(1.08); }
+
+    /* ── File list ────────────────────────────────────────────────────── */
+    #file-list { margin-top: 10px; }
+    .file-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 6px; padding: 4px 10px;
+      font-size: 0.8rem; color: var(--muted);
+      margin: 3px;
+    }
+
+    /* ── Clips list ───────────────────────────────────────────────────── */
+    .clip-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .clip-item:last-child { border-bottom: none; }
+    .clip-name {
+      flex: 1;
+      min-width: 120px;
+      font-size: 0.875rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .badge {
+      font-size: 0.72rem;
+      font-weight: 600;
+      border-radius: 5px;
+      padding: 2px 7px;
+      white-space: nowrap;
+    }
+    .badge-dur  { background: rgba(124,106,247,.2); color: var(--primary); }
+    .badge-res  { background: rgba(34,211,160,.15); color: var(--success); }
+    .badge-vol  { background: rgba(251,191,36,.15);  color: var(--warn); }
+    .badge-err  { background: rgba(248,113,113,.15); color: var(--error); }
+
+    /* ── Suggestions ──────────────────────────────────────────────────── */
+    .suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 12px;
+    }
+    .chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 20px;
+      padding: 6px 13px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .chip:hover { border-color: var(--primary); background: rgba(124,106,247,.1); }
+    .chip:active { opacity: 0.7; }
+
+    /* ── Plan preview ─────────────────────────────────────────────────── */
+    .plan-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .plan-type {
+      font-size: 0.8rem;
+      font-weight: 700;
+      border-radius: 6px;
+      padding: 3px 10px;
+      background: rgba(124,106,247,.25);
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .plan-request { font-size: 0.875rem; color: var(--muted); }
+    .op-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .op-row:last-child { border-bottom: none; }
+    .op-num { font-size: 0.75rem; color: var(--muted); min-width: 24px; }
+    .op-name { flex: 1; font-size: 0.875rem; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .op-detail { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+    .plan-summary {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    /* ── JSON editor ──────────────────────────────────────────────────── */
+    details.json-editor { margin-top: 14px; }
+    details.json-editor summary {
+      cursor: pointer;
+      font-size: 0.8rem;
+      color: var(--muted);
+      user-select: none;
+      padding: 6px 0;
+    }
+    details.json-editor summary:hover { color: var(--text); }
+    details.json-editor textarea {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.78rem;
+      min-height: 180px;
+      margin-top: 8px;
+      background: #0a0a12;
+    }
+    details.json-editor .btn { margin-top: 8px; width: 100%; }
+
+    /* ── Progress ─────────────────────────────────────────────────────── */
+    .progress-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      width: 0;
+      border-radius: 2px;
+      transition: width 0.3s;
+    }
+    .progress-fill.indeterminate {
+      width: 40%;
+      animation: slide 1.4s ease-in-out infinite;
+    }
+    @keyframes slide {
+      0%   { transform: translateX(-150%); }
+      100% { transform: translateX(350%); }
+    }
+
+    .exec-log {
+      font-family: "SF Mono", "Fira Code", monospace;
+      font-size: 0.78rem;
+      background: #0a0a12;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 280px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    .log-line       { color: var(--text); }
+    .log-line.done  { color: var(--success); font-weight: 600; }
+    .log-line.error { color: var(--error);   font-weight: 600; }
+
+    /* ── Done section ─────────────────────────────────────────────────── */
+    #done-section { margin-top: 10px; }
+    #done-section .btn { width: 100%; margin-top: 10px; }
+
+    /* ── Error banner ─────────────────────────────────────────────────── */
+    .error-banner {
+      background: rgba(248,113,113,.12);
+      border: 1px solid rgba(248,113,113,.4);
+      border-radius: 8px;
+      color: var(--error);
+      font-size: 0.85rem;
+      padding: 10px 14px;
+      margin-top: 12px;
+    }
+
+    /* ── Spinner ──────────────────────────────────────────────────────── */
+    .spinner {
+      width: 20px; height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Responsive ───────────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      .card { margin: 12px 8px 0; padding: 16px; }
+      header { padding: 16px 12px 0; }
+      .steps { padding: 16px 12px 0; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <span class="logo">🎬</span>
+    <h1>Video Editor</h1>
+    <button id="reset-btn" onclick="startOver()" hidden>New Edit</button>
+  </header>
+
+  <!-- Step indicator -->
+  <div class="steps">
+    <div class="step-dot active" id="dot-1">1</div>
+    <div class="step-line"></div>
+    <div class="step-dot" id="dot-2">2</div>
+    <div class="step-line"></div>
+    <div class="step-dot" id="dot-3">3</div>
+    <div class="step-line"></div>
+    <div class="step-dot" id="dot-4">4</div>
+  </div>
+
+  <!-- ── Step 1: Choose clips ──────────────────────────────────────────── -->
+  <div class="card active" id="step-1">
+    <h2>Choose Video Clips</h2>
+
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('folder', this)">Folder Path</button>
+      <button class="tab-btn" onclick="switchTab('upload', this)">Upload Files</button>
+    </div>
+
+    <!-- Folder path tab -->
+    <div id="tab-folder">
+      <label class="field-label">Server-side folder path (e.g. /home/user/clips)</label>
+      <input type="text" id="folder-path" placeholder="/path/to/video/clips"
+             onkeydown="if(event.key==='Enter') analyze()">
+    </div>
+
+    <!-- Upload tab -->
+    <div id="tab-upload" style="display:none">
+      <div class="dropzone" id="dropzone"
+           onclick="document.getElementById('file-input').click()"
+           ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
+        <span class="dz-icon">📂</span>
+        <p>Drop video files here, or tap to browse</p>
+        <button class="btn" onclick="event.stopPropagation(); document.getElementById('file-input').click()">
+          Browse Files
+        </button>
+      </div>
+      <input type="file" id="file-input" multiple accept="video/*" style="display:none"
+             onchange="onFilesSelected(this.files)">
+      <div id="file-list"></div>
+    </div>
+
+    <div id="analyze-error" class="error-banner" style="display:none"></div>
+    <button class="btn-primary" id="analyze-btn" onclick="analyze()">Analyze Clips</button>
+  </div>
+
+  <!-- ── Step 2: Edit request ───────────────────────────────────────────── -->
+  <div class="card" id="step-2">
+    <h2>What do you want?</h2>
+    <div id="clips-summary" style="margin-bottom:14px"></div>
+
+    <div class="suggestions">
+      <button class="chip" onclick="setRequest(this.textContent)">Cut out silences</button>
+      <button class="chip" onclick="setRequest(this.textContent)">Make a 60 second highlight reel</button>
+      <button class="chip" onclick="setRequest(this.textContent)">Make a 2 minute montage</button>
+      <button class="chip" onclick="setRequest(this.textContent)">Sync cuts to the beat at 120 BPM</button>
+      <button class="chip" onclick="setRequest(this.textContent)">Trim from 0:30 to 2:00</button>
+      <button class="chip" onclick="setRequest(this.textContent)">Concatenate all clips</button>
+    </div>
+
+    <label class="field-label">Or describe your edit in plain English</label>
+    <textarea id="edit-request" placeholder="e.g. cut out silences below -40dB, make a 90 second highlight reel…"
+              onkeydown="if(event.key==='Enter' && event.metaKey) generatePlan()"></textarea>
+
+    <div id="plan-error" class="error-banner" style="display:none"></div>
+    <button class="btn-primary" id="plan-btn" onclick="generatePlan()">Generate Plan →</button>
+  </div>
+
+  <!-- ── Step 3: Plan preview ───────────────────────────────────────────── -->
+  <div class="card" id="step-3">
+    <h2>Edit Plan</h2>
+    <div id="plan-preview"></div>
+
+    <details class="json-editor" id="json-details">
+      <summary>Edit JSON directly ›</summary>
+      <textarea id="plan-json" spellcheck="false"></textarea>
+      <button class="btn" onclick="updatePlan()">Update Plan</button>
+      <div id="json-error" class="error-banner" style="display:none"></div>
+    </details>
+
+    <div class="btn-row">
+      <button class="btn" onclick="showStep(2)">← Back</button>
+      <button class="btn btn-primary" style="margin-top:0" id="exec-btn" onclick="executePlan()">
+        Execute Plan
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Step 4: Progress + Done ────────────────────────────────────────── -->
+  <div class="card" id="step-4">
+    <h2 id="step4-title">Running…</h2>
+    <div class="progress-bar">
+      <div class="progress-fill indeterminate" id="progress-fill"></div>
+    </div>
+    <div class="exec-log" id="exec-log"></div>
+
+    <div id="done-section" style="display:none">
+      <a id="download-link" class="btn-download" href="#">⬇ Download Video</a>
+      <button class="btn" onclick="startOver()">New Edit</button>
+    </div>
+  </div>
+
+</div><!-- .app -->
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let sessionId = null;
+let currentPlan = null;
+let currentTab = 'folder';
+let selectedFiles = [];
+
+// ── Step management ────────────────────────────────────────────────────────
+function showStep(n) {
+  document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+  document.getElementById(`step-${n}`).classList.add('active');
+
+  document.querySelectorAll('.step-dot').forEach((d, i) => {
+    d.classList.remove('active', 'done');
+    if (i + 1 < n)      d.classList.add('done');
+    else if (i + 1 === n) d.classList.add('active');
+  });
+
+  document.getElementById('reset-btn').hidden = (n === 1);
+}
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-folder').style.display = tab === 'folder' ? '' : 'none';
+  document.getElementById('tab-upload').style.display = tab === 'upload' ? '' : 'none';
+}
+
+// ── File drag-and-drop ─────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('drag-over'); }
+function onDragLeave(e) { document.getElementById('dropzone').classList.remove('drag-over'); }
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('drag-over');
+  onFilesSelected(e.dataTransfer.files);
+}
+function onFilesSelected(files) {
+  selectedFiles = Array.from(files);
+  const list = document.getElementById('file-list');
+  list.innerHTML = selectedFiles.map(f =>
+    `<span class="file-chip">🎥 ${f.name}</span>`
+  ).join('');
+}
+
+// ── Clip analysis ──────────────────────────────────────────────────────────
+async function analyze() {
+  hideError('analyze-error');
+  const btn = document.getElementById('analyze-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Analyzing…';
+
+  try {
+    const fd = new FormData();
+    if (currentTab === 'folder') {
+      const path = document.getElementById('folder-path').value.trim();
+      if (!path) { showError('analyze-error', 'Enter a folder path.'); return; }
+      fd.append('folder_path', path);
+    } else {
+      if (!selectedFiles.length) { showError('analyze-error', 'Select at least one video file.'); return; }
+      selectedFiles.forEach(f => fd.append('files', f));
+    }
+
+    const res = await fetch('/api/analyze', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) { showError('analyze-error', data.error || 'Analysis failed.'); return; }
+
+    sessionId = data.session_id;
+    renderClipsSummary(data.clips);
+    showStep(2);
+  } catch (err) {
+    showError('analyze-error', `Network error: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Analyze Clips';
+  }
+}
+
+function renderClipsSummary(clips) {
+  const valid = clips.filter(c => !c.error);
+  const total = valid.reduce((s, c) => s + (c.duration || 0), 0);
+
+  let html = `<p style="font-size:.8rem;color:var(--muted);margin-bottom:10px">
+    ${valid.length} clip(s) · ${fmtTime(total)} total</p>`;
+
+  clips.forEach(c => {
+    if (c.error) {
+      html += `<div class="clip-item">
+        <span class="clip-name">${c.filename}</span>
+        <span class="badge badge-err">error</span></div>`;
+      return;
+    }
+    const volStr = c.audio_mean_volume_db != null
+      ? `${c.audio_mean_volume_db > 0 ? '+' : ''}${c.audio_mean_volume_db.toFixed(1)} dBFS`
+      : 'no audio';
+    html += `<div class="clip-item">
+      <span class="clip-name" title="${c.filename}">${c.filename}</span>
+      <span class="badge badge-dur">${fmtTime(c.duration || 0)}</span>
+      <span class="badge badge-res">${c.width}×${c.height}</span>
+      <span class="badge badge-vol">${volStr}</span>
+    </div>`;
+  });
+
+  document.getElementById('clips-summary').innerHTML = html;
+}
+
+// ── Edit request & plan ────────────────────────────────────────────────────
+function setRequest(text) {
+  document.getElementById('edit-request').value = text;
+  document.getElementById('edit-request').focus();
+}
+
+async function generatePlan() {
+  hideError('plan-error');
+  const req = document.getElementById('edit-request').value.trim();
+  if (!req) { showError('plan-error', 'Describe the edit you want.'); return; }
+
+  const btn = document.getElementById('plan-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating…';
+
+  try {
+    const res = await fetch('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, request: req }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError('plan-error', data.error || 'Plan generation failed.'); return; }
+
+    currentPlan = data.plan;
+    renderPlan(currentPlan);
+    document.getElementById('plan-json').value = JSON.stringify(currentPlan, null, 2);
+    showStep(3);
+  } catch (err) {
+    showError('plan-error', `Network error: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = 'Generate Plan →';
+  }
+}
+
+function renderPlan(plan) {
+  const ops = plan.operations || [];
+  const type = (plan.type || '').replace(/_/g, ' ');
+  const params = plan.params || {};
+
+  const paramStr = Object.entries(params)
+    .filter(([, v]) => v != null)
+    .map(([k, v]) => `${k}: <strong>${v}</strong>`)
+    .join(' · ');
+
+  let html = `<div class="plan-header">
+    <span class="plan-type">${type}</span>
+    <span class="plan-request">${escHtml(plan.request)}</span>
+  </div>`;
+
+  if (paramStr) html += `<p style="font-size:.8rem;color:var(--muted);margin-bottom:12px">${paramStr}</p>`;
+
+  let totalDur = 0;
+  ops.forEach((op, i) => {
+    const name = op.clip.split('/').pop().split('\\').pop();
+    const start = op.start || 0;
+    const end   = op.end   || 0;
+    const dur   = end - start;
+    totalDur += (op.action === 'cut_silences') ? 0 : dur;
+
+    let detail;
+    if (op.action === 'cut_silences') {
+      detail = `remove silences · noise=${op.noise_floor_db}dB · min=${op.min_silence_duration}s`;
+    } else {
+      detail = `${fmtTime(start)} → ${fmtTime(end)} · ${dur.toFixed(1)}s`;
+    }
+
+    html += `<div class="op-row">
+      <span class="op-num">${i + 1}.</span>
+      <span class="op-name" title="${escHtml(name)}">${escHtml(name)}</span>
+      <span class="op-detail">${escHtml(detail)}</span>
+    </div>`;
+  });
+
+  if (plan.type !== 'cut_silences' && totalDur > 0) {
+    html += `<div class="plan-summary">
+      Estimated output duration: <strong>~${totalDur.toFixed(1)}s</strong> (${fmtTime(totalDur)})
+    </div>`;
+  }
+
+  document.getElementById('plan-preview').innerHTML = html;
+}
+
+// ── JSON editor ────────────────────────────────────────────────────────────
+async function updatePlan() {
+  hideError('json-error');
+  let parsed;
+  try {
+    parsed = JSON.parse(document.getElementById('plan-json').value);
+  } catch (e) {
+    showError('json-error', `Invalid JSON: ${e.message}`);
+    return;
+  }
+
+  const res = await fetch(`/api/plan/${sessionId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ plan: parsed }),
+  });
+  const data = await res.json();
+  if (!res.ok) { showError('json-error', data.error || 'Update failed.'); return; }
+
+  currentPlan = parsed;
+  renderPlan(currentPlan);
+  document.getElementById('json-details').removeAttribute('open');
+}
+
+// ── Execution ──────────────────────────────────────────────────────────────
+async function executePlan() {
+  document.getElementById('exec-log').innerHTML = '';
+  document.getElementById('done-section').style.display = 'none';
+  document.getElementById('step4-title').textContent = 'Running…';
+  document.getElementById('progress-fill').className = 'progress-fill indeterminate';
+  showStep(4);
+
+  // Start execution
+  const res = await fetch(`/api/execute/${sessionId}`, { method: 'POST' });
+  if (!res.ok) {
+    appendLog('ERROR: Could not start execution.', 'error');
+    return;
+  }
+
+  // Stream progress via SSE
+  const es = new EventSource(`/api/progress/${sessionId}`);
+  es.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'ping') return;
+
+    if (msg.type === 'log') {
+      appendLog(msg.message, 'log');
+    } else if (msg.type === 'done') {
+      appendLog(msg.message, 'done');
+      document.getElementById('step4-title').textContent = 'Done!';
+      document.getElementById('progress-fill').className = 'progress-fill';
+      document.getElementById('progress-fill').style.width = '100%';
+      document.getElementById('download-link').href = msg.download_url;
+      document.getElementById('done-section').style.display = '';
+      es.close();
+    } else if (msg.type === 'error') {
+      appendLog(msg.message, 'error');
+      document.getElementById('step4-title').textContent = 'Failed';
+      document.getElementById('progress-fill').className = 'progress-fill';
+      document.getElementById('progress-fill').style.background = 'var(--error)';
+      document.getElementById('progress-fill').style.width = '100%';
+      document.getElementById('done-section').style.display = '';
+      document.getElementById('download-link').style.display = 'none';
+      es.close();
+    }
+  };
+  es.onerror = () => {
+    appendLog('Connection lost.', 'error');
+    es.close();
+  };
+}
+
+function appendLog(msg, cls = 'log') {
+  const log = document.getElementById('exec-log');
+  const line = document.createElement('div');
+  line.className = `log-line ${cls}`;
+  line.textContent = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ── Reset ──────────────────────────────────────────────────────────────────
+function startOver() {
+  if (sessionId) {
+    fetch(`/api/cleanup/${sessionId}`, { method: 'DELETE' }).catch(() => {});
+  }
+  sessionId = null;
+  currentPlan = null;
+  selectedFiles = [];
+  document.getElementById('folder-path').value = '';
+  document.getElementById('edit-request').value = '';
+  document.getElementById('file-list').innerHTML = '';
+  document.getElementById('progress-fill').style.width = '';
+  document.getElementById('progress-fill').style.background = '';
+  showStep(1);
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+function fmtTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = (sec % 60).toFixed(1);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(4,'0')}`;
+  return `${m}:${String(s).padStart(4,'0')}`;
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.style.display = ''; }
+function hideError(id)      { document.getElementById(id).style.display = 'none'; }
+</script>
+</body>
+</html>

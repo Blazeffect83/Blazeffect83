@@ -517,7 +517,14 @@ def _concat_clips(paths: list[str], out: str, tmp_dir: str) -> bool:
     return r.returncode == 0
 
 
-def _process_cut_silences(op: dict, tmp_dir: str, idx: int) -> str | None:
+def _emit(msg: str, on_progress=None) -> None:
+    """Print a message and optionally forward it to a progress callback."""
+    print(f"  {msg}")
+    if on_progress:
+        on_progress(msg)
+
+
+def _process_cut_silences(op: dict, tmp_dir: str, idx: int, on_progress=None) -> str | None:
     """
     Detect silences in one clip and return a path to the silence-removed clip.
     Returns the original path if no silences are found, None on failure.
@@ -526,12 +533,12 @@ def _process_cut_silences(op: dict, tmp_dir: str, idx: int) -> str | None:
     noise = op.get("noise_floor_db", -35.0)
     minsil = op.get("min_silence_duration", 0.5)
 
-    print(f"    Detecting silences (noise={noise}dB, min={minsil}s)...")
+    _emit(f"Detecting silences in {Path(path).name} (noise={noise}dB, min={minsil}s)…", on_progress)
     silences = detect_silences(path, noise, minsil)
-    print(f"    Found {len(silences)} silence interval(s).")
+    _emit(f"Found {len(silences)} silence interval(s).", on_progress)
 
     if not silences:
-        print("    No silences — keeping clip as-is.")
+        _emit("No silences — keeping clip as-is.", on_progress)
         return path
 
     data = ffprobe_json(path, "-show_format")
@@ -539,10 +546,10 @@ def _process_cut_silences(op: dict, tmp_dir: str, idx: int) -> str | None:
     segs = invert_silences(silences, dur)
 
     if not segs:
-        print("    Warning: entire clip is silent — skipping.")
+        _emit("Warning: entire clip is silent — skipping.", on_progress)
         return None
 
-    print(f"    Keeping {len(segs)} non-silent segment(s)...")
+    _emit(f"Keeping {len(segs)} non-silent segment(s)…", on_progress)
     tmp_segs: list[str] = []
     for j, seg in enumerate(segs):
         seg_out = os.path.join(tmp_dir, f"clip{idx:02d}_seg{j:03d}.mp4")
@@ -562,9 +569,12 @@ def _process_cut_silences(op: dict, tmp_dir: str, idx: int) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def execute_edit_plan(plan: dict, output_path: str) -> bool:
+def execute_edit_plan(plan: dict, output_path: str, on_progress=None) -> bool:
     """
     Run all operations defined in *plan* and write the result to *output_path*.
+
+    *on_progress* is an optional callable(str) that receives status messages —
+    used by the web UI to stream progress via SSE.
 
     Temporary files are placed in a _vedit_tmp/ subdirectory next to the
     output file and cleaned up automatically on success or failure.
@@ -574,35 +584,31 @@ def execute_edit_plan(plan: dict, output_path: str) -> bool:
     os.makedirs(tmp_dir, exist_ok=True)
 
     ops = plan.get("operations", [])
-    edit_type = plan.get("type", "concatenate")
     processed: list[str] = []
 
-    print()
-    print("  " + "=" * 60)
-    print("  Executing edit plan...")
-    print("  " + "=" * 60)
+    _emit("Executing edit plan…", on_progress)
 
     try:
         for i, op in enumerate(ops):
             name = Path(op["clip"]).name
-            print(f"\n  [{i + 1}/{len(ops)}] {name}")
+            _emit(f"[{i + 1}/{len(ops)}] {name}", on_progress)
 
             action = op.get("action", "include")
 
             if action == "cut_silences":
-                result = _process_cut_silences(op, tmp_dir, i)
+                result = _process_cut_silences(op, tmp_dir, i, on_progress)
                 if result:
                     processed.append(result)
 
             elif action in ("trim", "trim_to_beat"):
                 start = float(op.get("start") or 0.0)
                 end = float(op.get("end") or 0.0)
-                print(f"    Trim  {fmt_time(start)} -> {fmt_time(end)}  ({end - start:.2f}s)")
+                _emit(f"Trim  {fmt_time(start)} -> {fmt_time(end)}  ({end - start:.2f}s)", on_progress)
                 seg_out = os.path.join(tmp_dir, f"clip{i:02d}.mp4")
                 if _encode_segment(op["clip"], start, end, seg_out):
                     processed.append(seg_out)
                 else:
-                    print(f"    WARNING: encoding failed — skipping {name}")
+                    _emit(f"WARNING: encoding failed — skipping {name}", on_progress)
 
             elif action == "include":
                 # Passthrough — re-encode to a common format so concat works
@@ -612,32 +618,32 @@ def execute_edit_plan(plan: dict, output_path: str) -> bool:
                 if _encode_segment(op["clip"], start, end, seg_out):
                     processed.append(seg_out)
                 else:
-                    print(f"    WARNING: encoding failed — skipping {name}")
+                    _emit(f"WARNING: encoding failed — skipping {name}", on_progress)
 
             else:
                 # Unknown action — pass the clip through unmodified
                 processed.append(op["clip"])
 
         if not processed:
-            print("\n  ERROR: No clips survived processing.")
+            _emit("ERROR: No clips survived processing.", on_progress)
             return False
 
         # ── Concatenate all processed clips ──────────────────────────────────
         audio_file = plan.get("params", {}).get("audio_file")
 
-        print(f"\n  Concatenating {len(processed)} clip(s)...")
+        _emit(f"Concatenating {len(processed)} clip(s)…", on_progress)
         pre_final = os.path.join(tmp_dir, "pre_final.mp4")
         if not _concat_clips(processed, pre_final, tmp_dir):
-            print("  ERROR: Concatenation failed.")
+            _emit("ERROR: Concatenation failed.", on_progress)
             return False
 
         # ── Overlay external audio for beat_sync ─────────────────────────────
         if audio_file:
             if not os.path.exists(audio_file):
-                print(f"  WARNING: Audio file not found: {audio_file!r} — using original audio.")
+                _emit(f"WARNING: Audio file not found: {audio_file!r} — using original audio.", on_progress)
                 shutil.copy2(pre_final, output_path)
             else:
-                print(f"  Overlaying audio track: {audio_file}")
+                _emit(f"Overlaying audio track: {Path(audio_file).name}", on_progress)
                 r = ffmpeg_run(
                     [
                         "-y",
@@ -652,13 +658,13 @@ def execute_edit_plan(plan: dict, output_path: str) -> bool:
                     ]
                 )
                 if r.returncode != 0:
-                    print(f"  ERROR overlaying audio:\n{r.stderr[-400:]}")
+                    _emit(f"ERROR overlaying audio: {r.stderr[-200:]}", on_progress)
                     return False
         else:
             shutil.copy2(pre_final, output_path)
 
         size_mb = os.path.getsize(output_path) / 1_048_576
-        print(f"\n  Done. Output: {output_path}  ({size_mb:.1f} MB)")
+        _emit(f"Done. Output: {Path(output_path).name}  ({size_mb:.1f} MB)", on_progress)
         return True
 
     finally:
