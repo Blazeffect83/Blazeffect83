@@ -462,6 +462,7 @@
   <div class="card" id="step-2">
     <h2>Choose an edit</h2>
     <div id="clips-summary" style="margin-bottom:14px"></div>
+    <div id="ai-banner" style="display:none;background:rgba(124,106,247,.12);border:1px solid rgba(124,106,247,.3);border-radius:8px;padding:9px 12px;font-size:.78rem;color:#a89ff5;margin-bottom:14px"></div>
 
     <div class="preset-grid">
       <div class="preset-card" onclick="selectPreset(this,'cut out silences')">
@@ -613,6 +614,7 @@ async function analyze() {
 
     sessionId = data.session_id;
     renderClipsSummary(data.clips);
+    checkAiStatus();
     showStep(2);
   } catch (err) {
     showError('analyze-error', `Network error: ${err.message}`);
@@ -651,6 +653,27 @@ function renderClipsSummary(clips) {
 }
 
 // ── Edit request & plan ────────────────────────────────────────────────────
+async function checkAiStatus() {
+  try {
+    const r = await fetch('/api/ai_status');
+    const d = await r.json();
+    const banner = document.getElementById('ai-banner');
+    if (d.whisper && d.claude) {
+      banner.textContent = '✓ AI ready — Whisper (speech detection) + Claude (smart selection) active.';
+      banner.style.display = '';
+    } else if (d.whisper) {
+      banner.textContent = '✓ Whisper AI active. Set ANTHROPIC_API_KEY for smarter Key Moments selection.';
+      banner.style.display = '';
+    } else {
+      banner.style.background = 'rgba(251,191,36,.1)';
+      banner.style.borderColor = 'rgba(251,191,36,.3)';
+      banner.style.color = '#fbbf24';
+      banner.textContent = '⚠ AI not installed — run: pip install faster-whisper   (makes Cut Silences & Key Moments actually work)';
+      banner.style.display = '';
+    }
+  } catch (_) {}
+}
+
 function selectPreset(card, text) {
   document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('selected'));
   card.classList.add('selected');

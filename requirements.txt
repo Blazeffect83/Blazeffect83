@@ -1,1 +1,6 @@
 flask>=3.0
+
+# AI features (optional but strongly recommended — makes edits actually work)
+# Run: pip install faster-whisper anthropic
+faster-whisper
+anthropic

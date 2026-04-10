@@ -271,6 +271,19 @@ def api_download(sid):
     )
 
 
+@app.route("/api/ai_status")
+def api_ai_status():
+    """Report which AI features are available on this server."""
+    whisper_ok = False
+    claude_ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    try:
+        import faster_whisper  # noqa: F401
+        whisper_ok = True
+    except ImportError:
+        pass
+    return jsonify(whisper=whisper_ok, claude=claude_ok)
+
+
 @app.route("/api/cleanup/<sid>", methods=["DELETE"])
 def api_cleanup(sid):
     """Delete the workspace for a session (frees disk space)."""

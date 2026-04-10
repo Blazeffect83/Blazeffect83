@@ -11,7 +11,8 @@ Usage:
     python video_editor.py ./clips/ --load-plan            # re-run saved plan
     python video_editor.py ./clips/ --no-execute           # preview only
 
-Requirements: ffmpeg and ffprobe must be on PATH. No extra Python packages.
+Requirements: ffmpeg and ffprobe must be on PATH.
+Optional AI features: pip install faster-whisper anthropic
 """
 
 import os
@@ -240,6 +241,122 @@ def invert_silences(
 
 
 # ---------------------------------------------------------------------------
+# AI helpers — Whisper transcription + Claude key-moment selection
+# ---------------------------------------------------------------------------
+
+
+def _whisper_available() -> bool:
+    try:
+        import faster_whisper  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def transcribe_clip(path: str, model_size: str = "base", on_progress=None) -> list[dict]:
+    """
+    Transcribe audio with faster-whisper (CPU-only, no GPU required).
+    Returns list of {"start", "end", "text"} dicts, or [] if not installed.
+    The model (~150 MB for 'base') is downloaded automatically on first use.
+    """
+    if not _whisper_available():
+        _emit("faster-whisper not installed — run: pip install faster-whisper", on_progress)
+        return []
+    try:
+        _emit("Loading Whisper AI model (downloads ~150 MB on first use)…", on_progress)
+        from faster_whisper import WhisperModel
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        _emit("Transcribing audio…", on_progress)
+        segs_iter, _ = model.transcribe(str(path), beam_size=5)
+        result = [{"start": s.start, "end": s.end, "text": s.text.strip()} for s in segs_iter]
+        _emit(f"Transcription complete — {len(result)} speech segment(s) found.", on_progress)
+        return result
+    except Exception as exc:
+        _emit(f"Whisper error: {exc}", on_progress)
+        return []
+
+
+def _merge_segs(segs: list[dict], gap: float = 0.4) -> list[dict]:
+    """Merge adjacent segments whose gap is <= *gap* seconds."""
+    if not segs:
+        return []
+    out = [segs[0].copy()]
+    for s in segs[1:]:
+        if s["start"] - out[-1]["end"] <= gap:
+            out[-1]["end"] = max(out[-1]["end"], s["end"])
+            out[-1]["text"] = out[-1].get("text", "") + " " + s.get("text", "")
+        else:
+            out.append(s.copy())
+    return out
+
+
+def _select_by_density(segs: list[dict], target_dur: float) -> list[dict]:
+    """Greedy: pick highest word-per-second segments up to *target_dur* seconds."""
+    scored = sorted(
+        segs,
+        key=lambda s: len(s.get("text", "").split()) / max(s["end"] - s["start"], 0.1),
+        reverse=True,
+    )
+    total, chosen = 0.0, []
+    for seg in scored:
+        dur = seg["end"] - seg["start"]
+        if total + dur <= target_dur * 1.15:
+            chosen.append({"start": seg["start"], "end": seg["end"]})
+            total += dur
+        if total >= target_dur:
+            break
+    return sorted(chosen, key=lambda x: x["start"])
+
+
+def find_key_moments(
+    segments: list[dict], total_dur: float, target_dur: float, on_progress=None
+) -> list[dict]:
+    """
+    Ask Claude to pick the most important speech segments from a transcript.
+    Falls back to word-density heuristic if ANTHROPIC_API_KEY is not set.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        _emit("No ANTHROPIC_API_KEY set — using density-based selection.", on_progress)
+        return _select_by_density(segments, target_dur)
+
+    try:
+        import anthropic
+        _emit("Asking Claude to identify the key moments…", on_progress)
+        transcript = "\n".join(
+            f"[{s['start']:.1f}s–{s['end']:.1f}s] {s['text']}" for s in segments
+        )
+        prompt = (
+            f"You are a professional video editor. Below is a timestamped transcript "
+            f"from a {total_dur:.0f}s video. Select segments totalling ~{target_dur:.0f}s "
+            f"that best capture the key points — prefer insight and explanations, "
+            f"skip filler, repetition, and pauses.\n\n"
+            f"Reply with ONLY a JSON array: "
+            f'[{{"start":0.0,"end":5.2}}, ...]\n\n'
+            f"Transcript:\n{transcript}"
+        )
+        resp = anthropic.Anthropic(api_key=api_key).messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        m = re.search(r"\[[\s\S]*?\]", resp.content[0].text)
+        if m:
+            raw = json.loads(m.group())
+            chosen = [
+                {"start": max(0.0, float(s["start"])), "end": min(total_dur, float(s["end"]))}
+                for s in raw
+                if "start" in s and "end" in s and float(s["end"]) > float(s["start"])
+            ]
+            _emit(f"Claude selected {len(chosen)} key segment(s).", on_progress)
+            return chosen
+    except Exception as exc:
+        _emit(f"Claude API error: {exc} — falling back to density selection.", on_progress)
+
+    return _select_by_density(segments, target_dur)
+
+
+# ---------------------------------------------------------------------------
 # Natural-language edit request parser
 # ---------------------------------------------------------------------------
 
@@ -309,7 +426,8 @@ def parse_edit_request(request: str, clips: list[dict]) -> dict:
     # ── 2. Highlight reel / montage ──────────────────────────────────────────
     elif re.search(r"\b(highlight|reel|montage|compilation|summary)\b", rl):
         target = _extract_duration_secs(rl) or 60.0
-        ratio = min(target / total, 1.0) if total > 0 else 1.0
+        # Cap at 80% so something is always visibly trimmed
+        ratio = min(target / total, 0.8) if total > 0 else 0.8
         ops = []
         for c in valid:
             dur = c.get("duration", 0)
@@ -464,19 +582,18 @@ def parse_edit_request(request: str, clips: list[dict]) -> dict:
             }
         )
 
-    # ── 8. Key moments / important topics (aggressive silence removal) ─────────
+    # ── 8. Key moments / important topics (AI-powered) ────────────────────────
     elif re.search(r"\b(important|topic|key.?moment|best.?part|auto.?highlight)\b", rl):
-        noise, minsil = -30.0, 0.3
+        target = _extract_duration_secs(rl) or min(60.0, total * 0.5)
         plan.update(
             {
                 "type": "auto_highlights",
-                "params": {"noise_floor_db": noise, "min_silence_duration": minsil},
+                "params": {"target_duration": target},
                 "operations": [
                     {
                         "clip": c["path"],
-                        "action": "cut_silences",
-                        "noise_floor_db": noise,
-                        "min_silence_duration": minsil,
+                        "action": "key_moments",
+                        "target_duration": min(target, c.get("duration", target)),
                     }
                     for c in valid
                 ],
@@ -631,44 +748,101 @@ def _emit(msg: str, on_progress=None) -> None:
         on_progress(msg)
 
 
+def _extract_and_concat(path: str, keep_segs: list[dict], tmp_dir: str, idx: int,
+                         label: str = "seg", on_progress=None) -> str | None:
+    """Encode each segment in *keep_segs* then concat them into one file."""
+    tmp_files: list[str] = []
+    for j, seg in enumerate(keep_segs):
+        out = os.path.join(tmp_dir, f"clip{idx:02d}_{label}{j:03d}.mp4")
+        if _encode_segment(path, seg["start"], seg["end"], out):
+            tmp_files.append(out)
+    if not tmp_files:
+        return None
+    merged = os.path.join(tmp_dir, f"clip{idx:02d}_{label}_merged.mp4")
+    return merged if _concat_clips(tmp_files, merged, tmp_dir) else None
+
+
 def _process_cut_silences(op: dict, tmp_dir: str, idx: int, on_progress=None) -> str | None:
     """
-    Detect silences in one clip and return a path to the silence-removed clip.
-    Returns the original path if no silences are found, None on failure.
+    Remove silent sections from one clip.
+
+    Strategy (in priority order):
+      1. faster-whisper — precise speech-boundary timestamps
+      2. ffmpeg silencedetect — amplitude threshold (retried if first pass finds nothing)
     """
     path = op["clip"]
     noise = op.get("noise_floor_db", -35.0)
     minsil = op.get("min_silence_duration", 0.5)
 
-    _emit(f"Detecting silences in {Path(path).name} (noise={noise}dB, min={minsil}s)…", on_progress)
+    data = ffprobe_json(path, "-show_format")
+    dur = float(((data or {}).get("format") or {}).get("duration") or 0)
+
+    # ── 1. Whisper (preferred) ────────────────────────────────────────────────
+    speech_segs = transcribe_clip(path, on_progress=on_progress)
+    if speech_segs:
+        keep = _merge_segs(
+            [{"start": max(0, s["start"] - 0.05), "end": min(dur, s["end"] + 0.05)}
+             for s in speech_segs],
+            gap=0.5,
+        )
+        _emit(f"Keeping {len(keep)} speech segment(s) (Whisper).", on_progress)
+        result = _extract_and_concat(path, keep, tmp_dir, idx, "ws", on_progress)
+        return result if result else path
+
+    # ── 2. ffmpeg silencedetect fallback ─────────────────────────────────────
+    _emit(f"Detecting silences (noise={noise}dB, min={minsil}s)…", on_progress)
     silences = detect_silences(path, noise, minsil)
     _emit(f"Found {len(silences)} silence interval(s).", on_progress)
 
+    # Retry with more permissive threshold if nothing found
     if not silences:
-        _emit("No silences — keeping clip as-is.", on_progress)
+        _emit("No silences at current threshold — retrying with broader settings…", on_progress)
+        silences = detect_silences(path, noise + 10, minsil * 0.5)
+        _emit(f"Retry found {len(silences)} silence interval(s).", on_progress)
+
+    if not silences:
+        _emit("No silences detected. Install faster-whisper for speech-aware cutting.", on_progress)
         return path
 
+    keep = invert_silences(silences, dur)
+    if not keep:
+        _emit("Warning: entire clip appears silent — skipping.", on_progress)
+        return None
+
+    _emit(f"Keeping {len(keep)} non-silent segment(s).", on_progress)
+    result = _extract_and_concat(path, keep, tmp_dir, idx, "sil", on_progress)
+    return result if result else path
+
+
+def _process_key_moments(op: dict, tmp_dir: str, idx: int, on_progress=None) -> str | None:
+    """
+    Extract the most important moments from one clip using Whisper + Claude.
+    Falls back to aggressive silence removal if Whisper is not installed.
+    """
+    path = op["clip"]
     data = ffprobe_json(path, "-show_format")
     dur = float(((data or {}).get("format") or {}).get("duration") or 0)
-    segs = invert_silences(silences, dur)
+    target = float(op.get("target_duration") or min(60.0, dur * 0.5))
 
-    if not segs:
-        _emit("Warning: entire clip is silent — skipping.", on_progress)
-        return None
+    _emit(f"Analysing {Path(path).name} for key moments…", on_progress)
 
-    _emit(f"Keeping {len(segs)} non-silent segment(s)…", on_progress)
-    tmp_segs: list[str] = []
-    for j, seg in enumerate(segs):
-        seg_out = os.path.join(tmp_dir, f"clip{idx:02d}_seg{j:03d}.mp4")
-        if _encode_segment(path, seg["start"], seg["end"], seg_out):
-            tmp_segs.append(seg_out)
+    speech_segs = transcribe_clip(path, on_progress=on_progress)
 
-    if not tmp_segs:
-        return None
+    if not speech_segs:
+        _emit("Whisper unavailable — falling back to aggressive silence removal.", on_progress)
+        fallback_op = {**op, "action": "cut_silences", "noise_floor_db": -30.0, "min_silence_duration": 0.3}
+        return _process_cut_silences(fallback_op, tmp_dir, idx, on_progress)
 
-    merged = os.path.join(tmp_dir, f"clip{idx:02d}_nosil.mp4")
-    ok = _concat_clips(tmp_segs, merged, tmp_dir)
-    return merged if ok else None
+    chosen = find_key_moments(speech_segs, dur, target, on_progress)
+    if not chosen:
+        _emit("No key moments returned — keeping all speech segments.", on_progress)
+        chosen = [{"start": max(0, s["start"] - 0.1), "end": min(dur, s["end"] + 0.1)}
+                  for s in speech_segs]
+
+    total_kept = sum(s["end"] - s["start"] for s in chosen)
+    _emit(f"Extracting {len(chosen)} segment(s) — {total_kept:.1f}s total.", on_progress)
+    result = _extract_and_concat(path, chosen, tmp_dir, idx, "km", on_progress)
+    return result if result else path
 
 
 # ---------------------------------------------------------------------------
@@ -704,6 +878,11 @@ def execute_edit_plan(plan: dict, output_path: str, on_progress=None) -> bool:
 
             if action == "cut_silences":
                 result = _process_cut_silences(op, tmp_dir, i, on_progress)
+                if result:
+                    processed.append(result)
+
+            elif action == "key_moments":
+                result = _process_key_moments(op, tmp_dir, i, on_progress)
                 if result:
                     processed.append(result)
 
