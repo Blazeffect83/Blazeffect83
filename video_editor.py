@@ -142,7 +142,7 @@ def analyze_clip(path: str) -> dict:
             "volumedetect",
             "-f",
             "null",
-            "/dev/null",
+            os.devnull,  # os.devnull = NUL on Windows, /dev/null on Unix
         ],
         capture_output=True,
         text=True,
@@ -208,7 +208,7 @@ def detect_silences(
             f"silencedetect=noise={noise_db}dB:d={min_dur}",
             "-f",
             "null",
-            "/dev/null",
+            os.devnull,
         ],
         capture_output=True,
         text=True,
@@ -390,7 +390,100 @@ def parse_edit_request(request: str, clips: list[dict]) -> dict:
             }
         )
 
-    # ── 5. Concatenate (catch-all) ────────────────────────────────────────────
+    # ── 5. Enhance voice ─────────────────────────────────────────────────────
+    elif re.search(r"\b(enhance|voice.?boost|boost.?voice|improve.?audio|clean.?audio|audio.?clarity|voice.?quality)\b", rl):
+        af = (
+            "loudnorm=I=-16:TP=-1.5:LRA=11,"
+            "acompressor=threshold=-18dB:ratio=4:attack=5:release=80:makeup=2"
+        )
+        plan.update(
+            {
+                "type": "enhance_voice",
+                "params": {"description": "loudnorm + compression"},
+                "operations": [
+                    {
+                        "clip": c["path"],
+                        "action": "apply_filters",
+                        "af": af,
+                        "vf": "",
+                        "start": 0.0,
+                        "end": c.get("duration", 0),
+                    }
+                    for c in valid
+                ],
+            }
+        )
+
+    # ── 6. Normalize audio ────────────────────────────────────────────────────
+    elif re.search(r"\bnormali[sz]e\b", rl):
+        af = "loudnorm=I=-16:TP=-1.5:LRA=11"
+        plan.update(
+            {
+                "type": "normalize_audio",
+                "params": {"target_lufs": -16},
+                "operations": [
+                    {
+                        "clip": c["path"],
+                        "action": "apply_filters",
+                        "af": af,
+                        "vf": "",
+                        "start": 0.0,
+                        "end": c.get("duration", 0),
+                    }
+                    for c in valid
+                ],
+            }
+        )
+
+    # ── 7. Speed ramp ─────────────────────────────────────────────────────────
+    elif re.search(r"\b(speed.?up|faster|1\.5\s*x|2\s*x|accelerate)\b", rl):
+        speed_m = re.search(r"(\d+(?:\.\d+)?)\s*x", rl)
+        speed = float(speed_m.group(1)) if speed_m else 1.5
+        speed = round(min(max(speed, 0.5), 4.0), 2)
+        pts = round(1.0 / speed, 4)
+        # atempo only supports 0.5-2.0 per filter; chain two for higher speeds
+        if speed <= 2.0:
+            atempo = f"atempo={speed}"
+        else:
+            atempo = f"atempo=2.0,atempo={round(speed / 2.0, 4)}"
+        plan.update(
+            {
+                "type": "speed_ramp",
+                "params": {"speed": speed},
+                "operations": [
+                    {
+                        "clip": c["path"],
+                        "action": "apply_filters",
+                        "vf": f"setpts={pts}*PTS",
+                        "af": atempo,
+                        "start": 0.0,
+                        "end": c.get("duration", 0),
+                    }
+                    for c in valid
+                ],
+            }
+        )
+
+    # ── 8. Key moments / important topics (aggressive silence removal) ─────────
+    elif re.search(r"\b(important|topic|key.?moment|best.?part|auto.?highlight)\b", rl):
+        noise, minsil = -30.0, 0.3
+        plan.update(
+            {
+                "type": "auto_highlights",
+                "params": {"noise_floor_db": noise, "min_silence_duration": minsil},
+                "operations": [
+                    {
+                        "clip": c["path"],
+                        "action": "cut_silences",
+                        "noise_floor_db": noise,
+                        "min_silence_duration": minsil,
+                    }
+                    for c in valid
+                ],
+            }
+        )
+
+    # ── 9. Concatenate (catch-all) ────────────────────────────────────────────
     else:
         plan.update(
             {
@@ -477,20 +570,34 @@ def preview_edit_plan(plan: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _encode_segment(src: str, start: float, end: float, out: str) -> bool:
-    """Trim and re-encode a segment to H.264/AAC."""
-    r = ffmpeg_run(
-        [
-            "-y",
-            "-ss", str(start),
-            "-to", str(end),
-            "-i", src,
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k",
-            "-avoid_negative_ts", "make_zero",
-            out,
-        ]
-    )
+def _encode_segment(
+    src: str, start: float, end: float, out: str,
+    extra_vf: str = "", extra_af: str = ""
+) -> bool:
+    """
+    Trim and re-encode a segment to H.264/AAC.
+    Optional extra_vf / extra_af insert FFmpeg video/audio filter chains.
+    """
+    # Always enforce even dimensions (libx264 requirement)
+    vf_parts = [p for p in [extra_vf, "scale=trunc(iw/2)*2:trunc(ih/2)*2"] if p]
+    vf_chain = ",".join(vf_parts)
+
+    args = [
+        "-y",
+        "-ss", str(start),
+        "-to", str(end),
+        "-i", src,
+        "-vf", vf_chain,
+    ]
+    if extra_af:
+        args += ["-af", extra_af]
+    args += [
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-avoid_negative_ts", "make_zero",
+        out,
+    ]
+    r = ffmpeg_run(args)
     if r.returncode != 0:
         print(f"      ffmpeg error: {r.stderr[-300:]}")
     return r.returncode == 0
@@ -599,6 +706,18 @@ def execute_edit_plan(plan: dict, output_path: str, on_progress=None) -> bool:
                 result = _process_cut_silences(op, tmp_dir, i, on_progress)
                 if result:
                     processed.append(result)
+
+            elif action == "apply_filters":
+                start = float(op.get("start") or 0.0)
+                end = float(op.get("end") or 0.0)
+                extra_vf = op.get("vf") or ""
+                extra_af = op.get("af") or ""
+                _emit(f"Applying filters  ({end - start:.1f}s)", on_progress)
+                seg_out = os.path.join(tmp_dir, f"clip{i:02d}.mp4")
+                if _encode_segment(op["clip"], start, end, seg_out, extra_vf, extra_af):
+                    processed.append(seg_out)
+                else:
+                    _emit(f"WARNING: filter failed — skipping {name}", on_progress)
 
             elif action in ("trim", "trim_to_beat"):
                 start = float(op.get("start") or 0.0)

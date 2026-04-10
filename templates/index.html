@@ -244,25 +244,30 @@
     .badge-vol  { background: rgba(251,191,36,.15);  color: var(--warn); }
     .badge-err  { background: rgba(248,113,113,.15); color: var(--error); }
 
-    /* ── Suggestions ──────────────────────────────────────────────────── */
-    .suggestions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      margin-bottom: 12px;
+    /* ── Preset cards ─────────────────────────────────────────────────── */
+    .preset-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
     }
-    .chip {
+    @media (min-width: 480px) { .preset-grid { grid-template-columns: repeat(3, 1fr); } }
+    .preset-card {
       background: var(--surface2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      border-radius: 20px;
-      padding: 6px 13px;
-      font-size: 0.8rem;
+      border: 1.5px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 8px;
       cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
+      text-align: center;
+      transition: border-color 0.15s, background 0.15s, transform 0.1s;
+      user-select: none;
     }
-    .chip:hover { border-color: var(--primary); background: rgba(124,106,247,.1); }
-    .chip:active { opacity: 0.7; }
+    .preset-card:hover  { border-color: var(--primary); background: rgba(124,106,247,.08); }
+    .preset-card:active { transform: scale(0.97); }
+    .preset-card.selected { border-color: var(--primary); background: rgba(124,106,247,.2); }
+    .preset-icon { font-size: 1.5rem; display: block; margin-bottom: 4px; }
+    .preset-name { font-size: 0.78rem; font-weight: 600; color: var(--text); }
+    .preset-desc { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
 
     /* ── Plan preview ─────────────────────────────────────────────────── */
     .plan-header {
@@ -455,20 +460,45 @@
 
   <!-- ── Step 2: Edit request ───────────────────────────────────────────── -->
   <div class="card" id="step-2">
-    <h2>What do you want?</h2>
+    <h2>Choose an edit</h2>
     <div id="clips-summary" style="margin-bottom:14px"></div>
 
-    <div class="suggestions">
-      <button class="chip" onclick="setRequest(this.textContent)">Cut out silences</button>
-      <button class="chip" onclick="setRequest(this.textContent)">Make a 60 second highlight reel</button>
-      <button class="chip" onclick="setRequest(this.textContent)">Make a 2 minute montage</button>
-      <button class="chip" onclick="setRequest(this.textContent)">Sync cuts to the beat at 120 BPM</button>
-      <button class="chip" onclick="setRequest(this.textContent)">Trim from 0:30 to 2:00</button>
-      <button class="chip" onclick="setRequest(this.textContent)">Concatenate all clips</button>
+    <div class="preset-grid">
+      <div class="preset-card" onclick="selectPreset(this,'cut out silences')">
+        <span class="preset-icon">🔇</span>
+        <div class="preset-name">Cut Silences</div>
+        <div class="preset-desc">Remove quiet gaps</div>
+      </div>
+      <div class="preset-card" onclick="selectPreset(this,'enhance voice clarity')">
+        <span class="preset-icon">🎙️</span>
+        <div class="preset-name">Enhance Voice</div>
+        <div class="preset-desc">Boost & clarify audio</div>
+      </div>
+      <div class="preset-card" onclick="selectPreset(this,'make a 60 second highlight reel')">
+        <span class="preset-icon">✨</span>
+        <div class="preset-name">60s Highlight</div>
+        <div class="preset-desc">Best 60 seconds</div>
+      </div>
+      <div class="preset-card" onclick="selectPreset(this,'highlight important topic points')">
+        <span class="preset-icon">🎯</span>
+        <div class="preset-name">Key Moments</div>
+        <div class="preset-desc">Keep speech, cut filler</div>
+      </div>
+      <div class="preset-card" onclick="selectPreset(this,'speed up to 1.5x')">
+        <span class="preset-icon">⚡</span>
+        <div class="preset-name">Speed Up 1.5×</div>
+        <div class="preset-desc">Faster playback</div>
+      </div>
+      <div class="preset-card" onclick="selectPreset(this,'normalize audio levels')">
+        <span class="preset-icon">🔊</span>
+        <div class="preset-name">Normalize Audio</div>
+        <div class="preset-desc">Balance loudness</div>
+      </div>
     </div>
 
-    <label class="field-label">Or describe your edit in plain English</label>
-    <textarea id="edit-request" placeholder="e.g. cut out silences below -40dB, make a 90 second highlight reel…"
+    <label class="field-label">Or type a custom edit</label>
+    <textarea id="edit-request" placeholder="e.g. trim from 0:30 to 2:45, make a 2 minute montage, sync to beat at 128 BPM…"
+              oninput="document.querySelectorAll('.preset-card').forEach(c=>c.classList.remove('selected'))"
               onkeydown="if(event.key==='Enter' && event.metaKey) generatePlan()"></textarea>
 
     <div id="plan-error" class="error-banner" style="display:none"></div>
@@ -621,9 +651,10 @@ function renderClipsSummary(clips) {
 }
 
 // ── Edit request & plan ────────────────────────────────────────────────────
-function setRequest(text) {
+function selectPreset(card, text) {
+  document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('selected'));
+  card.classList.add('selected');
   document.getElementById('edit-request').value = text;
-  document.getElementById('edit-request').focus();
 }
 
 async function generatePlan() {
