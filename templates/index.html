@@ -1,451 +1,457 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0f0f18">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Video Editor</title>
-  <link rel="manifest" href="/manifest.json">
-  <style>
-    /* ── Reset & base ─────────────────────────────────────────────────── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#07070e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Video Editor</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
-    :root {
-      --bg:       #0f0f18;
-      --surface:  #1a1a28;
-      --surface2: #22223a;
-      --border:   #2e2e4a;
-      --primary:  #7c6af7;
-      --primary-d:#5f4fd4;
-      --success:  #22d3a0;
-      --warn:     #fbbf24;
-      --error:    #f87171;
-      --text:     #e2e2f0;
-      --muted:    #6b6b90;
-      --radius:   12px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
+:root{
+  --bg:#07070e;
+  --glass:rgba(255,255,255,.04);
+  --glass-border:rgba(255,255,255,.08);
+  --glass-hover:rgba(255,255,255,.07);
+  --accent:#8b7eff;
+  --accent2:#a855f7;
+  --accent-glow:rgba(139,126,255,.25);
+  --success:#10d9a0;
+  --warn:#f59e0b;
+  --error:#f87171;
+  --text:#e8e8f5;
+  --muted:#6b6b8a;
+  --r:14px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --ease:cubic-bezier(.16,1,.3,1);
+  --ease-out:cubic-bezier(.4,0,.2,1);
+}
 
-    html, body {
-      height: 100%;
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--font);
-      font-size: 15px;
-      line-height: 1.5;
-      -webkit-tap-highlight-color: transparent;
-    }
+html,body{
+  height:100%;
+  background:var(--bg);
+  background-image:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(139,126,255,.15),transparent);
+  color:var(--text);
+  font-family:var(--font);
+  font-size:15px;
+  line-height:1.5;
+  -webkit-tap-highlight-color:transparent;
+  overflow-x:hidden;
+}
 
-    /* ── Layout ───────────────────────────────────────────────────────── */
-    .app {
-      max-width: 680px;
-      margin: 0 auto;
-      padding: 0 0 80px;
-    }
+/* ── Layout ── */
+.app{max-width:660px;margin:0 auto;padding:0 16px 80px}
 
-    /* ── Header ───────────────────────────────────────────────────────── */
-    header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 20px 20px 0;
-    }
-    header h1 {
-      font-size: 1.15rem;
-      font-weight: 600;
-      flex: 1;
-    }
-    header .logo { font-size: 1.4rem; }
-    #reset-btn {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      border-radius: 8px;
-      padding: 6px 12px;
-      font-size: 0.8rem;
-      cursor: pointer;
-    }
-    #reset-btn:hover { border-color: var(--primary); color: var(--text); }
+/* ── Topbar ── */
+.topbar{
+  display:flex;align-items:center;gap:12px;
+  padding:22px 0 0;
+}
+.topbar-brand{
+  display:flex;align-items:center;gap:8px;flex:1;
+}
+.topbar-brand .logo{
+  font-size:1.3rem;
+  filter:drop-shadow(0 0 8px rgba(139,126,255,.6));
+}
+.topbar-brand h1{
+  font-size:1rem;font-weight:700;
+  background:linear-gradient(135deg,var(--text) 0%,var(--muted) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+#ai-pill{
+  display:none;
+  align-items:center;gap:6px;
+  padding:5px 11px;
+  border-radius:99px;
+  font-size:.72rem;font-weight:600;
+  letter-spacing:.01em;
+  border:1px solid;
+  transition:opacity .3s;
+  white-space:nowrap;
+}
+#ai-pill.ready{
+  background:rgba(16,217,160,.1);border-color:rgba(16,217,160,.3);color:var(--success);
+}
+#ai-pill.partial{
+  background:rgba(139,126,255,.1);border-color:rgba(139,126,255,.3);color:var(--accent);
+}
+#ai-pill.warn{
+  background:rgba(245,158,11,.1);border-color:rgba(245,158,11,.3);color:var(--warn);
+}
+#ai-pill .dot{
+  width:6px;height:6px;border-radius:50%;background:currentColor;
+  animation:pulse-dot 2s ease infinite;
+}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.35}}
 
-    /* ── Step indicator ───────────────────────────────────────────────── */
-    .steps {
-      display: flex;
-      align-items: center;
-      padding: 20px 20px 0;
-      gap: 0;
-    }
-    .step-dot {
-      width: 28px; height: 28px;
-      border-radius: 50%;
-      border: 2px solid var(--border);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.75rem; font-weight: 600;
-      color: var(--muted);
-      flex-shrink: 0;
-      transition: border-color 0.2s, background 0.2s, color 0.2s;
-    }
-    .step-dot.active  { border-color: var(--primary); color: var(--primary); }
-    .step-dot.done    { border-color: var(--success); background: var(--success); color: #0f0f18; }
-    .step-line { flex: 1; height: 2px; background: var(--border); }
+#reset-btn{
+  background:transparent;
+  border:1px solid var(--glass-border);
+  color:var(--muted);border-radius:8px;
+  padding:6px 13px;font-size:.78rem;cursor:pointer;
+  transition:border-color .2s,color .2s;
+}
+#reset-btn:hover{border-color:var(--accent);color:var(--text)}
 
-    /* ── Cards ────────────────────────────────────────────────────────── */
-    .card {
-      margin: 16px 12px 0;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px;
-      display: none;
-    }
-    .card.active { display: block; }
-    .card h2 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+/* ── Step indicator ── */
+.stepper{
+  display:flex;align-items:center;padding:28px 0 0;gap:0;
+}
+.step-node{
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  flex-shrink:0;
+}
+.step-circle{
+  width:30px;height:30px;border-radius:50%;
+  border:2px solid var(--glass-border);
+  display:flex;align-items:center;justify-content:center;
+  font-size:.72rem;font-weight:700;color:var(--muted);
+  transition:border-color .4s var(--ease),background .4s var(--ease),
+             color .4s var(--ease),box-shadow .4s var(--ease);
+  position:relative;z-index:1;
+}
+.step-circle.active{
+  border-color:var(--accent);color:var(--accent);
+  box-shadow:0 0 0 4px var(--accent-glow);
+}
+.step-circle.done{
+  border-color:var(--success);background:var(--success);color:#07070e;
+  box-shadow:0 0 0 3px rgba(16,217,160,.2);
+}
+.step-label{
+  font-size:.62rem;color:var(--muted);font-weight:500;
+  transition:color .3s;white-space:nowrap;
+}
+.step-circle.active~.step-label,.step-node:has(.active) .step-label{color:var(--accent)}
+.step-node:has(.done) .step-label{color:var(--success)}
+.step-track{
+  flex:1;height:2px;background:var(--glass-border);
+  position:relative;overflow:hidden;margin-bottom:18px;
+}
+.step-track-fill{
+  position:absolute;inset:0;background:linear-gradient(90deg,var(--success),var(--accent));
+  transform:scaleX(0);transform-origin:left;
+  transition:transform .5s var(--ease);
+}
 
-    /* ── Tabs ─────────────────────────────────────────────────────────── */
-    .tabs {
-      display: flex;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-      margin-bottom: 16px;
-    }
-    .tab-btn {
-      flex: 1;
-      padding: 9px;
-      border: none;
-      background: transparent;
-      color: var(--muted);
-      font-size: 0.875rem;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s;
-    }
-    .tab-btn.active { background: var(--primary); color: #fff; }
+/* ── Cards / Steps ── */
+.step-card{
+  margin-top:20px;
+  background:var(--glass);
+  border:1px solid var(--glass-border);
+  border-radius:var(--r);
+  padding:24px;
+  display:none;
+  backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  animation:fadeUp .45s var(--ease) both;
+}
+.step-card.active{display:block}
+@keyframes fadeUp{
+  from{opacity:0;transform:translateY(18px)}
+  to  {opacity:1;transform:translateY(0)}
+}
 
-    /* ── Form controls ────────────────────────────────────────────────── */
-    label.field-label {
-      display: block;
-      font-size: 0.8rem;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    input[type="text"], textarea {
-      width: 100%;
-      background: var(--surface2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: var(--font);
-      font-size: 0.95rem;
-      padding: 10px 12px;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    input[type="text"]:focus, textarea:focus { border-color: var(--primary); }
-    textarea { min-height: 90px; resize: vertical; line-height: 1.5; }
+.step-card h2{
+  font-size:1.05rem;font-weight:700;margin-bottom:18px;
+  background:linear-gradient(135deg,var(--text),rgba(232,232,245,.7));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
 
-    /* ── Drop zone ────────────────────────────────────────────────────── */
-    .dropzone {
-      border: 2px dashed var(--border);
-      border-radius: 10px;
-      padding: 28px 20px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .dropzone.drag-over { border-color: var(--primary); background: rgba(124,106,247,.07); }
-    .dropzone .dz-icon { font-size: 2.2rem; display: block; margin-bottom: 8px; }
-    .dropzone p { color: var(--muted); font-size: 0.875rem; margin-bottom: 10px; }
+/* ── Tabs ── */
+.tabs{
+  display:flex;
+  background:rgba(0,0,0,.25);
+  border:1px solid var(--glass-border);
+  border-radius:9px;padding:3px;
+  margin-bottom:18px;gap:3px;
+}
+.tab-btn{
+  flex:1;padding:8px;border:none;background:transparent;
+  color:var(--muted);font-size:.85rem;font-weight:500;cursor:pointer;
+  border-radius:7px;transition:background .2s,color .2s;
+}
+.tab-btn.active{background:var(--accent);color:#fff}
 
-    /* ── Buttons ──────────────────────────────────────────────────────── */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      border: 1px solid var(--border);
-      background: var(--surface2);
-      color: var(--text);
-      border-radius: 8px;
-      padding: 10px 18px;
-      font-size: 0.9rem;
-      font-weight: 500;
-      cursor: pointer;
-      min-height: 44px;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .btn:hover { border-color: var(--primary); }
-    .btn:active { opacity: 0.8; }
-    .btn-primary {
-      background: var(--primary);
-      border-color: var(--primary);
-      color: #fff;
-      width: 100%;
-      margin-top: 14px;
-      font-size: 0.95rem;
-    }
-    .btn-primary:hover { background: var(--primary-d); border-color: var(--primary-d); }
-    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
-    .btn-row { display: flex; gap: 10px; margin-top: 14px; }
-    .btn-row .btn { flex: 1; }
-    .btn-download {
-      display: flex; align-items: center; justify-content: center;
-      background: var(--success);
-      border: none;
-      color: #0f0f18;
-      border-radius: 10px;
-      padding: 14px;
-      font-size: 1rem;
-      font-weight: 700;
-      width: 100%;
-      text-decoration: none;
-      margin-top: 20px;
-      min-height: 54px;
-    }
-    .btn-download:hover { filter: brightness(1.08); }
+/* ── Inputs ── */
+label.lbl{display:block;font-size:.78rem;color:var(--muted);margin-bottom:7px;font-weight:500}
+input[type=text],textarea{
+  width:100%;
+  background:rgba(0,0,0,.3);
+  border:1px solid var(--glass-border);
+  border-radius:9px;
+  color:var(--text);font-family:var(--font);font-size:.93rem;
+  padding:11px 13px;outline:none;
+  transition:border-color .2s,box-shadow .2s;
+}
+input[type=text]:focus,textarea:focus{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-glow);
+}
+textarea{min-height:88px;resize:vertical;line-height:1.5}
 
-    /* ── File list ────────────────────────────────────────────────────── */
-    #file-list { margin-top: 10px; }
-    .file-chip {
-      display: inline-flex; align-items: center; gap: 6px;
-      background: var(--surface2); border: 1px solid var(--border);
-      border-radius: 6px; padding: 4px 10px;
-      font-size: 0.8rem; color: var(--muted);
-      margin: 3px;
-    }
+/* ── Drop zone ── */
+.dropzone{
+  border:2px dashed var(--glass-border);
+  border-radius:11px;padding:30px 20px;
+  text-align:center;cursor:pointer;
+  transition:border-color .2s,background .2s,transform .15s;
+}
+.dropzone:hover,.dropzone.over{
+  border-color:var(--accent);
+  background:rgba(139,126,255,.06);
+}
+.dropzone.over{transform:scale(1.01)}
+.dz-icon{font-size:2rem;display:block;margin-bottom:8px}
+.dropzone p{color:var(--muted);font-size:.84rem;margin-bottom:12px}
+#file-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:4px}
+.fchip{
+  display:inline-flex;align-items:center;gap:5px;
+  background:rgba(139,126,255,.1);border:1px solid rgba(139,126,255,.2);
+  border-radius:6px;padding:4px 9px;font-size:.76rem;color:var(--accent);
+}
 
-    /* ── Clips list ───────────────────────────────────────────────────── */
-    .clip-item {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--border);
-    }
-    .clip-item:last-child { border-bottom: none; }
-    .clip-name {
-      flex: 1;
-      min-width: 120px;
-      font-size: 0.875rem;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .badge {
-      font-size: 0.72rem;
-      font-weight: 600;
-      border-radius: 5px;
-      padding: 2px 7px;
-      white-space: nowrap;
-    }
-    .badge-dur  { background: rgba(124,106,247,.2); color: var(--primary); }
-    .badge-res  { background: rgba(34,211,160,.15); color: var(--success); }
-    .badge-vol  { background: rgba(251,191,36,.15);  color: var(--warn); }
-    .badge-err  { background: rgba(248,113,113,.15); color: var(--error); }
+/* ── Buttons ── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  border:1px solid var(--glass-border);
+  background:var(--glass-hover);color:var(--text);
+  border-radius:9px;padding:10px 18px;
+  font-size:.88rem;font-weight:500;cursor:pointer;min-height:44px;
+  transition:border-color .2s,background .2s,transform .1s,box-shadow .2s;
+  position:relative;overflow:hidden;
+}
+.btn:hover{border-color:var(--accent);background:rgba(139,126,255,.1)}
+.btn:active{transform:scale(.97)}
+.btn-primary{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border-color:transparent;color:#fff;
+  width:100%;margin-top:16px;font-size:.93rem;font-weight:600;
+  box-shadow:0 4px 20px rgba(139,126,255,.3);
+}
+.btn-primary:hover{
+  box-shadow:0 6px 28px rgba(139,126,255,.45);
+  filter:brightness(1.08);
+  border-color:transparent;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+.btn-row{display:flex;gap:10px;margin-top:16px}
+.btn-row .btn{flex:1}
+.btn-download{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  background:linear-gradient(135deg,#10d9a0,#0bb87e);
+  border:none;color:#07070e;border-radius:11px;
+  padding:15px;font-size:.97rem;font-weight:700;
+  width:100%;text-decoration:none;margin-top:18px;
+  box-shadow:0 4px 20px rgba(16,217,160,.3);
+  transition:filter .2s,transform .1s;
+}
+.btn-download:hover{filter:brightness(1.07);transform:translateY(-1px)}
+.btn-download:active{transform:scale(.98)}
 
-    /* ── Preset cards ─────────────────────────────────────────────────── */
-    .preset-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-    @media (min-width: 480px) { .preset-grid { grid-template-columns: repeat(3, 1fr); } }
-    .preset-card {
-      background: var(--surface2);
-      border: 1.5px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 8px;
-      cursor: pointer;
-      text-align: center;
-      transition: border-color 0.15s, background 0.15s, transform 0.1s;
-      user-select: none;
-    }
-    .preset-card:hover  { border-color: var(--primary); background: rgba(124,106,247,.08); }
-    .preset-card:active { transform: scale(0.97); }
-    .preset-card.selected { border-color: var(--primary); background: rgba(124,106,247,.2); }
-    .preset-icon { font-size: 1.5rem; display: block; margin-bottom: 4px; }
-    .preset-name { font-size: 0.78rem; font-weight: 600; color: var(--text); }
-    .preset-desc { font-size: 0.68rem; color: var(--muted); margin-top: 2px; }
+/* ── Clips summary ── */
+.clips-meta{font-size:.78rem;color:var(--muted);margin-bottom:12px;font-weight:500}
+.clip-row{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:9px 0;border-bottom:1px solid var(--glass-border);
+}
+.clip-row:last-child{border-bottom:none}
+.clip-name{flex:1;min-width:110px;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badge{font-size:.7rem;font-weight:600;border-radius:5px;padding:2px 7px;white-space:nowrap}
+.bd{background:rgba(139,126,255,.15);color:var(--accent)}
+.br{background:rgba(16,217,160,.12);color:var(--success)}
+.bv{background:rgba(245,158,11,.12);color:var(--warn)}
+.be{background:rgba(248,113,113,.12);color:var(--error)}
 
-    /* ── Plan preview ─────────────────────────────────────────────────── */
-    .plan-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 14px;
-      flex-wrap: wrap;
-    }
-    .plan-type {
-      font-size: 0.8rem;
-      font-weight: 700;
-      border-radius: 6px;
-      padding: 3px 10px;
-      background: rgba(124,106,247,.25);
-      color: var(--primary);
-      text-transform: uppercase;
-      letter-spacing: .04em;
-    }
-    .plan-request { font-size: 0.875rem; color: var(--muted); }
-    .op-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--border);
-      flex-wrap: wrap;
-    }
-    .op-row:last-child { border-bottom: none; }
-    .op-num { font-size: 0.75rem; color: var(--muted); min-width: 24px; }
-    .op-name { flex: 1; font-size: 0.875rem; min-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .op-detail { font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
-    .plan-summary {
-      margin-top: 12px;
-      padding-top: 12px;
-      border-top: 1px solid var(--border);
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
+/* ── Presets ── */
+.preset-grid{
+  display:grid;grid-template-columns:repeat(2,1fr);gap:9px;margin-bottom:18px;
+}
+@media(min-width:460px){.preset-grid{grid-template-columns:repeat(3,1fr)}}
+.preset{
+  background:rgba(0,0,0,.2);
+  border:1.5px solid var(--glass-border);
+  border-radius:11px;padding:14px 10px;
+  cursor:pointer;text-align:center;
+  transition:border-color .2s,background .2s,transform .15s,box-shadow .2s;
+  user-select:none;
+}
+.preset:hover{
+  border-color:var(--accent);
+  background:rgba(139,126,255,.07);
+  box-shadow:0 0 18px rgba(139,126,255,.15);
+  transform:translateY(-1px);
+}
+.preset:active{transform:scale(.97)}
+.preset.sel{
+  border-color:var(--accent);
+  background:rgba(139,126,255,.15);
+  box-shadow:0 0 22px rgba(139,126,255,.25);
+}
+.preset-icon{font-size:1.4rem;display:block;margin-bottom:5px}
+.preset-name{font-size:.77rem;font-weight:700;color:var(--text)}
+.preset-sub{font-size:.67rem;color:var(--muted);margin-top:2px}
 
-    /* ── JSON editor ──────────────────────────────────────────────────── */
-    details.json-editor { margin-top: 14px; }
-    details.json-editor summary {
-      cursor: pointer;
-      font-size: 0.8rem;
-      color: var(--muted);
-      user-select: none;
-      padding: 6px 0;
-    }
-    details.json-editor summary:hover { color: var(--text); }
-    details.json-editor textarea {
-      font-family: "SF Mono", "Fira Code", monospace;
-      font-size: 0.78rem;
-      min-height: 180px;
-      margin-top: 8px;
-      background: #0a0a12;
-    }
-    details.json-editor .btn { margin-top: 8px; width: 100%; }
+/* ── Plan ── */
+.plan-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.plan-type{
+  font-size:.75rem;font-weight:700;padding:3px 10px;border-radius:6px;
+  background:rgba(139,126,255,.2);color:var(--accent);
+  text-transform:uppercase;letter-spacing:.05em;
+}
+.plan-req{font-size:.84rem;color:var(--muted)}
+.op{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 0;border-bottom:1px solid var(--glass-border);
+}
+.op:last-child{border-bottom:none}
+.op-n{font-size:.72rem;color:var(--muted);min-width:22px}
+.op-f{flex:1;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:100px}
+.op-d{font-size:.76rem;color:var(--muted);white-space:nowrap}
+.plan-sum{margin-top:12px;padding-top:12px;border-top:1px solid var(--glass-border);font-size:.83rem;color:var(--muted)}
 
-    /* ── Progress ─────────────────────────────────────────────────────── */
-    .progress-bar {
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-      overflow: hidden;
-      margin-bottom: 14px;
-    }
-    .progress-fill {
-      height: 100%;
-      background: var(--primary);
-      width: 0;
-      border-radius: 2px;
-      transition: width 0.3s;
-    }
-    .progress-fill.indeterminate {
-      width: 40%;
-      animation: slide 1.4s ease-in-out infinite;
-    }
-    @keyframes slide {
-      0%   { transform: translateX(-150%); }
-      100% { transform: translateX(350%); }
-    }
+/* ── JSON editor ── */
+details.jed{margin-top:16px}
+details.jed summary{
+  cursor:pointer;font-size:.78rem;color:var(--muted);
+  user-select:none;padding:7px 0;transition:color .2s;
+}
+details.jed summary:hover{color:var(--text)}
+details.jed textarea{
+  font-family:"SF Mono","Fira Code",monospace;font-size:.76rem;
+  min-height:170px;margin-top:8px;background:rgba(0,0,0,.4);
+}
+details.jed .btn{margin-top:8px;width:100%}
 
-    .exec-log {
-      font-family: "SF Mono", "Fira Code", monospace;
-      font-size: 0.78rem;
-      background: #0a0a12;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      max-height: 280px;
-      overflow-y: auto;
-      line-height: 1.6;
-    }
-    .log-line       { color: var(--text); }
-    .log-line.done  { color: var(--success); font-weight: 600; }
-    .log-line.error { color: var(--error);   font-weight: 600; }
+/* ── Progress bar ── */
+.pbar{height:3px;background:var(--glass-border);border-radius:2px;overflow:hidden;margin-bottom:16px}
+.pfill{
+  height:100%;border-radius:2px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  width:0;transition:width .4s var(--ease-out);
+}
+.pfill.ind{
+  width:35%;
+  animation:bar-slide 1.3s ease-in-out infinite;
+}
+@keyframes bar-slide{
+  0%  {transform:translateX(-200%)}
+  100%{transform:translateX(450%)}
+}
 
-    /* ── Done section ─────────────────────────────────────────────────── */
-    #done-section { margin-top: 10px; }
-    #done-section .btn { width: 100%; margin-top: 10px; }
+/* ── Exec log ── */
+.log{
+  font-family:"SF Mono","Fira Code","Cascadia Code",monospace;
+  font-size:.76rem;
+  background:rgba(0,0,0,.45);
+  border:1px solid var(--glass-border);
+  border-radius:10px;padding:14px;
+  max-height:260px;overflow-y:auto;
+  line-height:1.7;
+  scroll-behavior:smooth;
+}
+.log::-webkit-scrollbar{width:4px}
+.log::-webkit-scrollbar-track{background:transparent}
+.log::-webkit-scrollbar-thumb{background:var(--glass-border);border-radius:2px}
+.ll{color:rgba(232,232,245,.7);animation:ll-in .2s var(--ease) both}
+.ll.done{color:var(--success);font-weight:600}
+.ll.error{color:var(--error);font-weight:600}
+@keyframes ll-in{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
 
-    /* ── Error banner ─────────────────────────────────────────────────── */
-    .error-banner {
-      background: rgba(248,113,113,.12);
-      border: 1px solid rgba(248,113,113,.4);
-      border-radius: 8px;
-      color: var(--error);
-      font-size: 0.85rem;
-      padding: 10px 14px;
-      margin-top: 12px;
-    }
+/* ── Done ── */
+#done-wrap{margin-top:12px}
+#done-wrap .btn{width:100%;margin-top:10px}
+.success-glow{
+  text-align:center;padding:20px 0 8px;
+  animation:success-pop .5s var(--ease) both;
+}
+.success-glow .tick{font-size:2.4rem;display:block;margin-bottom:8px}
+.success-glow p{font-size:.9rem;color:var(--muted)}
+@keyframes success-pop{from{opacity:0;transform:scale(.7)}to{opacity:1;transform:scale(1)}}
 
-    /* ── Spinner ──────────────────────────────────────────────────────── */
-    .spinner {
-      width: 20px; height: 20px;
-      border: 2px solid var(--border);
-      border-top-color: var(--primary);
-      border-radius: 50%;
-      animation: spin .7s linear infinite;
-      display: inline-block;
-      vertical-align: middle;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+/* ── Error banner ── */
+.err{
+  background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.3);
+  border-radius:8px;color:var(--error);font-size:.82rem;
+  padding:9px 13px;margin-top:12px;
+  animation:fadeUp .25s var(--ease) both;
+}
 
-    /* ── Responsive ───────────────────────────────────────────────────── */
-    @media (max-width: 480px) {
-      .card { margin: 12px 8px 0; padding: 16px; }
-      header { padding: 16px 12px 0; }
-      .steps { padding: 16px 12px 0; }
-    }
-  </style>
+/* ── Spinner ── */
+.spin{
+  width:18px;height:18px;border:2px solid rgba(255,255,255,.2);
+  border-top-color:#fff;border-radius:50%;
+  animation:rot .65s linear infinite;display:inline-block;vertical-align:middle;
+}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+/* ── Responsive ── */
+@media(max-width:480px){
+  .app{padding:0 12px 80px}
+  .step-card{padding:18px}
+}
+</style>
 </head>
 <body>
 <div class="app">
 
-  <!-- Header -->
-  <header>
-    <span class="logo">🎬</span>
-    <h1>Video Editor</h1>
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="topbar-brand">
+      <span class="logo">🎬</span>
+      <h1>Video Editor</h1>
+    </div>
+    <div id="ai-pill"><span class="dot"></span><span id="ai-pill-text"></span></div>
     <button id="reset-btn" onclick="startOver()" hidden>New Edit</button>
-  </header>
-
-  <!-- Step indicator -->
-  <div class="steps">
-    <div class="step-dot active" id="dot-1">1</div>
-    <div class="step-line"></div>
-    <div class="step-dot" id="dot-2">2</div>
-    <div class="step-line"></div>
-    <div class="step-dot" id="dot-3">3</div>
-    <div class="step-line"></div>
-    <div class="step-dot" id="dot-4">4</div>
   </div>
 
-  <!-- ── Step 1: Choose clips ──────────────────────────────────────────── -->
-  <div class="card active" id="step-1">
+  <!-- Stepper -->
+  <div class="stepper">
+    <div class="step-node">
+      <div class="step-circle active" id="dot-1">1</div>
+      <div class="step-label">Clips</div>
+    </div>
+    <div class="step-track"><div class="step-track-fill" id="track-1"></div></div>
+    <div class="step-node">
+      <div class="step-circle" id="dot-2">2</div>
+      <div class="step-label">Edit</div>
+    </div>
+    <div class="step-track"><div class="step-track-fill" id="track-2"></div></div>
+    <div class="step-node">
+      <div class="step-circle" id="dot-3">3</div>
+      <div class="step-label">Plan</div>
+    </div>
+    <div class="step-track"><div class="step-track-fill" id="track-3"></div></div>
+    <div class="step-node">
+      <div class="step-circle" id="dot-4">4</div>
+      <div class="step-label">Done</div>
+    </div>
+  </div>
+
+  <!-- Step 1: Choose clips -->
+  <div class="step-card active" id="step-1">
     <h2>Choose Video Clips</h2>
-
     <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('folder', this)">Folder Path</button>
-      <button class="tab-btn" onclick="switchTab('upload', this)">Upload Files</button>
+      <button class="tab-btn active" onclick="switchTab('folder',this)">Folder Path</button>
+      <button class="tab-btn" onclick="switchTab('upload',this)">Upload Files</button>
     </div>
-
-    <!-- Folder path tab -->
     <div id="tab-folder">
-      <label class="field-label">Server-side folder path (e.g. /home/user/clips)</label>
-      <input type="text" id="folder-path" placeholder="/path/to/video/clips"
-             onkeydown="if(event.key==='Enter') analyze()">
+      <label class="lbl">Server-side folder path</label>
+      <input type="text" id="folder-path" placeholder="/path/to/clips"
+             onkeydown="if(event.key==='Enter')analyze()">
     </div>
-
-    <!-- Upload tab -->
     <div id="tab-upload" style="display:none">
       <div class="dropzone" id="dropzone"
            onclick="document.getElementById('file-input').click()"
            ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event)">
         <span class="dz-icon">📂</span>
-        <p>Drop video files here, or tap to browse</p>
-        <button class="btn" onclick="event.stopPropagation(); document.getElementById('file-input').click()">
+        <p>Drop video files here or tap to browse</p>
+        <button class="btn" onclick="event.stopPropagation();document.getElementById('file-input').click()">
           Browse Files
         </button>
       </div>
@@ -453,71 +459,65 @@
              onchange="onFilesSelected(this.files)">
       <div id="file-list"></div>
     </div>
-
-    <div id="analyze-error" class="error-banner" style="display:none"></div>
-    <button class="btn-primary" id="analyze-btn" onclick="analyze()">Analyze Clips</button>
+    <div id="analyze-error" class="err" style="display:none"></div>
+    <button class="btn btn-primary" id="analyze-btn" onclick="analyze()">Analyze Clips</button>
   </div>
 
-  <!-- ── Step 2: Edit request ───────────────────────────────────────────── -->
-  <div class="card" id="step-2">
-    <h2>Choose an edit</h2>
-    <div id="clips-summary" style="margin-bottom:14px"></div>
-    <div id="ai-banner" style="display:none;background:rgba(124,106,247,.12);border:1px solid rgba(124,106,247,.3);border-radius:8px;padding:9px 12px;font-size:.78rem;color:#a89ff5;margin-bottom:14px"></div>
-
+  <!-- Step 2: Edit request -->
+  <div class="step-card" id="step-2">
+    <h2>Choose an Edit</h2>
+    <div id="clips-summary"></div>
     <div class="preset-grid">
-      <div class="preset-card" onclick="selectPreset(this,'cut out silences')">
+      <div class="preset" onclick="selectPreset(this,'cut out silences')">
         <span class="preset-icon">🔇</span>
         <div class="preset-name">Cut Silences</div>
-        <div class="preset-desc">Remove quiet gaps</div>
+        <div class="preset-sub">Remove quiet gaps</div>
       </div>
-      <div class="preset-card" onclick="selectPreset(this,'enhance voice clarity')">
+      <div class="preset" onclick="selectPreset(this,'enhance voice clarity')">
         <span class="preset-icon">🎙️</span>
         <div class="preset-name">Enhance Voice</div>
-        <div class="preset-desc">Boost & clarify audio</div>
+        <div class="preset-sub">Boost &amp; clarify audio</div>
       </div>
-      <div class="preset-card" onclick="selectPreset(this,'make a 60 second highlight reel')">
+      <div class="preset" onclick="selectPreset(this,'make a 60 second highlight reel')">
         <span class="preset-icon">✨</span>
         <div class="preset-name">60s Highlight</div>
-        <div class="preset-desc">Best 60 seconds</div>
+        <div class="preset-sub">Best 60 seconds</div>
       </div>
-      <div class="preset-card" onclick="selectPreset(this,'highlight important topic points')">
+      <div class="preset" onclick="selectPreset(this,'highlight important topic points')">
         <span class="preset-icon">🎯</span>
         <div class="preset-name">Key Moments</div>
-        <div class="preset-desc">Keep speech, cut filler</div>
+        <div class="preset-sub">Keep speech, cut filler</div>
       </div>
-      <div class="preset-card" onclick="selectPreset(this,'speed up to 1.5x')">
+      <div class="preset" onclick="selectPreset(this,'speed up to 1.5x')">
         <span class="preset-icon">⚡</span>
         <div class="preset-name">Speed Up 1.5×</div>
-        <div class="preset-desc">Faster playback</div>
+        <div class="preset-sub">Faster playback</div>
       </div>
-      <div class="preset-card" onclick="selectPreset(this,'normalize audio levels')">
+      <div class="preset" onclick="selectPreset(this,'normalize audio levels')">
         <span class="preset-icon">🔊</span>
         <div class="preset-name">Normalize Audio</div>
-        <div class="preset-desc">Balance loudness</div>
+        <div class="preset-sub">Balance loudness</div>
       </div>
     </div>
-
-    <label class="field-label">Or type a custom edit</label>
-    <textarea id="edit-request" placeholder="e.g. trim from 0:30 to 2:45, make a 2 minute montage, sync to beat at 128 BPM…"
-              oninput="document.querySelectorAll('.preset-card').forEach(c=>c.classList.remove('selected'))"
-              onkeydown="if(event.key==='Enter' && event.metaKey) generatePlan()"></textarea>
-
-    <div id="plan-error" class="error-banner" style="display:none"></div>
-    <button class="btn-primary" id="plan-btn" onclick="generatePlan()">Generate Plan →</button>
+    <label class="lbl">Or describe a custom edit</label>
+    <textarea id="edit-request"
+      placeholder="e.g. trim 0:30–2:45, make a 2-minute montage, sync to 128 BPM…"
+      oninput="document.querySelectorAll('.preset').forEach(c=>c.classList.remove('sel'))"
+      onkeydown="if(event.key==='Enter'&&event.metaKey)generatePlan()"></textarea>
+    <div id="plan-error" class="err" style="display:none"></div>
+    <button class="btn btn-primary" id="plan-btn" onclick="generatePlan()">Generate Plan →</button>
   </div>
 
-  <!-- ── Step 3: Plan preview ───────────────────────────────────────────── -->
-  <div class="card" id="step-3">
+  <!-- Step 3: Plan preview -->
+  <div class="step-card" id="step-3">
     <h2>Edit Plan</h2>
     <div id="plan-preview"></div>
-
-    <details class="json-editor" id="json-details">
+    <details class="jed" id="json-details">
       <summary>Edit JSON directly ›</summary>
       <textarea id="plan-json" spellcheck="false"></textarea>
-      <button class="btn" onclick="updatePlan()">Update Plan</button>
-      <div id="json-error" class="error-banner" style="display:none"></div>
+      <button class="btn" onclick="updatePlan()">Apply Changes</button>
+      <div id="json-error" class="err" style="display:none"></div>
     </details>
-
     <div class="btn-row">
       <button class="btn" onclick="showStep(2)">← Back</button>
       <button class="btn btn-primary" style="margin-top:0" id="exec-btn" onclick="executePlan()">
@@ -526,98 +526,100 @@
     </div>
   </div>
 
-  <!-- ── Step 4: Progress + Done ────────────────────────────────────────── -->
-  <div class="card" id="step-4">
+  <!-- Step 4: Progress + Done -->
+  <div class="step-card" id="step-4">
     <h2 id="step4-title">Running…</h2>
-    <div class="progress-bar">
-      <div class="progress-fill indeterminate" id="progress-fill"></div>
-    </div>
-    <div class="exec-log" id="exec-log"></div>
-
-    <div id="done-section" style="display:none">
+    <div class="pbar"><div class="pfill ind" id="progress-fill"></div></div>
+    <div class="log" id="exec-log"></div>
+    <div id="done-wrap" style="display:none">
+      <div class="success-glow">
+        <span class="tick">🎉</span>
+        <p id="done-msg">Your video is ready.</p>
+      </div>
       <a id="download-link" class="btn-download" href="#">⬇ Download Video</a>
       <button class="btn" onclick="startOver()">New Edit</button>
     </div>
   </div>
 
-</div><!-- .app -->
+</div>
 
 <script>
 'use strict';
 
-// ── State ──────────────────────────────────────────────────────────────────
-let sessionId = null;
-let currentPlan = null;
-let currentTab = 'folder';
-let selectedFiles = [];
+let sessionId = null, currentPlan = null, currentTab = 'folder', selectedFiles = [];
 
-// ── Step management ────────────────────────────────────────────────────────
+// ── Step management ──
 function showStep(n) {
-  document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
-  document.getElementById(`step-${n}`).classList.add('active');
+  document.querySelectorAll('.step-card').forEach(c => c.classList.remove('active'));
+  const card = document.getElementById(`step-${n}`);
+  card.classList.add('active');
+  // Reset animation
+  card.style.animation = 'none';
+  card.offsetHeight; // reflow
+  card.style.animation = '';
 
-  document.querySelectorAll('.step-dot').forEach((d, i) => {
-    d.classList.remove('active', 'done');
-    if (i + 1 < n)      d.classList.add('done');
+  document.querySelectorAll('.step-circle').forEach((d, i) => {
+    d.classList.remove('active','done');
+    if (i + 1 < n)       d.classList.add('done');
     else if (i + 1 === n) d.classList.add('active');
   });
 
-  document.getElementById('reset-btn').hidden = (n === 1);
+  // Fill tracks between completed steps
+  for (let t = 1; t <= 3; t++) {
+    const fill = document.getElementById(`track-${t}`);
+    if (fill) fill.style.transform = t < n ? 'scaleX(1)' : 'scaleX(0)';
+  }
+
+  document.getElementById('reset-btn').hidden = n === 1;
 }
 
-// ── Tab switching ──────────────────────────────────────────────────────────
+// ── Tabs ──
 function switchTab(tab, btn) {
   currentTab = tab;
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('tab-folder').style.display = tab === 'folder' ? '' : 'none';
-  document.getElementById('tab-upload').style.display = tab === 'upload' ? '' : 'none';
+  document.getElementById('tab-upload').style.display  = tab === 'upload'  ? '' : 'none';
 }
 
-// ── File drag-and-drop ─────────────────────────────────────────────────────
-function onDragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('drag-over'); }
-function onDragLeave(e) { document.getElementById('dropzone').classList.remove('drag-over'); }
+// ── Drag & drop ──
+function onDragOver(e)  { e.preventDefault(); document.getElementById('dropzone').classList.add('over'); }
+function onDragLeave()  { document.getElementById('dropzone').classList.remove('over'); }
 function onDrop(e) {
   e.preventDefault();
-  document.getElementById('dropzone').classList.remove('drag-over');
+  document.getElementById('dropzone').classList.remove('over');
   onFilesSelected(e.dataTransfer.files);
 }
 function onFilesSelected(files) {
   selectedFiles = Array.from(files);
-  const list = document.getElementById('file-list');
-  list.innerHTML = selectedFiles.map(f =>
-    `<span class="file-chip">🎥 ${f.name}</span>`
-  ).join('');
+  document.getElementById('file-list').innerHTML =
+    selectedFiles.map(f => `<span class="fchip">🎥 ${f.name}</span>`).join('');
 }
 
-// ── Clip analysis ──────────────────────────────────────────────────────────
+// ── Analyze ──
 async function analyze() {
   hideError('analyze-error');
   const btn = document.getElementById('analyze-btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Analyzing…';
-
+  btn.innerHTML = '<span class="spin"></span> Analyzing…';
   try {
     const fd = new FormData();
     if (currentTab === 'folder') {
-      const path = document.getElementById('folder-path').value.trim();
-      if (!path) { showError('analyze-error', 'Enter a folder path.'); return; }
-      fd.append('folder_path', path);
+      const p = document.getElementById('folder-path').value.trim();
+      if (!p) { showError('analyze-error','Enter a folder path.'); return; }
+      fd.append('folder_path', p);
     } else {
-      if (!selectedFiles.length) { showError('analyze-error', 'Select at least one video file.'); return; }
+      if (!selectedFiles.length) { showError('analyze-error','Select at least one video file.'); return; }
       selectedFiles.forEach(f => fd.append('files', f));
     }
-
-    const res = await fetch('/api/analyze', { method: 'POST', body: fd });
+    const res  = await fetch('/api/analyze', { method:'POST', body:fd });
     const data = await res.json();
     if (!res.ok) { showError('analyze-error', data.error || 'Analysis failed.'); return; }
-
     sessionId = data.session_id;
     renderClipsSummary(data.clips);
-    checkAiStatus();
     showStep(2);
-  } catch (err) {
-    showError('analyze-error', `Network error: ${err.message}`);
+  } catch(e) {
+    showError('analyze-error', `Network error: ${e.message}`);
   } finally {
     btn.disabled = false;
     btn.innerHTML = 'Analyze Clips';
@@ -626,84 +628,80 @@ async function analyze() {
 
 function renderClipsSummary(clips) {
   const valid = clips.filter(c => !c.error);
-  const total = valid.reduce((s, c) => s + (c.duration || 0), 0);
-
-  let html = `<p style="font-size:.8rem;color:var(--muted);margin-bottom:10px">
-    ${valid.length} clip(s) · ${fmtTime(total)} total</p>`;
-
+  const total = valid.reduce((s,c) => s + (c.duration||0), 0);
+  let html = `<p class="clips-meta">${valid.length} clip${valid.length!==1?'s':''} · ${fmtTime(total)} total</p>`;
   clips.forEach(c => {
     if (c.error) {
-      html += `<div class="clip-item">
-        <span class="clip-name">${c.filename}</span>
-        <span class="badge badge-err">error</span></div>`;
+      html += `<div class="clip-row"><span class="clip-name">${escHtml(c.filename)}</span>
+               <span class="badge be">error</span></div>`;
       return;
     }
-    const volStr = c.audio_mean_volume_db != null
-      ? `${c.audio_mean_volume_db > 0 ? '+' : ''}${c.audio_mean_volume_db.toFixed(1)} dBFS`
+    const vol = c.audio_mean_volume_db != null
+      ? `${c.audio_mean_volume_db > 0?'+':''}${c.audio_mean_volume_db.toFixed(1)} dBFS`
       : 'no audio';
-    html += `<div class="clip-item">
-      <span class="clip-name" title="${c.filename}">${c.filename}</span>
-      <span class="badge badge-dur">${fmtTime(c.duration || 0)}</span>
-      <span class="badge badge-res">${c.width}×${c.height}</span>
-      <span class="badge badge-vol">${volStr}</span>
+    html += `<div class="clip-row">
+      <span class="clip-name" title="${escHtml(c.filename)}">${escHtml(c.filename)}</span>
+      <span class="badge bd">${fmtTime(c.duration||0)}</span>
+      <span class="badge br">${c.width}×${c.height}</span>
+      <span class="badge bv">${escHtml(vol)}</span>
     </div>`;
   });
-
   document.getElementById('clips-summary').innerHTML = html;
 }
 
-// ── Edit request & plan ────────────────────────────────────────────────────
+// ── AI status pill (always visible) ──
 async function checkAiStatus() {
   try {
     const r = await fetch('/api/ai_status');
     const d = await r.json();
-    const banner = document.getElementById('ai-banner');
+    const pill = document.getElementById('ai-pill');
+    const txt  = document.getElementById('ai-pill-text');
+    pill.className = 'ai-pill';
     if (d.whisper && d.claude) {
-      banner.textContent = '✓ AI ready — Whisper (speech detection) + Claude (smart selection) active.';
-      banner.style.display = '';
+      pill.classList.add('ready');
+      txt.textContent = 'AI Ready';
     } else if (d.whisper) {
-      banner.textContent = '✓ Whisper AI active. Set ANTHROPIC_API_KEY for smarter Key Moments selection.';
-      banner.style.display = '';
+      pill.classList.add('partial');
+      txt.textContent = 'Whisper AI';
     } else {
-      banner.style.background = 'rgba(251,191,36,.1)';
-      banner.style.borderColor = 'rgba(251,191,36,.3)';
-      banner.style.color = '#fbbf24';
-      banner.textContent = '⚠ AI not installed — run: pip install faster-whisper   (makes Cut Silences & Key Moments actually work)';
-      banner.style.display = '';
+      pill.classList.add('warn');
+      txt.textContent = 'No AI';
     }
-  } catch (_) {}
+    pill.style.display = 'flex';
+    // restore dot animation
+    pill.innerHTML = '<span class="dot"></span><span>' + txt.textContent + '</span>';
+  } catch(_) {}
 }
 
+// ── Presets ──
 function selectPreset(card, text) {
-  document.querySelectorAll('.preset-card').forEach(c => c.classList.remove('selected'));
-  card.classList.add('selected');
+  document.querySelectorAll('.preset').forEach(c => c.classList.remove('sel'));
+  card.classList.add('sel');
   document.getElementById('edit-request').value = text;
 }
 
+// ── Generate plan ──
 async function generatePlan() {
   hideError('plan-error');
   const req = document.getElementById('edit-request').value.trim();
-  if (!req) { showError('plan-error', 'Describe the edit you want.'); return; }
-
+  if (!req) { showError('plan-error','Describe the edit you want.'); return; }
   const btn = document.getElementById('plan-btn');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Generating…';
-
+  btn.innerHTML = '<span class="spin"></span> Generating…';
   try {
-    const res = await fetch('/api/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId, request: req }),
+    const res  = await fetch('/api/plan', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ session_id:sessionId, request:req }),
     });
     const data = await res.json();
-    if (!res.ok) { showError('plan-error', data.error || 'Plan generation failed.'); return; }
-
+    if (!res.ok) { showError('plan-error', data.error || 'Plan failed.'); return; }
     currentPlan = data.plan;
     renderPlan(currentPlan);
     document.getElementById('plan-json').value = JSON.stringify(currentPlan, null, 2);
     showStep(3);
-  } catch (err) {
-    showError('plan-error', `Network error: ${err.message}`);
+  } catch(e) {
+    showError('plan-error', `Network error: ${e.message}`);
   } finally {
     btn.disabled = false;
     btn.innerHTML = 'Generate Plan →';
@@ -711,167 +709,136 @@ async function generatePlan() {
 }
 
 function renderPlan(plan) {
-  const ops = plan.operations || [];
-  const type = (plan.type || '').replace(/_/g, ' ');
+  const ops    = plan.operations || [];
+  const type   = (plan.type || '').replace(/_/g,' ');
   const params = plan.params || {};
+  const pStr   = Object.entries(params)
+    .filter(([,v]) => v != null)
+    .map(([k,v]) => `${k}: <strong>${v}</strong>`).join(' · ');
 
-  const paramStr = Object.entries(params)
-    .filter(([, v]) => v != null)
-    .map(([k, v]) => `${k}: <strong>${v}</strong>`)
-    .join(' · ');
-
-  let html = `<div class="plan-header">
-    <span class="plan-type">${type}</span>
-    <span class="plan-request">${escHtml(plan.request)}</span>
+  let html = `<div class="plan-head">
+    <span class="plan-type">${escHtml(type)}</span>
+    <span class="plan-req">${escHtml(plan.request)}</span>
   </div>`;
+  if (pStr) html += `<p style="font-size:.78rem;color:var(--muted);margin-bottom:12px">${pStr}</p>`;
 
-  if (paramStr) html += `<p style="font-size:.8rem;color:var(--muted);margin-bottom:12px">${paramStr}</p>`;
-
-  let totalDur = 0;
+  let dur = 0;
   ops.forEach((op, i) => {
-    const name = op.clip.split('/').pop().split('\\').pop();
-    const start = op.start || 0;
-    const end   = op.end   || 0;
-    const dur   = end - start;
-    totalDur += (op.action === 'cut_silences') ? 0 : dur;
-
-    let detail;
-    if (op.action === 'cut_silences') {
-      detail = `remove silences · noise=${op.noise_floor_db}dB · min=${op.min_silence_duration}s`;
-    } else {
-      detail = `${fmtTime(start)} → ${fmtTime(end)} · ${dur.toFixed(1)}s`;
-    }
-
-    html += `<div class="op-row">
-      <span class="op-num">${i + 1}.</span>
-      <span class="op-name" title="${escHtml(name)}">${escHtml(name)}</span>
-      <span class="op-detail">${escHtml(detail)}</span>
+    const name  = op.clip.split('/').pop().split('\\').pop();
+    const start = op.start || 0, end = op.end || 0, d = end - start;
+    if (op.action !== 'cut_silences') dur += d;
+    const detail = op.action === 'cut_silences'
+      ? `remove silences · noise=${op.noise_floor_db}dB · min=${op.min_silence_duration}s`
+      : `${fmtTime(start)} → ${fmtTime(end)} · ${d.toFixed(1)}s`;
+    html += `<div class="op">
+      <span class="op-n">${i+1}.</span>
+      <span class="op-f" title="${escHtml(name)}">${escHtml(name)}</span>
+      <span class="op-d">${escHtml(detail)}</span>
     </div>`;
   });
-
-  if (plan.type !== 'cut_silences' && totalDur > 0) {
-    html += `<div class="plan-summary">
-      Estimated output duration: <strong>~${totalDur.toFixed(1)}s</strong> (${fmtTime(totalDur)})
-    </div>`;
+  if (plan.type !== 'cut_silences' && dur > 0) {
+    html += `<div class="plan-sum">Estimated output: <strong>~${dur.toFixed(1)}s</strong> (${fmtTime(dur)})</div>`;
   }
-
   document.getElementById('plan-preview').innerHTML = html;
 }
 
-// ── JSON editor ────────────────────────────────────────────────────────────
+// ── JSON editor ──
 async function updatePlan() {
   hideError('json-error');
   let parsed;
-  try {
-    parsed = JSON.parse(document.getElementById('plan-json').value);
-  } catch (e) {
-    showError('json-error', `Invalid JSON: ${e.message}`);
-    return;
-  }
-
-  const res = await fetch(`/api/plan/${sessionId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ plan: parsed }),
+  try { parsed = JSON.parse(document.getElementById('plan-json').value); }
+  catch(e) { showError('json-error',`Invalid JSON: ${e.message}`); return; }
+  const res  = await fetch(`/api/plan/${sessionId}`, {
+    method:'PUT',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ plan:parsed }),
   });
   const data = await res.json();
   if (!res.ok) { showError('json-error', data.error || 'Update failed.'); return; }
-
   currentPlan = parsed;
   renderPlan(currentPlan);
   document.getElementById('json-details').removeAttribute('open');
 }
 
-// ── Execution ──────────────────────────────────────────────────────────────
+// ── Execute ──
 async function executePlan() {
   document.getElementById('exec-log').innerHTML = '';
-  document.getElementById('done-section').style.display = 'none';
+  document.getElementById('done-wrap').style.display = 'none';
   document.getElementById('step4-title').textContent = 'Running…';
-  document.getElementById('progress-fill').className = 'progress-fill indeterminate';
+  const fill = document.getElementById('progress-fill');
+  fill.className = 'pfill ind';
+  fill.style.width = '';
+  fill.style.background = '';
   showStep(4);
 
-  // Start execution
-  const res = await fetch(`/api/execute/${sessionId}`, { method: 'POST' });
-  if (!res.ok) {
-    appendLog('ERROR: Could not start execution.', 'error');
-    return;
-  }
+  const res = await fetch(`/api/execute/${sessionId}`, { method:'POST' });
+  if (!res.ok) { appendLog('ERROR: Could not start execution.','error'); return; }
 
-  // Stream progress via SSE
   const es = new EventSource(`/api/progress/${sessionId}`);
   es.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'ping') return;
-
     if (msg.type === 'log') {
-      appendLog(msg.message, 'log');
+      appendLog(msg.message);
     } else if (msg.type === 'done') {
-      appendLog(msg.message, 'done');
-      document.getElementById('step4-title').textContent = 'Done!';
-      document.getElementById('progress-fill').className = 'progress-fill';
-      document.getElementById('progress-fill').style.width = '100%';
+      appendLog(msg.message,'done');
+      document.getElementById('step4-title').textContent = 'Complete';
+      fill.className = 'pfill'; fill.style.width = '100%';
+      document.getElementById('done-msg').textContent = msg.message || 'Your video is ready.';
       document.getElementById('download-link').href = msg.download_url;
-      document.getElementById('done-section').style.display = '';
+      document.getElementById('done-wrap').style.display = '';
       es.close();
     } else if (msg.type === 'error') {
-      appendLog(msg.message, 'error');
+      appendLog(msg.message,'error');
       document.getElementById('step4-title').textContent = 'Failed';
-      document.getElementById('progress-fill').className = 'progress-fill';
-      document.getElementById('progress-fill').style.background = 'var(--error)';
-      document.getElementById('progress-fill').style.width = '100%';
-      document.getElementById('done-section').style.display = '';
+      fill.className = 'pfill';
+      fill.style.background = 'var(--error)';
+      fill.style.width = '100%';
+      document.getElementById('done-wrap').style.display = '';
       document.getElementById('download-link').style.display = 'none';
       es.close();
     }
   };
-  es.onerror = () => {
-    appendLog('Connection lost.', 'error');
-    es.close();
-  };
+  es.onerror = () => { appendLog('Connection lost.','error'); es.close(); };
 }
 
-function appendLog(msg, cls = 'log') {
-  const log = document.getElementById('exec-log');
+function appendLog(msg, cls = '') {
+  const log  = document.getElementById('exec-log');
   const line = document.createElement('div');
-  line.className = `log-line ${cls}`;
+  line.className = 'll' + (cls ? ' ' + cls : '');
   line.textContent = msg;
   log.appendChild(line);
   log.scrollTop = log.scrollHeight;
 }
 
-// ── Reset ──────────────────────────────────────────────────────────────────
+// ── Reset ──
 function startOver() {
-  if (sessionId) {
-    fetch(`/api/cleanup/${sessionId}`, { method: 'DELETE' }).catch(() => {});
-  }
-  sessionId = null;
-  currentPlan = null;
-  selectedFiles = [];
+  if (sessionId) fetch(`/api/cleanup/${sessionId}`,{method:'DELETE'}).catch(()=>{});
+  sessionId = null; currentPlan = null; selectedFiles = [];
   document.getElementById('folder-path').value = '';
   document.getElementById('edit-request').value = '';
   document.getElementById('file-list').innerHTML = '';
   document.getElementById('progress-fill').style.width = '';
   document.getElementById('progress-fill').style.background = '';
+  document.getElementById('download-link').style.display = '';
   showStep(1);
 }
 
-// ── Utilities ──────────────────────────────────────────────────────────────
-function fmtTime(sec) {
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = (sec % 60).toFixed(1);
-  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(4,'0')}`;
-  return `${m}:${String(s).padStart(4,'0')}`;
+// ── Utilities ──
+function fmtTime(s) {
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = (s%60).toFixed(1);
+  return h > 0
+    ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(4,'0')}`
+    : `${m}:${String(ss).padStart(4,'0')}`;
 }
-
 function escHtml(s) {
-  return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
 function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.style.display = ''; }
 function hideError(id)      { document.getElementById(id).style.display = 'none'; }
+
+// Init
+document.addEventListener('DOMContentLoaded', checkAiStatus);
 </script>
 </body>
 </html>
