@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "preview": "node ./scripts/serve.mjs",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },

@@ -29,15 +29,44 @@ progress photo journal. Dark / bone / maroon aesthetic with lightning effects.
 | `/app/calendar`  | Consistency calendar + 90-day heatmap + insights          |
 | `/app/progress`  | Bodyweight + photo journal + side-by-side compare         |
 
-## Local development
+## Run it (3 ways, easiest first)
+
+### 1. GitHub Pages — zero local setup
+
+Pushing to the `claude/gym-app-dark-aesthetic-RuGh1` branch (or `main`)
+automatically builds and publishes the static export via the workflow at
+`.github/workflows/voltforge-pages.yml`. You'll need to enable Pages once:
+**Repo → Settings → Pages → Source = "GitHub Actions"**.
+
+### 2. Static preview (one Node.js install required)
+
+Builds the production export and serves it from a tiny zero-dep Node script.
+This is the most reliable path locally — no dev server, no HMR weirdness.
+
+```bash
+cd web
+npm install        # one-time
+npm run build      # outputs to web/out
+npm run preview    # serves web/out at http://localhost:3000
+```
+
+### 3. Live dev server (with HMR)
 
 ```bash
 cd web
 npm install
-npm run dev
+npm run dev        # http://localhost:3000
 ```
 
-Then open http://localhost:3000.
+### Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| `npm: command not found` | Install Node.js 20+ from https://nodejs.org |
+| `Cannot find module 'next'` | You skipped `npm install`, or you're not in `web/` |
+| `EADDRINUSE :::3000` | Something else is on 3000. `npm run preview -- 3001`, or for dev: `PORT=3001 npm run dev` |
+| Blank page from `out/index.html` opened via `file://` | Browsers refuse to load JS from file:// for security. Use `npm run preview` (option 2). |
+| Pages workflow doesn't run | Enable Pages in repo Settings, then re-run the workflow from the Actions tab. |
 
 ## Quality checks
 
