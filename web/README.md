@@ -72,11 +72,19 @@ npm install
 npm run dev        # http://localhost:3000
 ```
 
-### Static-only build (GitHub Pages, no API routes)
+### Static-only build (no API routes — for any static host)
 
-The Pages workflow at `.github/workflows/voltforge-pages.yml` builds with
-`NEXT_PUBLIC_DEPLOY_TARGET=static` and publishes the export. Enable Pages once
-in **Repo → Settings → Pages → Source = "GitHub Actions"**.
+If you ever want to host the marketing landing without the SQLite backend
+(e.g. GitHub Pages, Netlify, Cloudflare Pages), build with the static target:
+
+```bash
+cd web
+NEXT_PUBLIC_DEPLOY_TARGET=static npm run build
+# output is in web/out/
+```
+
+`scripts/build.mjs` hides `app/api/` for the duration of that build so Next
+won't refuse the export. The directory is restored on exit, including SIGINT.
 
 ### Troubleshooting
 
