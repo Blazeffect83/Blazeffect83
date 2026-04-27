@@ -1,0 +1,12 @@
+node_modules
+.next
+/out
+voltforge.db
+voltforge.db-shm
+voltforge.db-wal
+.env*.local
+.vercel
+.DS_Store
+*.log
+next-env.d.ts
+*.tsbuildinfo
