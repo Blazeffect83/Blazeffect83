@@ -128,6 +128,15 @@ step "Installing voltforge CLI"
 sudo install -m 0755 "$DEPLOY_DIR/voltforge" "$CLI_PATH"
 ok "$CLI_PATH installed"
 
+step "Tailscale serve auto-config"
+if command -v tailscale >/dev/null 2>&1 && tailscale ip -4 >/dev/null 2>&1; then
+  voltforge serve >/dev/null 2>&1 \
+    && ok "tailscale serve proxy applied + persisted across reboots" \
+    || warn "tailscale serve config skipped — run 'voltforge serve' later"
+else
+  warn "tailscale not active yet — run 'sudo tailscale up' then 'voltforge serve'"
+fi
+
 step "Waiting for VOLTFORGE to come up"
 for i in {1..30}; do
   if curl -fsS "http://127.0.0.1:3000" -o /dev/null 2>/dev/null; then
@@ -143,11 +152,14 @@ echo "=========================================================="
 echo "  VOLTFORGE is up."
 echo
 voltforge url || true
-echo "  Operator CLI:    voltforge {status|logs|update|restart|url|db|backup}"
-echo "  Update later:    voltforge update"
+echo "  Operator CLI:"
+echo "    voltforge doctor    diagnose what's broken"
+echo "    voltforge fix       attempt every self-heal in sequence"
+echo "    voltforge update    pull + build + restart"
+echo "    voltforge backup    snapshot the SQLite db"
 echo
 echo "  Optional — for HTTPS from anywhere via Tailscale:"
 echo "      curl -fsSL https://tailscale.com/install.sh | sh"
 echo "      sudo tailscale up"
-echo "      sudo tailscale serve --bg http://localhost:3000"
+echo "      voltforge serve"
 echo "=========================================================="

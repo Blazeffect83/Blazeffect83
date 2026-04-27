@@ -8,57 +8,75 @@
 #   stop       stop the service
 #   restart    restart the service
 #   update     git pull, npm ci, npm run build, restart
-#   url        print the LAN + Tailscale URLs
+#   url        print every URL the app is reachable at
 #   db         open the SQLite database in sqlite3
 #   backup     dump the SQLite db to ~/voltforge-backup-<date>.db
+#   doctor     diagnose what's broken and print a fix recipe
+#   fix        run every safe self-heal in sequence (tailscale, serve, app)
+#   serve      (re)apply the tailscale serve proxy so HTTPS works
 
-set -euo pipefail
+set -uo pipefail
 
 APP_DIR="${VOLTFORGE_APP_DIR:-$HOME/Blazeffect83}"
 WEB_DIR="$APP_DIR/web"
 DATA_DIR="${VOLTFORGE_DATA_DIR:-/var/lib/voltforge}"
 SERVICE="voltforge.service"
+TS_SERVE_SERVICE="voltforge-serve.service"
 
-cmd_status() { systemctl status "$SERVICE" --no-pager; }
-cmd_logs()   { journalctl -u "$SERVICE" -f --no-pager; }
-cmd_start()  { sudo systemctl start "$SERVICE"; }
-cmd_stop()   { sudo systemctl stop "$SERVICE"; }
-cmd_restart(){ sudo systemctl restart "$SERVICE"; }
+bold()  { printf "\033[1m%s\033[0m" "$*"; }
+green() { printf "\033[1;32m%s\033[0m" "$*"; }
+red()   { printf "\033[1;31m%s\033[0m" "$*"; }
+yel()   { printf "\033[1;33m%s\033[0m" "$*"; }
+ok()    { printf "  [%s] %s\n" "$(green '✓')" "$*"; }
+bad()   { printf "  [%s] %s\n" "$(red 'x')" "$*"; }
+warn()  { printf "  [%s] %s\n" "$(yel '!')" "$*"; }
+hr()    { printf "\n%s\n" "$(bold "=== $* ===")"; }
+
+cmd_status()  { systemctl status "$SERVICE" --no-pager; }
+cmd_logs()    { journalctl -u "$SERVICE" -f --no-pager; }
+cmd_start()   { sudo systemctl start "$SERVICE"; }
+cmd_stop()    { sudo systemctl stop "$SERVICE"; }
+cmd_restart() { sudo systemctl restart "$SERVICE"; }
 
 cmd_update() {
-  echo "=> git pull"
-  git -C "$APP_DIR" pull --ff-only
-  echo "=> npm ci"
-  (cd "$WEB_DIR" && npm ci --no-audit --no-fund)
-  echo "=> npm run build"
-  (cd "$WEB_DIR" && npm run build)
-  echo "=> restart"
+  hr "git pull"
+  git -C "$APP_DIR" pull --ff-only || { bad "git pull failed"; return 1; }
+  hr "npm ci"
+  (cd "$WEB_DIR" && npm ci --no-audit --no-fund) || { bad "npm ci failed"; return 1; }
+  hr "npm run build"
+  (cd "$WEB_DIR" && npm run build) || { bad "build failed"; return 1; }
+  hr "restart"
   sudo systemctl restart "$SERVICE"
-  echo "=> done"
+  ok "updated"
 }
 
 cmd_url() {
-  local lan_ip
+  local lan_ip ts_ip ts_dns
   lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
   echo
-  printf "  LAN:        http://%s:3000\n" "${lan_ip:-<your-pi-ip>}"
+  echo "  $(bold 'Access URLs')"
+  printf "    LAN (HTTP)        http://%s:3000\n" "${lan_ip:-<your-pi-ip>}"
+  printf "    LAN (HTTP)        http://$(hostname).local:3000\n"
   if command -v tailscale >/dev/null 2>&1; then
-    local ts_name ts_ip
-    ts_name=$(tailscale status --json 2>/dev/null | grep -oE '"DNSName":\s*"[^"]+"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')
     ts_ip=$(tailscale ip -4 2>/dev/null | head -1 || true)
-    [ -n "$ts_ip" ] && printf "  Tailscale:  http://%s:3000\n" "$ts_ip"
-    [ -n "$ts_name" ] && printf "  MagicDNS:   http://%s:3000\n" "$ts_name"
-    if tailscale serve status >/dev/null 2>&1; then
-      printf "  HTTPS:      run 'sudo tailscale serve --bg http://localhost:3000' for free TLS\n"
+    ts_dns=$(tailscale status --json 2>/dev/null \
+      | grep -oE '"DNSName"[[:space:]]*:[[:space:]]*"[^"]+"' \
+      | head -1 | cut -d'"' -f4 | sed 's/\.$//')
+    [ -n "$ts_ip" ]  && printf "    Tailscale (HTTP)  http://%s:3000\n" "$ts_ip"
+    [ -n "$ts_dns" ] && printf "    Tailscale (HTTPS) https://%s/\n" "$ts_dns"
+    if tailscale serve status 2>/dev/null | grep -q "https://"; then
+      printf "    %s tailscale serve proxy is active on :443\n" "$(green '✓')"
+    else
+      printf "    %s tailscale serve is NOT active — run 'voltforge serve' to fix\n" "$(yel '!')"
     fi
   else
-    printf "  Tailscale:  not installed (optional — gives you HTTPS from anywhere)\n"
+    printf "    %s Tailscale not installed — see install instructions in README\n" "$(yel '!')"
   fi
   echo
 }
 
 cmd_db() {
-  command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 not installed: sudo apt install sqlite3"; exit 1; }
+  command -v sqlite3 >/dev/null 2>&1 || { bad "sqlite3 not installed: sudo apt install sqlite3"; exit 1; }
   sqlite3 "$DATA_DIR/data.db"
 }
 
@@ -67,7 +85,158 @@ cmd_backup() {
   stamp=$(date +%Y%m%d-%H%M%S)
   out="$HOME/voltforge-backup-$stamp.db"
   cp "$DATA_DIR/data.db" "$out"
-  echo "Backed up to $out"
+  ok "Backed up to $out"
+}
+
+# --- doctor / fix ----------------------------------------------------------
+
+check_app_local() {
+  curl -fsS -m 4 http://127.0.0.1:3000 -o /dev/null
+}
+
+cmd_doctor() {
+  local exit_code=0
+  hr "VOLTFORGE doctor"
+
+  # 1. systemd unit installed and running?
+  if systemctl list-unit-files | grep -q "^${SERVICE}"; then
+    ok "$SERVICE installed"
+  else
+    bad "$SERVICE not installed — re-run install-on-pi.sh"
+    exit_code=1
+  fi
+  if systemctl is-active --quiet "$SERVICE"; then
+    ok "$SERVICE active"
+  else
+    bad "$SERVICE not active — try: sudo systemctl restart $SERVICE"
+    exit_code=1
+  fi
+
+  # 2. App actually responding?
+  if check_app_local; then
+    ok "app responds on http://127.0.0.1:3000"
+  else
+    bad "app NOT responding on :3000 — check 'voltforge logs'"
+    exit_code=1
+  fi
+
+  # 3. SQLite db present?
+  if [ -f "$DATA_DIR/data.db" ]; then
+    ok "database present at $DATA_DIR/data.db"
+  else
+    warn "no database file yet (will be created on first write)"
+  fi
+
+  # 4. Tailscale up?
+  if command -v tailscale >/dev/null 2>&1; then
+    if tailscale status >/dev/null 2>&1; then
+      local ts_ip
+      ts_ip=$(tailscale ip -4 2>/dev/null | head -1 || true)
+      if [ -n "$ts_ip" ]; then
+        ok "tailscale up (IP $ts_ip)"
+      else
+        bad "tailscale installed but not signed in — run: sudo tailscale up"
+        exit_code=1
+      fi
+    else
+      bad "tailscale daemon not responding — sudo systemctl restart tailscaled"
+      exit_code=1
+    fi
+
+    # 5. Tailscale serve proxy active?
+    if tailscale serve status 2>/dev/null | grep -q "https://"; then
+      ok "tailscale serve proxy active on :443"
+    else
+      bad "tailscale serve NOT active — run: voltforge serve"
+      exit_code=1
+    fi
+
+    # 6. MagicDNS (just inform, can't toggle from here)
+    if tailscale status --json 2>/dev/null | grep -q '"MagicDNSSuffix"'; then
+      ok "MagicDNS suffix detected"
+    else
+      warn "MagicDNS not detected — enable at login.tailscale.com → DNS"
+    fi
+  else
+    warn "tailscale not installed — only LAN access available"
+  fi
+
+  echo
+  cmd_url
+
+  if [ "$exit_code" -eq 0 ]; then
+    echo "  $(green 'Everything looks healthy.')"
+  else
+    echo "  $(yel 'Issues above. Try:') voltforge fix"
+  fi
+  return "$exit_code"
+}
+
+cmd_serve() {
+  command -v tailscale >/dev/null 2>&1 || { bad "tailscale not installed"; return 1; }
+  hr "Re-applying tailscale serve proxy"
+  sudo tailscale serve --bg --https 443 http://localhost:3000 \
+    && ok "proxy active on https://" \
+    || { bad "could not start tailscale serve"; return 1; }
+
+  # Make it survive reboot via a oneshot systemd unit.
+  if [ ! -f "/etc/systemd/system/$TS_SERVE_SERVICE" ]; then
+    sudo tee "/etc/systemd/system/$TS_SERVE_SERVICE" >/dev/null <<UNIT
+[Unit]
+Description=VOLTFORGE — re-apply tailscale serve at boot
+After=tailscaled.service network-online.target
+Wants=tailscaled.service network-online.target
+After=$SERVICE
+Wants=$SERVICE
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/tailscale serve --bg --https 443 http://localhost:3000
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$TS_SERVE_SERVICE" >/dev/null 2>&1 || true
+    ok "$TS_SERVE_SERVICE installed (will re-apply on every boot)"
+  fi
+}
+
+cmd_fix() {
+  local rc=0
+  hr "Self-heal pass"
+
+  echo "  ⇢ restarting $SERVICE"
+  sudo systemctl restart "$SERVICE" || rc=1
+  sleep 2
+  if check_app_local; then
+    ok "app is up"
+  else
+    bad "app still not responding — see voltforge logs"
+    rc=1
+  fi
+
+  if command -v tailscale >/dev/null 2>&1; then
+    if ! tailscale status >/dev/null 2>&1; then
+      echo "  ⇢ restarting tailscaled"
+      sudo systemctl restart tailscaled || rc=1
+      sleep 2
+    fi
+
+    if ! tailscale ip -4 >/dev/null 2>&1; then
+      echo "  ⇢ tailscale not signed in — run: sudo tailscale up"
+    fi
+
+    echo "  ⇢ ensuring tailscale serve proxy"
+    cmd_serve >/dev/null 2>&1 \
+      && ok "tailscale serve OK" \
+      || { bad "tailscale serve failed — try: sudo tailscale serve --bg --https=443 http://localhost:3000"; rc=1; }
+  fi
+
+  echo
+  cmd_doctor
+  return "$rc"
 }
 
 main() {
@@ -81,6 +250,9 @@ main() {
     url)     cmd_url ;;
     db)      cmd_db ;;
     backup)  cmd_backup ;;
+    doctor)  cmd_doctor ;;
+    fix)     cmd_fix ;;
+    serve)   cmd_serve ;;
     help|*)
       cat <<EOF
 voltforge — operator CLI
@@ -93,9 +265,14 @@ Usage: voltforge <command>
   stop       stop the service
   restart    restart the service
   update     git pull, npm ci, npm run build, restart
-  url        print the LAN + Tailscale URLs
+  url        print every URL the app is reachable at
   db         open the SQLite database (sqlite3 required)
   backup     dump the SQLite db to ~/voltforge-backup-<date>.db
+  doctor     diagnose what's broken and print a fix recipe
+  fix        run every safe self-heal in sequence
+  serve      (re)apply the tailscale serve proxy so HTTPS works
+
+If anything looks broken, run:    voltforge fix
 EOF
       ;;
   esac

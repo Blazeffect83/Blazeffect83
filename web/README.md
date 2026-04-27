@@ -42,26 +42,27 @@ operator CLI in `/usr/local/bin`.
 bash <(curl -fsSL https://raw.githubusercontent.com/Blazeffect83/Blazeffect83/claude/gym-app-dark-aesthetic-RuGh1/deploy/install-on-pi.sh)
 ```
 
-After it finishes:
+## Operations
 
 ```bash
-voltforge url           # show LAN + Tailscale URLs
-voltforge status        # systemd status
-voltforge logs          # tail journalctl
-voltforge update        # git pull + npm ci + build + restart
-voltforge backup        # snapshot the SQLite db
-voltforge db            # open the db in sqlite3
+voltforge doctor    # diagnose what's broken (color-coded checklist)
+voltforge fix       # safe self-heal: restart app, restart tailscaled, re-apply serve, re-check
+voltforge serve     # (re)apply tailscale serve and persist across reboots
+voltforge url       # print every URL the app is reachable at
+voltforge update    # git pull → npm ci → build → restart
+voltforge backup    # snapshot the SQLite db to ~/voltforge-backup-<date>.db
+voltforge logs      # tail journalctl
 ```
 
-For HTTPS reachable from any device, add Tailscale:
+**If anything looks broken from a client device, this is the order to try:**
 
-```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
-sudo tailscale serve --bg http://localhost:3000
-```
+1. `http://<lan-ip>:3000/` — works from any device on the same Wi-Fi
+2. `http://<tailscale-ip>:3000/` — works from any tailnet-connected device, **no MagicDNS needed**
+3. `https://<pi-name>.<tailnet>.ts.net/` — needs MagicDNS enabled in the tailnet
 
-You'll then reach the app at `https://<pi-name>.<your-tailnet>.ts.net`.
+If (1) fails, the app or LAN is down. If (1) works but (2) fails, the client device isn't on the tailnet. If (1) and (2) work but (3) doesn't, MagicDNS is off on the tailnet (Tailscale admin → DNS → enable MagicDNS).
+
+On the Pi, `voltforge url` prints all three.
 
 ### Local development (dev server with HMR)
 
