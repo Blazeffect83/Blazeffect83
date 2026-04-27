@@ -29,34 +29,53 @@ progress photo journal. Dark / bone / maroon aesthetic with lightning effects.
 | `/app/calendar`  | Consistency calendar + 90-day heatmap + insights          |
 | `/app/progress`  | Bodyweight + photo journal + side-by-side compare         |
 
-## Run it (3 ways, easiest first)
+## Run it
 
-### 1. GitHub Pages — zero local setup
+### Raspberry Pi 24/7 (recommended)
 
-Pushing to the `claude/gym-app-dark-aesthetic-RuGh1` branch (or `main`)
-automatically builds and publishes the static export via the workflow at
-`.github/workflows/voltforge-pages.yml`. You'll need to enable Pages once:
-**Repo → Settings → Pages → Source = "GitHub Actions"**.
-
-### 2. Static preview (one Node.js install required)
-
-Builds the production export and serves it from a tiny zero-dep Node script.
-This is the most reliable path locally — no dev server, no HMR weirdness.
+One command, idempotent. Installs Node 20, build deps, clones the repo,
+builds, creates `/var/lib/voltforge` for the SQLite DB and photo storage,
+installs a systemd unit (`voltforge.service`), and drops the `voltforge`
+operator CLI in `/usr/local/bin`.
 
 ```bash
-cd web
-npm install        # one-time
-npm run build      # outputs to web/out
-npm run preview    # serves web/out at http://localhost:3000
+bash <(curl -fsSL https://raw.githubusercontent.com/Blazeffect83/Blazeffect83/claude/gym-app-dark-aesthetic-RuGh1/deploy/install-on-pi.sh)
 ```
 
-### 3. Live dev server (with HMR)
+After it finishes:
+
+```bash
+voltforge url           # show LAN + Tailscale URLs
+voltforge status        # systemd status
+voltforge logs          # tail journalctl
+voltforge update        # git pull + npm ci + build + restart
+voltforge backup        # snapshot the SQLite db
+voltforge db            # open the db in sqlite3
+```
+
+For HTTPS reachable from any device, add Tailscale:
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+sudo tailscale serve --bg http://localhost:3000
+```
+
+You'll then reach the app at `https://<pi-name>.<your-tailnet>.ts.net`.
+
+### Local development (dev server with HMR)
 
 ```bash
 cd web
 npm install
 npm run dev        # http://localhost:3000
 ```
+
+### Static-only build (GitHub Pages, no API routes)
+
+The Pages workflow at `.github/workflows/voltforge-pages.yml` builds with
+`NEXT_PUBLIC_DEPLOY_TARGET=static` and publishes the export. Enable Pages once
+in **Repo → Settings → Pages → Source = "GitHub Actions"**.
 
 ### Troubleshooting
 
@@ -92,11 +111,26 @@ and the rep target, it computes:
 Swapping in a model-backed coach later means replacing the body of
 `suggestNext()` — no caller changes.
 
-## Privacy & data in this preview
+## Data model
 
-Workout drafts, macro logs, and progress entries are stored in your browser's
-`localStorage` only. Photos are kept as object URLs that live until you close
-the tab — they never leave your device.
+VOLTFORGE has two storage modes that work together:
+
+- **Server mode (default, what the Pi installer uses):** workout drafts,
+  meals, weight entries, and progress photos sync through `/api/state` and
+  `/api/photos` to a SQLite database at `/var/lib/voltforge/data.db`. Every
+  device on your tailnet sees the same data. The client still keeps a
+  `localStorage` mirror so it works while offline; on reconnect the server
+  copy is authoritative.
+
+- **Static mode (`NEXT_PUBLIC_DEPLOY_TARGET=static`):** there's no server, so
+  data lives only in the browser's `localStorage` for that device + browser.
+  Used for GitHub Pages.
+
+Photos are stored as raw bytes in the SQLite `photos` table, served via
+`/api/photos/<id>`.
+
+There is no auth — the server is single-tenant. Put it behind Tailscale and
+your tailnet ACL is your auth.
 
 ## Accessibility
 

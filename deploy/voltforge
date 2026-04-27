@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# voltforge — operator CLI for the Pi deployment.
+#
+# Subcommands:
+#   status     show systemd status
+#   logs       tail journalctl
+#   start      start the service
+#   stop       stop the service
+#   restart    restart the service
+#   update     git pull, npm ci, npm run build, restart
+#   url        print the LAN + Tailscale URLs
+#   db         open the SQLite database in sqlite3
+#   backup     dump the SQLite db to ~/voltforge-backup-<date>.db
+
+set -euo pipefail
+
+APP_DIR="${VOLTFORGE_APP_DIR:-$HOME/Blazeffect83}"
+WEB_DIR="$APP_DIR/web"
+DATA_DIR="${VOLTFORGE_DATA_DIR:-/var/lib/voltforge}"
+SERVICE="voltforge.service"
+
+cmd_status() { systemctl status "$SERVICE" --no-pager; }
+cmd_logs()   { journalctl -u "$SERVICE" -f --no-pager; }
+cmd_start()  { sudo systemctl start "$SERVICE"; }
+cmd_stop()   { sudo systemctl stop "$SERVICE"; }
+cmd_restart(){ sudo systemctl restart "$SERVICE"; }
+
+cmd_update() {
+  echo "=> git pull"
+  git -C "$APP_DIR" pull --ff-only
+  echo "=> npm ci"
+  (cd "$WEB_DIR" && npm ci --no-audit --no-fund)
+  echo "=> npm run build"
+  (cd "$WEB_DIR" && npm run build)
+  echo "=> restart"
+  sudo systemctl restart "$SERVICE"
+  echo "=> done"
+}
+
+cmd_url() {
+  local lan_ip
+  lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
+  echo
+  printf "  LAN:        http://%s:3000\n" "${lan_ip:-<your-pi-ip>}"
+  if command -v tailscale >/dev/null 2>&1; then
+    local ts_name ts_ip
+    ts_name=$(tailscale status --json 2>/dev/null | grep -oE '"DNSName":\s*"[^"]+"' | head -1 | cut -d'"' -f4 | sed 's/\.$//')
+    ts_ip=$(tailscale ip -4 2>/dev/null | head -1 || true)
+    [ -n "$ts_ip" ] && printf "  Tailscale:  http://%s:3000\n" "$ts_ip"
+    [ -n "$ts_name" ] && printf "  MagicDNS:   http://%s:3000\n" "$ts_name"
+    if tailscale serve status >/dev/null 2>&1; then
+      printf "  HTTPS:      run 'sudo tailscale serve --bg http://localhost:3000' for free TLS\n"
+    fi
+  else
+    printf "  Tailscale:  not installed (optional — gives you HTTPS from anywhere)\n"
+  fi
+  echo
+}
+
+cmd_db() {
+  command -v sqlite3 >/dev/null 2>&1 || { echo "sqlite3 not installed: sudo apt install sqlite3"; exit 1; }
+  sqlite3 "$DATA_DIR/data.db"
+}
+
+cmd_backup() {
+  local stamp out
+  stamp=$(date +%Y%m%d-%H%M%S)
+  out="$HOME/voltforge-backup-$stamp.db"
+  cp "$DATA_DIR/data.db" "$out"
+  echo "Backed up to $out"
+}
+
+main() {
+  case "${1:-help}" in
+    status)  cmd_status ;;
+    logs)    cmd_logs ;;
+    start)   cmd_start ;;
+    stop)    cmd_stop ;;
+    restart) cmd_restart ;;
+    update)  cmd_update ;;
+    url)     cmd_url ;;
+    db)      cmd_db ;;
+    backup)  cmd_backup ;;
+    help|*)
+      cat <<EOF
+voltforge — operator CLI
+
+Usage: voltforge <command>
+
+  status     show systemd status
+  logs       tail journalctl
+  start      start the service
+  stop       stop the service
+  restart    restart the service
+  update     git pull, npm ci, npm run build, restart
+  url        print the LAN + Tailscale URLs
+  db         open the SQLite database (sqlite3 required)
+  backup     dump the SQLite db to ~/voltforge-backup-<date>.db
+EOF
+      ;;
+  esac
+}
+
+main "$@"

@@ -35,6 +35,7 @@ jobs:
       - run: npm ci
       - name: Build static export
         env:
+          NEXT_PUBLIC_DEPLOY_TARGET: static
           NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
         run: npm run build
       - name: Add .nojekyll

@@ -4,9 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Pause, Play, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AISuggestion } from "./ai-suggestion";
+import { SyncBadge } from "./sync-badge";
 import { suggestNext, type OverloadGoal } from "@/lib/overload";
 import { SAMPLE_HISTORY, type LiftEntry, type SetEntry } from "@/lib/data";
-import { loadJSON, saveJSON } from "@/lib/storage";
+import { useSyncedState } from "@/lib/sync";
 import { cn } from "@/lib/utils";
 
 type Draft = {
@@ -21,7 +22,7 @@ const DEFAULT_LIFT = SAMPLE_HISTORY[0].lifts[0];
 export function WorkoutLogger() {
   const [goal, setGoal] = useState<OverloadGoal>("hypertrophy");
   const [activeIndex, setActiveIndex] = useState(0);
-  const [draft, setDraft] = useState<Draft | null>(null);
+  const [draft, setDraft, syncStatus] = useSyncedState<Draft | null>("workout-draft", null);
   const [restSeconds, setRestSeconds] = useState(0);
   const [restRunning, setRestRunning] = useState(false);
 
@@ -33,15 +34,6 @@ export function WorkoutLogger() {
 
   const active = liftPool[activeIndex] ?? DEFAULT_LIFT;
   const suggestion = useMemo(() => suggestNext(active, goal), [active, goal]);
-
-  useEffect(() => {
-    const saved = loadJSON<Draft | null>("vf:workout-draft", null);
-    if (saved) setDraft(saved);
-  }, []);
-
-  useEffect(() => {
-    if (draft) saveJSON("vf:workout-draft", draft);
-  }, [draft]);
 
   useEffect(() => {
     if (!restRunning) return;
@@ -63,11 +55,13 @@ export function WorkoutLogger() {
   };
 
   const updateSet = (i: number, patch: Partial<SetEntry>) => {
-    setDraft((d) => (d ? { ...d, sets: d.sets.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) } : d));
+    setDraft((d: Draft | null) =>
+      d ? { ...d, sets: d.sets.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) } : d
+    );
   };
 
   const addSet = () => {
-    setDraft((d) => {
+    setDraft((d: Draft | null) => {
       if (!d) return d;
       const last = d.sets[d.sets.length - 1] ?? { reps: 8, weight: 95, rpe: 7 };
       return { ...d, sets: [...d.sets, { ...last }] };
@@ -87,12 +81,11 @@ export function WorkoutLogger() {
   };
 
   const removeSet = (i: number) => {
-    setDraft((d) => (d ? { ...d, sets: d.sets.filter((_, idx) => idx !== i) } : d));
+    setDraft((d: Draft | null) => (d ? { ...d, sets: d.sets.filter((_, idx) => idx !== i) } : d));
   };
 
   const clearDraft = () => {
     setDraft(null);
-    saveJSON("vf:workout-draft", null);
   };
 
   return (
@@ -105,6 +98,7 @@ export function WorkoutLogger() {
             <p className="font-mono text-[10px] uppercase tracking-widest text-maroon-300">{active.muscle}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <SyncBadge status={syncStatus} />
             <select
               aria-label="Switch lift"
               value={activeIndex}

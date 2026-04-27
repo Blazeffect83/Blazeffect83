@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, Search, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { MacroRing } from "./macro-ring";
+import { SyncBadge } from "./sync-badge";
 import { MACRO_TARGETS, SAMPLE_MEALS, type MealEntry } from "@/lib/data";
-import { loadJSON, saveJSON } from "@/lib/storage";
-
-const MEAL_KEY = "vf:meals";
+import { useSyncedState } from "@/lib/sync";
 
 const FOOD_DB: { name: string; per: string; kcal: number; protein: number; carbs: number; fat: number }[] = [
   { name: "Chicken breast", per: "100g", kcal: 165, protein: 31, carbs: 0, fat: 3.6 },
@@ -25,16 +24,9 @@ const FOOD_DB: { name: string; per: string; kcal: number; protein: number; carbs
 ];
 
 export function MacroTracker() {
-  const [meals, setMeals] = useState<MealEntry[]>([]);
+  const [meals, setMeals, syncStatus] = useSyncedState<MealEntry[]>("meals", SAMPLE_MEALS);
   const [search, setSearch] = useState("");
   const [addOpen, setAddOpen] = useState(false);
-
-  useEffect(() => {
-    setMeals(loadJSON<MealEntry[]>(MEAL_KEY, SAMPLE_MEALS));
-  }, []);
-  useEffect(() => {
-    if (meals.length) saveJSON(MEAL_KEY, meals);
-  }, [meals]);
 
   const totals = useMemo(
     () =>
@@ -50,9 +42,9 @@ export function MacroTracker() {
     [meals]
   );
 
-  const remove = (id: string) => setMeals((m) => m.filter((x) => x.id !== id));
+  const remove = (id: string) => setMeals((m: MealEntry[]) => m.filter((x) => x.id !== id));
   const addFood = (food: (typeof FOOD_DB)[number]) => {
-    setMeals((m) => [
+    setMeals((m: MealEntry[]) => [
       {
         id: `m${Date.now()}`,
         name: food.name,
@@ -78,12 +70,15 @@ export function MacroTracker() {
           <p className="font-mono text-[10px] uppercase tracking-widest text-bone-300">/ Macros</p>
           <h1 className="font-display text-5xl tracking-brutal sm:text-7xl">Today's fuel</h1>
         </div>
-        <button
-          onClick={() => setAddOpen(true)}
-          className="inline-flex items-center gap-2 border border-maroon-500/60 bg-maroon-700 px-4 py-3 font-mono text-[11px] uppercase tracking-widest text-bone-50 hover:bg-maroon-600"
-        >
-          <Plus className="h-3.5 w-3.5" /> Log food
-        </button>
+        <div className="flex items-center gap-2">
+          <SyncBadge status={syncStatus} />
+          <button
+            onClick={() => setAddOpen(true)}
+            className="inline-flex items-center gap-2 border border-maroon-500/60 bg-maroon-700 px-4 py-3 font-mono text-[11px] uppercase tracking-widest text-bone-50 hover:bg-maroon-600"
+          >
+            <Plus className="h-3.5 w-3.5" /> Log food
+          </button>
+        </div>
       </header>
 
       <section className="grid grid-cols-2 gap-6 border border-bone-50/10 bg-ink-900/60 p-6 sm:grid-cols-4">

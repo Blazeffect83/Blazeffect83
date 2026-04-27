@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ImageIcon, Plus, Scale, Trash2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { loadJSON, saveJSON } from "@/lib/storage";
+import { SyncBadge } from "./sync-badge";
+import { useSyncedState, uploadPhoto } from "@/lib/sync";
 import { formatDate } from "@/lib/utils";
 
 type Entry = {
@@ -14,8 +15,6 @@ type Entry = {
   photoDataUrl?: string;
 };
 
-const KEY = "vf:progress-entries";
-
 const SEED: Entry[] = [
   { id: "p1", date: offset(-28), weight: 184.6, notes: "End of cut block 1." },
   { id: "p2", date: offset(-21), weight: 185.2 },
@@ -24,7 +23,7 @@ const SEED: Entry[] = [
 ];
 
 export function ProgressJournal() {
-  const [entries, setEntries] = useState<Entry[]>([]);
+  const [entries, setEntries, syncStatus] = useSyncedState<Entry[]>("progress-entries", SEED);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Entry>({
     id: "",
@@ -37,29 +36,20 @@ export function ProgressJournal() {
     b: null,
   });
 
-  useEffect(() => {
-    setEntries(loadJSON<Entry[]>(KEY, SEED));
-  }, []);
-  useEffect(() => {
-    if (entries.length) saveJSON(KEY, entries);
-  }, [entries]);
-
   const onPhoto = async (file: File) => {
-    const buf = await file.arrayBuffer();
-    const blob = new Blob([buf], { type: file.type });
-    const url = URL.createObjectURL(blob);
+    const url = await uploadPhoto(file);
     setDraft((d) => ({ ...d, photoDataUrl: url }));
   };
 
   const save = () => {
     if (!draft.weight) return;
     const entry: Entry = { ...draft, id: `p${Date.now()}` };
-    setEntries((e) => [entry, ...e]);
+    setEntries((e: Entry[]) => [entry, ...e]);
     setOpen(false);
     setDraft({ id: "", date: new Date().toISOString().slice(0, 10), weight: 0, notes: "" });
   };
 
-  const remove = (id: string) => setEntries((e) => e.filter((x) => x.id !== id));
+  const remove = (id: string) => setEntries((e: Entry[]) => e.filter((x) => x.id !== id));
 
   const a = entries.find((e) => e.id === compare.a) ?? entries[0];
   const b = entries.find((e) => e.id === compare.b) ?? entries[entries.length - 1];
@@ -71,12 +61,15 @@ export function ProgressJournal() {
           <p className="font-mono text-[10px] uppercase tracking-widest text-bone-300">/ Progress journal</p>
           <h1 className="font-display text-4xl tracking-brutal sm:text-6xl">Bodyweight & photos</h1>
         </div>
-        <button
-          onClick={() => setOpen(true)}
-          className="inline-flex items-center gap-2 border border-maroon-500/60 bg-maroon-700 px-4 py-3 font-mono text-[11px] uppercase tracking-widest text-bone-50 hover:bg-maroon-600"
-        >
-          <Plus className="h-3.5 w-3.5" /> Log weight
-        </button>
+        <div className="flex items-center gap-2">
+          <SyncBadge status={syncStatus} />
+          <button
+            onClick={() => setOpen(true)}
+            className="inline-flex items-center gap-2 border border-maroon-500/60 bg-maroon-700 px-4 py-3 font-mono text-[11px] uppercase tracking-widest text-bone-50 hover:bg-maroon-600"
+          >
+            <Plus className="h-3.5 w-3.5" /> Log weight
+          </button>
+        </div>
       </header>
 
       <section className="grid gap-4 lg:grid-cols-2">
