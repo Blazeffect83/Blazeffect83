@@ -149,17 +149,11 @@ done
 
 echo
 echo "=========================================================="
-echo "  VOLTFORGE is up."
+echo "  VOLTFORGE install complete."
+echo "=========================================================="
+voltforge doctor || true
 echo
-voltforge url || true
-echo "  Operator CLI:"
-echo "    voltforge doctor    diagnose what's broken"
-echo "    voltforge fix       attempt every self-heal in sequence"
-echo "    voltforge update    pull + build + restart"
-echo "    voltforge backup    snapshot the SQLite db"
+echo "  From now on, just run:    voltforge update"
 echo
-echo "  Optional — for HTTPS from anywhere via Tailscale:"
-echo "      curl -fsSL https://tailscale.com/install.sh | sh"
-echo "      sudo tailscale up"
-echo "      voltforge serve"
+echo "  If anything looks broken: voltforge fix"
 echo "=========================================================="

@@ -41,13 +41,60 @@ cmd_restart() { sudo systemctl restart "$SERVICE"; }
 cmd_update() {
   hr "git pull"
   git -C "$APP_DIR" pull --ff-only || { bad "git pull failed"; return 1; }
+
+  hr "self-update: CLI + systemd unit"
+  if [ -f "$APP_DIR/deploy/voltforge" ]; then
+    sudo install -m 0755 "$APP_DIR/deploy/voltforge" /usr/local/bin/voltforge
+    ok "/usr/local/bin/voltforge refreshed"
+  fi
+  if [ -f "$APP_DIR/deploy/voltforge.service" ]; then
+    local node_bin npm_bin user_name unit_dest tmp_unit
+    node_bin="$(command -v node)"
+    npm_bin="$(command -v npm)"
+    user_name="$(id -un)"
+    unit_dest="/etc/systemd/system/$SERVICE"
+    tmp_unit="$(mktemp)"
+    sed \
+      -e "s|__USER__|$user_name|g" \
+      -e "s|__APP_DIR__|$WEB_DIR|g" \
+      -e "s|__DATA_DIR__|$DATA_DIR|g" \
+      -e "s|__NODE__|$node_bin|g" \
+      -e "s|__NPM__|$npm_bin|g" \
+      "$APP_DIR/deploy/voltforge.service" > "$tmp_unit"
+    if ! sudo cmp -s "$tmp_unit" "$unit_dest" 2>/dev/null; then
+      sudo install -m 0644 "$tmp_unit" "$unit_dest"
+      sudo systemctl daemon-reload
+      ok "$unit_dest refreshed (daemon-reloaded)"
+    else
+      ok "$unit_dest unchanged"
+    fi
+    rm -f "$tmp_unit"
+  fi
+
   hr "npm ci"
   (cd "$WEB_DIR" && npm ci --no-audit --no-fund) || { bad "npm ci failed"; return 1; }
+
   hr "npm run build"
   (cd "$WEB_DIR" && npm run build) || { bad "build failed"; return 1; }
+
   hr "restart"
   sudo systemctl restart "$SERVICE"
-  ok "updated"
+  sleep 2
+  if check_app_local; then
+    ok "app responding on :3000"
+  else
+    bad "app not responding after restart — check 'voltforge logs'"
+  fi
+
+  if command -v tailscale >/dev/null 2>&1 && tailscale ip -4 >/dev/null 2>&1; then
+    hr "ensure tailscale serve"
+    cmd_serve >/dev/null 2>&1 \
+      && ok "tailscale serve OK" \
+      || warn "tailscale serve could not be applied (try: voltforge serve)"
+  fi
+
+  echo
+  cmd_doctor
 }
 
 cmd_url() {
