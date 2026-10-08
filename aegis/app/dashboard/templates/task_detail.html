@@ -1,0 +1,53 @@
+{% extends "base.html" %}{% from "_status.html" import badge %}
+{% block title %}Objective{% endblock %}
+{% block bodyattrs %}{% if o.status in ('QUEUED','PLANNING','READY','RUNNING','RETRYING','VERIFYING') %}data-refresh="8"{% endif %}{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row between wrap"><h1>{{ badge(o.status) }} Objective</h1><code class="small">{{ o.id }}</code></div>
+  <p class="goal">{{ o.goal }}</p>
+  <p><b>Why:</b> {{ o.status_reason or '—' }}</p>
+  <div class="row wrap">
+    {% if o.status not in ('COMPLETED','FAILED','CANCELLED','PAUSED') %}
+    <form method="post" action="/tasks/{{ o.id }}/pause" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Pause</button></form>{% endif %}
+    {% if o.status == 'PAUSED' and not o.clarification_question %}
+    <form method="post" action="/tasks/{{ o.id }}/resume" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Resume</button></form>{% endif %}
+    {% if o.status == 'FAILED' %}
+    <form method="post" action="/tasks/{{ o.id }}/retry" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button>Retry</button></form>{% endif %}
+    {% if o.status not in ('COMPLETED','FAILED','CANCELLED') %}
+    <form method="post" action="/tasks/{{ o.id }}/cancel" class="inline" data-confirm="Cancel this objective?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Cancel</button></form>{% endif %}
+  </div>
+  {% if o.clarification_question %}
+  <div class="flash warnbox"><b>The agent needs clarification:</b> {{ o.clarification_question }}
+    <form method="post" action="/tasks/{{ o.id }}/clarify" class="row wrap"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="answer" class="grow" required><button class="primary">Answer</button></form></div>
+  {% endif %}
+  <div class="grid kpis small">
+    <div><b>Kind</b><br>{{ o.kind }}</div><div><b>Priority</b><br>{{ o.priority }}</div>
+    <div><b>Tokens</b><br>{{ o.tokens_used }}</div><div><b>Cost (est.)</b><br>${{ '%.4f'|format(o.cost_usd) }}</div>
+    <div><b>Plan version</b><br>{{ o.plan_version }} ({{ o.replans }} replans)</div><div><b>Created</b><br><span class="nowrap">{{ o.created_at[:16]|replace('T',' ') }}</span></div>
+  </div>
+  {% if o.success_criteria %}<h3>Success criteria</h3><ul>{% for c in o.success_criteria %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+  {% if o.constraints %}<h3>Constraints</h3><ul>{% for c in o.constraints %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
+  {% if o.completion_summary %}<h3>Report</h3><pre class="report">{{ o.completion_summary }}</pre>{% endif %}
+</section>
+
+<section class="card"><h2>Plan &amp; steps</h2>
+  {% if o.plan and o.plan.rationale %}<p class="muted">{{ o.plan.rationale }}</p>{% endif %}
+  {% for t in o.tasks %}
+  <details class="step {{ 'old' if t.plan_version != o.plan_version }}" {{ 'open' if t.status in ('FAILED','WAITING_FOR_APPROVAL','RUNNING') and t.plan_version == o.plan_version }}>
+    <summary>{{ badge(t.status) }} <span class="muted">v{{ t.plan_version }}·{{ t.seq + 1 }}</span> {{ t.title }} <code class="small">{{ t.tool }}</code></summary>
+    <p class="small"><b>Expected:</b> {{ t.expected or '—' }} · <b>Attempts:</b> {{ t.attempts }} · <b>Reason:</b> {{ t.status_reason or '—' }}</p>
+    <h4>Arguments</h4><pre>{{ t.args|pretty }}</pre>
+    {% if t.result %}<h4>Result</h4><pre>{{ t.result|pretty }}</pre>{% endif %}
+    {% if t.verification %}<h4>Verification</h4><pre>{{ t.verification|pretty }}</pre>{% endif %}
+    {% if t.approval_id %}<p><a href="/approvals">approval {{ t.approval_id }}</a></p>{% endif %}
+  </details>
+  {% else %}<p class="muted">No plan yet.</p>{% endfor %}
+</section>
+
+<section class="card"><h2>State history</h2>
+  <table class="list small"><tbody>{% for e in o.events|reverse %}<tr><td>{{ e.created_at[11:19] }}</td><td class="nowrap">{{ e.from_status or "" }} → <b>{{ e.to_status }}</b></td><td>{{ e.reason or '' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="card"><h2>Tool runs</h2>
+  <table class="list small"><thead><tr><th>Tool</th><th>Status</th><th>Exit</th><th>ms</th></tr></thead><tbody>{% for r in runs %}<tr><td>{{ r.tool }}</td><td>{{ r.status }}{% if r.error_class %} ({{ r.error_class }}){% endif %}</td><td>{{ r.exit_code if r.exit_code is not none else '' }}</td><td>{{ r.duration_ms or '' }}</td></tr>{% else %}<tr><td class="muted">none</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

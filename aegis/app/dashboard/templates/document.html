@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Document{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ d.title or d.final_url }}</h1>
+  <p class="small"><a href="{{ d.final_url }}" rel="noopener noreferrer nofollow" target="_blank">{{ d.final_url }}</a> · {{ d.domain }} · retrieved {{ d.retrieved_at }}{% if d.published_at %} · published {{ d.published_at }}{% endif %}{% if d.author %} · {{ d.author }}{% endif %}</p>
+  {% if d.injection_flags %}<div class="flash err">Prompt-injection markers detected ({{ d.injection_flags|join(', ') }}). Claims from this document were not promoted to the knowledge base.</div>{% endif %}
+  {% if d.near_duplicate_of %}<div class="flash warnbox">Near-duplicate of <a href="/documents/{{ d.near_duplicate_of }}">document {{ d.near_duplicate_of }}</a> — not counted as independent corroboration.</div>{% endif %}
+  <h3>Summary</h3><p>{{ d.summary }}</p>
+  <h3>Quality score: {{ d.quality_score }}</h3>
+  <table class="list small"><tbody>{% for k, v in d.quality_breakdown.items() %}<tr><td>{{ k|replace('_',' ') }}</td><td>{{ '%+g'|format(v) }}</td></tr>{% endfor %}</tbody></table>
+  <p class="muted small">Rule-based ranking score, not a calibrated probability.</p>
+  <p class="small"><b>Topics:</b> {{ d.topics|join(', ') }}</p>
+</section>
+<section class="card"><h2>Claims from this source ({{ d.claims|length }})</h2>
+  {% for c in d.claims %}<a class="item" href="/claims/{{ c.id }}"><span class="badge c-{{ c.confidence }}">{{ c.confidence }}</span> <span class="badge">{{ c.kind }}</span> {{ c.text }}</a>{% else %}<p class="muted">None.</p>{% endfor %}
+</section>
+<section class="card"><h2>Extraction</h2>
+  {% set e = d.extraction %}
+  {% if e.definitions %}<h3>Definitions</h3><ul>{% for x in e.definitions %}<li><b>{{ x.term }}</b>: {{ x.definition }}</li>{% endfor %}</ul>{% endif %}
+  {% if e.procedures %}<h3>Procedures</h3><ol>{% for x in e.procedures %}<li>{{ x }}</li>{% endfor %}</ol>{% endif %}
+  {% if e.limitations %}<h3>Limitations</h3><ul>{% for x in e.limitations %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  {% if e.dates %}<p><b>Dates:</b> {{ e.dates|join(', ') }}</p>{% endif %}
+  {% if e.open_questions %}<h3>Open questions</h3><ul>{% for x in e.open_questions %}<li>{{ x }}</li>{% endfor %}</ul>{% endif %}
+  <p class="muted small">Method: {{ e.method }} · relevance {{ e.relevance }}</p>
+</section>
+{% if related %}<section class="card"><h2>Related documents</h2>{% for r in related %}<a class="item" href="/documents/{{ r.id }}">{{ r.title or r.url }} <span class="muted small">{{ r.domain }}</span></a>{% endfor %}</section>{% endif %}
+<section class="card"><details><summary><b>Extracted text</b> (untrusted)</summary><pre class="doc">{{ d.text[:30000] }}</pre></details></section>
+{% endblock %}

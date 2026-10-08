@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Claim{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Claim #{{ c.id }}</h1>
+  <p class="goal">{{ c.text }}</p>
+  <p><span class="badge c-{{ c.confidence }}">{{ c.confidence }} confidence</span> <span class="badge">{{ c.status }}</span> <span class="badge">{{ c.kind }}</span> <span class="badge">origin: {{ c.origin }}</span> · {{ c.corroboration }} independent source(s)</p>
+  {% if c.origin == 'agent' %}<div class="flash warnbox">This is an agent inference, not a statement made by a source.</div>{% endif %}
+  <p class="muted small">Confidence is a rubric (corroboration, primary sources, experiments), not a probability.</p>
+</section>
+<section class="card"><h2>Evidence</h2>
+  {% for e in c.evidence %}<div class="item"><span class="badge">{{ e.stance }}</span>{% if not e.independent %} <span class="badge">not independent</span>{% endif %}
+    {% if e.document_id %}<a href="/documents/{{ e.document_id }}">{{ e.title or e.url }}</a> <span class="muted small">{{ e.domain }} · q {{ e.quality_score }}</span>{% else %}experiment {{ e.experiment_id }}{% endif %}
+    <blockquote>{{ e.passage }}</blockquote></div>{% else %}<p class="muted">No evidence.</p>{% endfor %}
+</section>
+{% if c.contradictions %}<section class="card"><h2>Contradictions</h2>{% for r in c.contradictions %}<div class="item">#{{ r.from_id }} ⟂ #{{ r.to_id }} — {{ r.note }} {% if r.resolved %}<span class="badge">resolved</span>{% endif %}</div>{% endfor %}</section>{% endif %}
+<section class="card"><h2>History</h2>
+  <table class="list small"><tbody>{% for h in c.history %}<tr><td>{{ h.created_at }}</td><td>{{ h.field }}</td><td>{{ h.old_value }} → {{ h.new_value }}</td><td>{{ h.reason }}</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

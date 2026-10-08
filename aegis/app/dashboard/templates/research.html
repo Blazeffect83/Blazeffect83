@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Research{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row between wrap"><h2>Search knowledge</h2>
+    <div class="row">
+      <a href="/reports" class="chip">Daily report</a>
+      <a href="/api/export/knowledge" class="chip">Export JSON</a>
+      <form method="post" action="/research/{{ 'resume' if paused else 'pause' }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="{{ 'primary' if paused else '' }}">{{ 'Resume research' if paused else 'Pause research' }}</button></form>
+    </div></div>
+  <form method="get" action="/research" class="row wrap">
+    <input name="q" value="{{ q }}" placeholder="keywords" class="grow">
+    <select name="kind"><option value="documents" {{ 'selected' if kind=='documents' }}>documents</option><option value="claims" {{ 'selected' if kind=='claims' }}>claims</option></select>
+    <select name="topic"><option value="">any topic</option>{% for t in topics %}<option {{ 'selected' if topic==t.name|lower }} value="{{ t.name|lower }}">{{ t.name }}</option>{% endfor %}</select>
+    <button>Search</button>
+  </form>
+  {% if kind == 'claims' %}
+    {% for c in results %}<a class="item" href="/claims/{{ c.id }}"><span class="badge c-{{ c.confidence }}">{{ c.confidence }}</span> <span class="badge">{{ c.status }}</span> {% if c.origin != 'source' %}<span class="badge">{{ c.origin }}</span>{% endif %} {{ c.text[:300] }}<div class="muted small">{{ c.corroboration }} independent source(s)</div></a>
+    {% else %}<p class="muted">No claims found.</p>{% endfor %}
+  {% else %}
+    {% for d in results %}<a class="item" href="/documents/{{ d.id }}"><b>{{ d.title or d.final_url }}</b> <span class="badge">q {{ d.quality_score }}</span>{% if d.injection_flags != '[]' %} <span class="badge l-warning">injection flagged</span>{% endif %}{% if d.stale %} <span class="badge">stale</span>{% endif %}
+      <div class="muted small">{{ d.domain }} · {{ d.retrieved_at }}</div><div class="small">{{ (d.snippet or d.summary or '')[:300] }}</div></a>
+    {% else %}<p class="muted">No documents found.</p>{% endfor %}
+  {% endif %}
+</section>
+
+<section class="card"><h2>Topics</h2>
+  <table class="list small"><thead><tr><th>Topic</th><th>Every</th><th>Last run</th><th>Next</th><th></th></tr></thead><tbody>
+  {% for t in topics %}<tr><td><b>{{ t.name }}</b>{% if not t.enabled %} <span class="badge">disabled</span>{% endif %}<div class="muted">{{ t.description }}</div>
+      <div class="muted">{{ t.feeds|length }} feeds · {{ t.seed_urls|length }} seeds{% if t.allowed_domains %} · domains: {{ t.allowed_domains|join(', ') }}{% endif %}</div>
+      <div class="muted">{{ t.last_status or '' }}</div></td>
+    <td><form method="post" action="/research/topics/{{ t.id }}/frequency" class="row"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="interval_minutes" type="number" min="15" value="{{ t.interval_minutes }}" class="w6"><button class="ghost small">set</button></form>min</td>
+    <td>{{ t.last_run_at or 'never' }}</td><td>{{ t.next_run_at or '' }}</td>
+    <td class="row wrap">
+      <form method="post" action="/research/topics/{{ t.id }}/run" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small">Run now</button></form>
+      <form method="post" action="/research/topics/{{ t.id }}/{{ 'disable' if t.enabled else 'enable' }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small ghost">{{ 'Disable' if t.enabled else 'Enable' }}</button></form>
+      <form method="post" action="/research/topics/{{ t.id }}/delete" class="inline" data-confirm="Delete topic (knowledge is kept)?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="small danger">Delete</button></form>
+    </td></tr>
+  {% else %}<tr><td colspan="5" class="muted">No topics. Add one below or run <code>aegis load-topics config/topics.example.json</code>.</td></tr>{% endfor %}
+  </tbody></table>
+  <details><summary><b>Add topic</b></summary>
+  <form method="post" action="/research/topics" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="row wrap"><label>Name <input name="name" required></label><label>Query <input name="query" placeholder="keywords for relevance/search"></label>
+      <label>Every (min) <input name="interval_minutes" type="number" min="15" value="720"></label><label>Docs/run <input name="max_docs_per_run" type="number" min="1" max="100" value="10"></label>
+      <label>Freshness (days) <input name="freshness_days" type="number" min="1" value="365"></label></div>
+    <label>Description <input name="description"></label>
+    <label>RSS/Atom feeds (one per line) <textarea name="feeds" rows="2"></textarea></label>
+    <label>Seed URLs (one per line) <textarea name="seed_urls" rows="2"></textarea></label>
+    <label>Approved domains for this topic (one per line; blank = global policy) <textarea name="allowed_domains" rows="2"></textarea></label>
+    <button class="primary">Create topic</button>
+  </form></details>
+  <p class="muted small">Global domain policy — allowed: {{ policy.allowed|join(', ') or 'any public domain' }} · blocked: {{ policy.blocked|join(', ') or 'none' }} (set in the server config).</p>
+</section>
+
+<section class="card"><h2>Open contradictions</h2>
+{% for c in contradictions %}
+  <div class="item"><div><a href="/claims/{{ c.from_id }}">#{{ c.from_id }}</a> {{ c.a_text[:250] }}</div><div class="muted">⟂</div><div><a href="/claims/{{ c.to_id }}">#{{ c.to_id }}</a> {{ c.b_text[:250] }}</div><div class="muted small">{{ c.note }}</div>
+  <form method="post" action="/research/contradictions/{{ c.id }}/resolve" class="row wrap small"><input type="hidden" name="csrf" value="{{ csrf }}">
+    <select name="keep_claim"><option value="">keep both (not a real conflict)</option><option value="{{ c.from_id }}">keep #{{ c.from_id }}</option><option value="{{ c.to_id }}">keep #{{ c.to_id }}</option></select>
+    <input name="reason" placeholder="reason" required class="grow"><button class="small">Resolve</button></form></div>
+{% else %}<p class="muted">No open contradictions.</p>{% endfor %}
+</section>
+{% endblock %}

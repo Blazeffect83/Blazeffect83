@@ -1,0 +1,45 @@
+{
+  "topics": [
+    {
+      "name": "Local LLM runtimes on ARM",
+      "description": "llama.cpp, Ollama and related runtimes on Raspberry Pi / ARM64",
+      "query": "llama.cpp ollama raspberry pi arm64 quantization performance",
+      "feeds": ["https://github.com/ggml-org/llama.cpp/releases.atom", "https://github.com/ollama/ollama/releases.atom"],
+      "seed_urls": [],
+      "allowed_domains": ["github.com"],
+      "interval_minutes": 1440,
+      "max_docs_per_run": 10,
+      "freshness_days": 120
+    },
+    {
+      "name": "Raspberry Pi platform news",
+      "description": "Official Raspberry Pi announcements, firmware and documentation",
+      "query": "raspberry pi 5 firmware bootloader nvme",
+      "feeds": ["https://www.raspberrypi.com/news/feed/"],
+      "allowed_domains": ["raspberrypi.com"],
+      "interval_minutes": 1440,
+      "max_docs_per_run": 8,
+      "freshness_days": 365
+    },
+    {
+      "name": "Python releases",
+      "description": "CPython release notes and security fixes",
+      "query": "python release security fix",
+      "feeds": ["https://blog.python.org/feeds/posts/default"],
+      "allowed_domains": ["blog.python.org", "python.org", "docs.python.org"],
+      "interval_minutes": 2880,
+      "max_docs_per_run": 5,
+      "freshness_days": 365
+    },
+    {
+      "name": "Defensive Linux hardening",
+      "description": "Defensive hardening guidance (official/standards sources only)",
+      "query": "ubuntu server hardening ssh apparmor unattended upgrades",
+      "seed_urls": ["https://ubuntu.com/security/certifications/docs/usg", "https://owasp.org/www-project-top-ten/"],
+      "allowed_domains": ["ubuntu.com", "owasp.org", "nist.gov"],
+      "interval_minutes": 10080,
+      "max_docs_per_run": 5,
+      "freshness_days": 730
+    }
+  ]
+}

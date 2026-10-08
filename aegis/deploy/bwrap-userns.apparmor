@@ -1,0 +1,12 @@
+# /etc/apparmor.d/aegis-bwrap — lets bubblewrap create unprivileged user
+# namespaces on Ubuntu 23.10+ where kernel.apparmor_restrict_unprivileged_userns=1.
+# This is the same pattern Ubuntu uses for browsers. Installed only with consent
+# by scripts/install.sh. Remove with: sudo rm /etc/apparmor.d/aegis-bwrap &&
+# sudo systemctl reload apparmor
+abi <abi/4.0>,
+include <tunables/global>
+
+profile aegis-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+  include if exists <local/aegis-bwrap>
+}

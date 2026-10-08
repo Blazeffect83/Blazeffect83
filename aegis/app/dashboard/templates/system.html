@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}System{% endblock %}
+{% block content %}
+<section class="card"><h2>Health {{ '✓' if health.ok else '— degraded' }}</h2>
+  <table class="list small"><tbody>{% for name, c in health.checks.items() %}<tr><td><b>{{ name }}</b></td><td>{{ '✓' if c.ok else '✗' }}</td><td>{% for k, v in c.items() if k not in ('ok','metrics') %}{{ k }}: {{ v }}<br>{% endfor %}</td></tr>{% endfor %}</tbody></table>
+</section>
+<div class="grid two">
+<section class="card"><h2>Budgets &amp; quotas</h2>
+  <form method="post" action="/system/budgets" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Daily API spend limit (USD) <input name="daily_spend_limit_usd" type="number" step="0.01" min="0" value="{{ budgets.daily_spend_limit_usd }}"></label>
+    <label>Daily research spend limit (USD) <input name="research_daily_spend_limit_usd" type="number" step="0.01" min="0" value="{{ budgets.research_daily_spend_limit_usd }}"></label>
+    <label>Max model requests per hour <input name="max_requests_per_hour" type="number" min="0" value="{{ budgets.max_requests_per_hour }}"></label>
+    <label>Max tokens per objective <input name="max_tokens_per_objective" type="number" min="1000" value="{{ budgets.max_tokens_per_objective }}"></label>
+    <button class="primary">Save budgets</button>
+  </form>
+  <p class="small">Today: {{ usage.requests }} requests, {{ usage.input_tokens + usage.output_tokens }} tokens, ${{ '%.4f'|format(usage.cost_usd) }}{% if usage.estimate %} (estimate){% endif %}, {{ usage.failures }} failures.</p>
+</section>
+<section class="card"><h2>Backups</h2>
+  <form method="post" action="/system/backup" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Back up now</button></form>
+  <table class="list small"><tbody>{% for b in backups %}<tr><td>{{ b.created_at }}</td><td>{{ (b.size_bytes/1024)|round(1) }} KB</td><td>{{ '✓ verified' if b.verified else '✗ ' ~ b.verify_detail }}</td><td><a href="/api/backups/{{ b.id }}/download">download</a></td></tr>{% else %}<tr><td class="muted">No backups yet.</td></tr>{% endfor %}</tbody></table>
+  <h3>Service</h3>
+  <form method="post" action="/system/shutdown" class="inline" data-confirm="Stop AEGIS gracefully? It will not restart until started again on the server."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Graceful shutdown</button></form>
+</section>
+</div>
+<section class="card"><h2>Resource use (last {{ metrics|length }} samples)</h2>
+  <table class="list small"><thead><tr><th>Time</th><th>CPU %</th><th>Load</th><th>Mem %</th><th>Disk free MB</th><th>Temp °C</th></tr></thead><tbody>
+  {% for m in metrics[:15] %}<tr><td>{{ m.created_at[11:19] }}</td><td>{{ m.cpu_percent }}</td><td>{{ m.load_1m }}</td><td>{{ m.memory_percent }}</td><td>{{ m.disk_free_mb }}</td><td>{{ m.cpu_temp_c or '–' }}</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="card"><h2>Audit log {{ '(hash chain intact)' if chain_ok else '(CHAIN BROKEN at id ' ~ chain_bad ~ ')' }}</h2>
+  <table class="list small"><thead><tr><th>Time</th><th>Actor</th><th>Event</th><th>Tool</th><th>Decision / result</th></tr></thead><tbody>
+  {% for a in audit %}<tr><td>{{ a.created_at }}</td><td>{{ a.actor }}</td><td>{{ a.event }}</td><td>{{ a.tool or '' }}</td><td>{{ a.decision or '' }} {{ (a.result or '')[:120] }} {{ (a.error or '')[:120] }}</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="card"><details><summary><b>Tool registry</b> ({{ tools|length }})</summary>
+  <table class="list small"><thead><tr><th>Tool</th><th>Tier</th><th>Purpose</th><th>Reversible</th></tr></thead><tbody>{% for t in tools %}<tr><td><code>{{ t.name }}</code></td><td>{{ t.tier }}</td><td>{{ t.purpose }}</td><td>{{ 'yes' if t.reversible else 'no' }}</td></tr>{% endfor %}</tbody></table></details></section>
+<section class="card"><details><summary><b>Logs</b> (last 150 lines, redacted)</summary><pre class="doc">{{ log_tail }}</pre></details></section>
+{% endblock %}
