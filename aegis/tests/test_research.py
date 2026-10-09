@@ -281,3 +281,21 @@ def test_stale_marking_keeps_history(services, web):
     outdated = services.db.query("SELECT * FROM claims WHERE status = 'outdated'")
     assert outdated
     assert services.db.scalar("SELECT COUNT(*) FROM claims") > 0  # nothing deleted for age
+
+
+def test_values_within_one_document_are_not_a_contradiction(services, web):
+    page = ("<p>" + "Diagnostic criteria for impaired fasting glucose differ between organisations worldwide. " * 6
+            + "The WHO threshold for impaired fasting glucose is 110 mg/dL in adults. "
+            + "The ADA threshold for impaired fasting glucose is 100 mg/dL in adults.</p>")
+    web.add("https://criteria.example.org/ifg", page)
+    services.research.ingest_url("https://criteria.example.org/ifg", query="impaired fasting glucose threshold")
+    assert services.knowledge.contradictions() == []
+
+
+def test_same_values_across_documents_are_flagged(services, web):
+    filler = "Diagnostic criteria for impaired fasting glucose differ between organisations worldwide. " * 6
+    web.add("https://a.example.org/ifg", f"<p>{filler}The threshold for impaired fasting glucose is 110 mg/dL in adults.</p>")
+    web.add("https://b.example.net/ifg", f"<p>{filler}The threshold for impaired fasting glucose is 100 mg/dL in adults.</p>")
+    for u in ("https://a.example.org/ifg", "https://b.example.net/ifg"):
+        services.research.ingest_url(u, query="impaired fasting glucose threshold")
+    assert len(services.knowledge.contradictions()) == 1

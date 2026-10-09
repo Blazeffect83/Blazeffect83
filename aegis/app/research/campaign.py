@@ -37,7 +37,7 @@ from ..models.base import BudgetExceeded, ModelError
 from ..security.network_policy import URLRejected, domain_matches
 from . import discovery
 from .deduplicator import _STOP, normalize, stem, stems, tokens
-from .extractor import _FIRST_PERSON
+from .extractor import _AIM, _FIRST_PERSON
 from .injection import wrap_untrusted
 
 log = logging.getLogger(__name__)
@@ -664,7 +664,7 @@ class Campaign:
         except Exception:  # malformed FTS expression from unusual tokens
             return []
         return [c for c in rows if c["status"] != "retracted" and self.has_focus(st, c["text"])
-                and not _FIRST_PERSON.search(c["text"])
+                and not _FIRST_PERSON.search(c["text"]) and not _AIM.search(c["text"])
                 and self.coverage(st, c["text"]) >= self.CLAIM_MIN * 0.8]
 
     def _campaign_claims(self, st: dict) -> list[dict]:
@@ -683,8 +683,8 @@ class Campaign:
             sub = len(extra & set(tokens(c["text"]))) / len(extra) if extra else 0
             if (cov < self.CLAIM_MIN and sub < 0.25) or not self.has_focus(st, c["text"]):
                 continue
-            if _FIRST_PERSON.search(c["text"]):
-                continue  # anecdotes are kept in the knowledge base but are not findings
+            if _FIRST_PERSON.search(c["text"]) or _AIM.search(c["text"]):
+                continue  # anecdotes and statements of purpose are kept in the knowledge base, not findings
             if tier == "core" and not self.is_core(st, c["text"]):
                 continue
             if tier == "background" and self.is_core(st, c["text"]):
@@ -764,7 +764,11 @@ class Campaign:
             "SELECT r.note, a.id AS a_id, a.text AS a_text, b.id AS b_id, b.text AS b_text FROM relationships r "
             "JOIN claims a ON a.id = r.from_id JOIN claims b ON b.id = r.to_id WHERE r.kind = 'contradicts' "
             "AND r.resolved = 0") if claim_ids else []
-        contested = [c for c in contested if c["a_id"] in claim_ids or c["b_id"] in claim_ids][:10]
+        def docs_of(cid):
+            return {r["document_id"] for r in self.db.query(
+                "SELECT document_id FROM claim_evidence WHERE claim_id = ? AND document_id IS NOT NULL", (cid,))}
+        contested = [c for c in contested if (c["a_id"] in claim_ids or c["b_id"] in claim_ids)
+                     and not (docs_of(c["a_id"]) == docs_of(c["b_id"]) and len(docs_of(c["a_id"])) == 1)][:10]
         if contested:
             lines += ["## Contested points (sources disagree)", ""]
             for c in contested:

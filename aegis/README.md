@@ -89,7 +89,7 @@ app/
 deploy/          systemd unit, AppArmor profile for bubblewrap, sudoers example
 scripts/         install, uninstall, upgrade/rollback, backup, restore
 config/          sample research topics
-tests/           236 automated tests (unit, integration, security, end-to-end, crash)
+tests/           238 automated tests (unit, integration, security, end-to-end, crash)
 docs/            install, security, API, operations, troubleshooting, architecture, verification
 ```
 

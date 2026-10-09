@@ -200,6 +200,13 @@ class KnowledgeStore:
             for cand in self.similar_claims(text):
                 sim = jaccard(text, cand["text"])
                 signal = conflict_signal(text, cand["text"]) if sim >= 0.45 else None
+                if signal and document_id is not None:
+                    cand_docs = {r["document_id"] for r in self.db.query(
+                        "SELECT document_id FROM claim_evidence WHERE claim_id = ?", (cand["id"],))}
+                    if cand_docs == {document_id}:
+                        # Two values in the same document (e.g. WHO vs ADA thresholds listed side by
+                        # side) are a comparison, not a disagreement between sources.
+                        signal = None
                 if signal:
                     contradicts.append((cand["id"], signal))
                 elif sim >= 0.8 and cand["origin"] == origin:
