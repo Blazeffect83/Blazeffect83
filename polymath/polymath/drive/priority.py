@@ -55,6 +55,9 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
         if _has_table(db, "quiz_answers")
         else {}
     )
+    from polymath.drive.learn import INTEREST_BOOST, interests
+
+    wanted = interests(db)
     rows = []
     raw_importance: dict[int, float] = {}
     gaps: dict[int, tuple[float, dict[str, Any]]] = {}
@@ -86,12 +89,14 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
         novelty = 1.0 / (1.0 + decayed)
         eff = effort.get(tid, 0.0) / effort_total
         gap, gap_ev = gaps[tid]
-        priority = gap * importance * novelty * (1.0 - eff)
+        boost = INTEREST_BOOST if tid in wanted else 1.0
+        priority = gap * importance * novelty * (1.0 - eff) * boost
         evidence = {
             "gap": gap_ev,
             "importance_pagerank": round(raw_importance[tid], 3),
             "pursuits_decayed": round(decayed, 3),
             "effort_share_24h": round(eff, 3),
+            "user_interest_boost": boost,
             "docs": int(t["n_total"]),
         }
         rows.append((tid, gap, importance, novelty, eff, priority, json.dumps(evidence), now))

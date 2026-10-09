@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Polymath</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>Polymath</h1></div>
+  <div id="health" class="pill">connecting…</div>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card ask">
+    <form id="ask-form">
+      <label for="question">Ask what it knows (offline)</label>
+      <div class="row">
+        <input id="question" name="question" maxlength="500" placeholder="e.g. What is the capital of France?" autocomplete="off">
+        <button type="submit">Ask</button>
+      </div>
+    </form>
+    <div id="answer" class="answer" aria-live="polite"></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2>Documents read per day</h2><canvas id="c-docs" height="200"></canvas><div class="legend" id="l-docs"></div></div>
+    <div class="card"><h2>Self-quiz accuracy</h2><canvas id="c-quiz" height="200"></canvas><div class="legend" id="l-quiz"></div></div>
+    <div class="card"><h2>Where the CPU went (24 h)</h2><canvas id="c-effort" height="200"></canvas></div>
+    <div class="card"><h2>Temperature &amp; load (24 h)</h2><canvas id="c-vitals" height="200"></canvas><div class="legend" id="l-vitals"></div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2>Curiosity — next topics</h2><table id="t-top"></table></div>
+    <div class="card"><h2>Weakest topics</h2><table id="t-weak"></table></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2>Recent decisions</h2><table id="t-decisions"></table></div>
+    <div class="card"><h2>Recent work</h2><table id="t-cycles"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Explore the knowledge graph</h2>
+    <form id="kg-form" class="row"><input id="kg-q" maxlength="200" placeholder="Entity name, e.g. Mars"><button type="submit">Look up</button></form>
+    <div id="kg"></div>
+  </section>
+</main>
+<footer>Everything here was learned by this machine from public dumps it downloaded itself — no AI services, no pretrained models.</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

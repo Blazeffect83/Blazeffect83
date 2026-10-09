@@ -475,8 +475,16 @@ def test_gutenberg_strip_catalog_and_job(config, db, web):
     assert doc and doc.license.startswith("Public domain") and doc.meta["authors"] == ["Doe, J.", "Roe, R."]
     # transient failure keeps progress and asks to be retried later
     web.add("/cache/epub/12/pg12.txt", "busy", status=503)
-    rows_after = books_qa.gutenberg_job(ctx_for(config, db, "gutenberg.books", {**payload, "limit": 10}, services,
-                                                checkpoint={"position": 1, "stored": 0, "failed": 0}))
+    rows_after = books_qa.gutenberg_job(
+        ctx_for(
+            config,
+            db,
+            "gutenberg.books",
+            {**payload, "limit": 10},
+            services,
+            checkpoint={"position": 1, "stored": 0, "failed": 0},
+        )
+    )
     assert not rows_after.done and rows_after.delay == 300.0 and rows_after.checkpoint["position"] == 1
     hits = [t for t, _m, p, _h in web.log if p.startswith("/cache/epub/")]
     assert all(b - a >= 0.19 for a, b in itertools.pairwise(hits))  # per-host delay honoured
@@ -611,6 +619,29 @@ def test_plan_sources_against_fixtures(config, db, web, monkeypatch):
 # ------------------------------------------------------- offline integration
 
 
+def serve_wikidata_properties(web: FakeWeb) -> None:
+    """Wikidata's XML multistream (served under the same DUMPS base as Wikipedia): two property pages."""
+    pages = [
+        (1, "Q1", json.dumps(B.wikidata_entity("Q1", "universe")), None),
+        (2, "Property:P31", json.dumps(B.wikidata_entity("P31", "instance of", kind="property")), None, 120),
+        (3, "Property:P17", json.dumps(B.wikidata_entity("P17", "country", kind="property")), None, 120),
+    ]
+    dump, index = B.wiki_multistream(pages, per_stream=2)
+    web.add("/wikidatawiki/", '<a href="20261001/">20261001/</a>')
+    status = B.dumpstatus(
+        {
+            "wikidatawiki-20261001-pages-articles-multistream1.xml-p1p9.bz2": (len(dump), "/wikidatawiki/x/d1.bz2"),
+            "wikidatawiki-20261001-pages-articles-multistream-index1.txt-p1p9.bz2": (
+                len(index),
+                "/wikidatawiki/x/i1.bz2",
+            ),
+        }
+    )
+    web.add("/wikidatawiki/20261001/dumpstatus.json", status, ctype="application/json")
+    web.add("/wikidatawiki/x/d1.bz2", dump, ctype="application/octet-stream")
+    web.add("/wikidatawiki/x/i1.bz2", index, ctype="application/octet-stream")
+
+
 def serve_all(web: FakeWeb, monkeypatch) -> None:
     serve_wikipedia(web, 9)
     monkeypatch.setattr(wikipedia, "DUMPS", web.base)
@@ -619,6 +650,7 @@ def serve_all(web: FakeWeb, monkeypatch) -> None:
     web.add("/entities/20261005/", '<a href="wikidata-20261005-all.json.bz2">a</a>')
     web.add("/entities/20261005/wikidata-20261005-all.json.bz2", dump, ctype="application/octet-stream")
     monkeypatch.setattr(wikidata, "ENTITIES", web.base + "/entities")
+    serve_wikidata_properties(web)
     gz = B.openalex_gz([B.openalex_work(i, f"Paper {i}", ABSTRACT + f" v{i}") for i in range(12)])
     web.add(
         "/data/jsonl/works/manifest.json",
@@ -689,7 +721,9 @@ def test_offline_integration_all_sources_through_agent_loop(config, db, web, mon
     assert counts.get("gutenberg") == 3 and counts.get("stackexchange") == 2
     frontier = [(r["url"], r["state"], r["reason"]) for r in db.query("SELECT * FROM frontier")]
     assert counts.get("feed", 0) >= 1 and counts.get("web", 0) >= 3, "\n".join(map(str, frontier))
-    assert db.scalar("SELECT COUNT(*) FROM wd_entities") == 31
+    assert db.scalar("SELECT COUNT(*) FROM wd_entities WHERE qid GLOB 'Q*'") == 30  # + properties below
+    assert {r["qid"] for r in db.query("SELECT qid FROM wd_entities WHERE qid GLOB 'P*'")} >= {"P31", "P17"}
+    assert db.scalar("SELECT COUNT(*) FROM wd_property_pages WHERE fetched IS NOT NULL") == 2
     assert db.scalar("SELECT COUNT(*) FROM documents WHERE license IS NULL OR license=''") == 0
     dead = db.query("SELECT kind, last_error FROM jobs WHERE state='dead'")
     assert not dead, [dict(r) for r in dead]
@@ -703,10 +737,23 @@ def test_cli_sample_and_sources_commands(tmp_path, web, monkeypatch, capsys):
     serve_all(web, monkeypatch)
     make_config(tmp_path)
     cfg = tmp_path / "polymath.toml"
-    cfg.write_text(cfg.read_text() + f'\n[senses]\nallow_private_networks = true\nfeeds = ["{web.base}/rss"]\n'
-                   f'seeds = ["{web.base}/"]\ncrawl_allow_domains = ["127.0.0.1"]\nstackexchange_sites = ["ai"]\n')
-    rc = cli.main(["--config", str(cfg), "sample", "--n", "2", "--max-minutes", "2",
-                   "--sources", "wikipedia,wikidata,openalex,pubmed,gutenberg,stackexchange,feed,web"])
+    cfg.write_text(
+        cfg.read_text() + f'\n[senses]\nallow_private_networks = true\nfeeds = ["{web.base}/rss"]\n'
+        f'seeds = ["{web.base}/"]\ncrawl_allow_domains = ["127.0.0.1"]\nstackexchange_sites = ["ai"]\n'
+    )
+    rc = cli.main(
+        [
+            "--config",
+            str(cfg),
+            "sample",
+            "--n",
+            "2",
+            "--max-minutes",
+            "2",
+            "--sources",
+            "wikipedia,wikidata,openalex,pubmed,gutenberg,stackexchange,feed,web",
+        ]
+    )
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
     per = report["sources"]

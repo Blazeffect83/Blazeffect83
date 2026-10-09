@@ -53,7 +53,30 @@ def status_dict(db: Database) -> dict[str, Any]:
         "cycle": hb.get("cycle"),
         "jobs": {"ready": st.ready, "queued": st.queued, "running": st.running, "done": st.done, "dead": st.dead},
         "ready_by_kind": st.ready_by_kind,
+        "knowledge": _knowledge_summary(db),
     }
+
+
+def _knowledge_summary(db: Database) -> dict[str, Any]:
+    def table(name: str) -> bool:
+        return bool(db.scalar("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)))
+
+    out: dict[str, Any] = {}
+    if table("documents"):
+        out["documents"] = int(db.scalar("SELECT COUNT(*) FROM documents WHERE state!='duplicate'", default=0))
+    if table("entities"):
+        out["entities"] = int(db.scalar("SELECT COUNT(*) FROM entities", default=0))
+    if table("triples"):
+        out["triples"] = {
+            r["status"]: int(r["n"]) for r in db.query("SELECT status, COUNT(*) AS n FROM triples GROUP BY status")
+        }
+    if table("quizzes"):
+        q = db.one("SELECT created, n, accuracy, chance FROM quizzes ORDER BY id DESC LIMIT 1")
+        out["last_quiz"] = dict(q) if q else None
+    if table("vitals"):
+        v = db.one("SELECT at, temp_c, load1, mode, players FROM vitals ORDER BY at DESC LIMIT 1")
+        out["vitals"] = dict(v) if v else None
+    return out
 
 
 def cmd_status(config: Config, args: argparse.Namespace) -> int:
@@ -175,7 +198,9 @@ def cmd_sample(config: Config, args: argparse.Namespace) -> int:
         rec = agent.cycle()
         if rec.status != "idle":
             continue
-        web = int(agent.db.scalar("SELECT COUNT(*) FROM documents WHERE source='web'", default=0))
+        web = int(  # same count as the report: near-duplicate pages do not count towards the target
+            agent.db.scalar("SELECT COUNT(*) FROM documents WHERE source='web' AND state!='duplicate'", default=0)
+        )
         if "web" in wanted and web < args.n and crawler.frontier.pending():
             nxt_fetch = crawler.frontier.next_time()
             if nxt_fetch is not None and nxt_fetch - time.time() > 0.2:
@@ -198,6 +223,175 @@ def cmd_sample(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _answerer(config: Config, db: Database) -> Any:
+    from polymath.interface.answer import Answerer
+    from polymath.perception.entities import AliasIndex, EntityLinker
+
+    auto = AliasIndex(db, config.paths.index_dir).load()
+    return Answerer(db, EntityLinker(db, auto) if auto else None)
+
+
+def cmd_ask(config: Config, args: argparse.Namespace) -> int:
+    """Answer from what the agent has learned. Never touches the network."""
+    db = _db(config, readonly=True)
+    try:
+        ans = _answerer(config, db).ask(" ".join(args.question))
+    finally:
+        db.close()
+    print(json.dumps(ans.to_dict(), indent=2) if args.json else ans.render())
+    return 0 if ans.statements else 1
+
+
+def cmd_topics(config: Config, args: argparse.Namespace) -> int:
+    from polymath.drive.priority import top_topics, weakest_topics
+
+    db = _db(config, readonly=True)
+    try:
+        rows = weakest_topics(db, args.n) if args.weakest else top_topics(db, args.n)
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no topic priorities yet (the agent computes them after it has read and organised documents)")
+        return 0
+    print(f"{'topic':<40} {'priority':>9} {'gap':>6} {'import.':>8} {'novelty':>8}")
+    for r in rows:
+        print(
+            f"{str(r['name'])[:40]:<40} {r['priority']:>9.4f} {r['gap']:>6.3f} {r['importance']:>8.3f} "
+            f"{r['novelty']:>8.3f}"
+        )
+    return 0
+
+
+def why_dict(db: Database, query: str, n: int) -> dict[str, Any]:
+    """Explain the agent's choices: a topic's priority, a fact's provenance, or recent decisions."""
+    from polymath.drive.priority import explain_topic
+
+    out: dict[str, Any] = {"query": query}
+    if query:
+        t = db.one("SELECT id FROM topics WHERE name = ? COLLATE NOCASE", (query,)) or db.one(
+            "SELECT id FROM topics WHERE name LIKE ? ORDER BY n_total DESC LIMIT 1", (f"%{query}%",)
+        )
+        if t is not None:
+            out["topic"] = explain_topic(db, int(t["id"]))
+        jobs = [
+            dict(r)
+            for r in db.query(
+                "SELECT id, kind, state, priority, payload FROM jobs WHERE payload LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{query}%", n),
+            )
+        ]
+        if jobs:
+            out["jobs"] = jobs
+    out["decisions"] = [
+        dict(r)
+        for r in db.query(
+            "SELECT at, context, chosen, reason, reward, cpu FROM decisions ORDER BY id DESC LIMIT ?", (n,)
+        )
+    ]
+    return out
+
+
+def cmd_why(config: Config, args: argparse.Namespace) -> int:
+    db = _db(config, readonly=True)
+    try:
+        query = " ".join(args.query).strip()
+        out = why_dict(db, query, args.n)
+        if query and "topic" not in out and "jobs" not in out:
+            ans = _answerer(config, db).ask(query)  # a fact question: show its provenance
+            out["answer"] = ans.to_dict()
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(out, indent=2, default=str))
+        return 0
+    if out.get("topic"):
+        t = out["topic"]
+        print(f"Topic “{t['name']}”: {t['formula']}")
+        for k, v in sorted((t.get("evidence") or {}).items()):
+            print(f"  {k}: {v}")
+    elif out.get("topic", "missing") is None:
+        print(f"“{query}” has no computed priority yet.")
+    for j in out.get("jobs", []):
+        print(f"  job #{j['id']} {j['kind']} [{j['state']}] priority {j['priority']}")
+    if out.get("answer"):
+        from polymath.interface.answer import Answer, Citation, Statement
+
+        a = out["answer"]
+        print(
+            Answer(
+                a["question"],
+                a["subject"],
+                a["relation"],
+                [
+                    Statement(s["text"], s["confidence"], s["kind"], [Citation(**c) for c in s["citations"]])
+                    for s in a["statements"]
+                ],
+                a["confidence"],
+                a["note"],
+            ).render()
+        )
+    if out["decisions"]:
+        print("Recent decisions:")
+        for d in out["decisions"]:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(d["at"]))
+            print(f"  {when}  {d['chosen']:<12} {d['reason']}" + (f"  → reward {d['reward']}" if d["reward"] else ""))
+    return 0
+
+
+def cmd_learn(config: Config, args: argparse.Namespace) -> int:
+    """Ask the agent to research a topic or crawl a URL (handled by the running agent via its inbox)."""
+    query = " ".join(args.query).strip()
+    if not query:
+        print("give a topic or a URL", file=sys.stderr)
+        return 2
+    check_storage(config)
+    if agent_running(config):
+        path = inbox.submit(config.paths.data_dir, {"type": "learn", "query": query})
+        print(json.dumps({"queued_via": "inbox", "file": path.name, "query": query}))
+        return 0
+    db = Database(config.paths.db_path, busy_timeout_ms=60_000)
+    db.migrate()
+    job_id, created = Scheduler(db).enqueue(
+        "drive.learn", {"query": query}, key=f"learn:{query}:{int(time.time())}", priority=3.5
+    )
+    db.close()
+    print(json.dumps({"queued_via": "database", "job_id": job_id, "created": created, "query": query}))
+    return 0
+
+
+def cmd_report(config: Config, args: argparse.Namespace) -> int:
+    from polymath.evaluation.report import collect, to_markdown, write_report
+
+    if args.write:
+        db = _db(config)
+        try:
+            res = write_report(db, config.paths.report_dir)
+        finally:
+            db.close()
+        print(json.dumps(res))
+        return 0
+    db = _db(config, readonly=True)
+    try:
+        rep = collect(db, time.time() - args.hours * 3600)
+    finally:
+        db.close()
+    print(json.dumps(rep, indent=2, default=str) if args.json else to_markdown(rep))
+    return 0
+
+
+def cmd_dashboard(config: Config, args: argparse.Namespace) -> int:
+    from polymath.interface.dashboard import serve
+
+    if args.host:
+        config.dashboard.host = args.host
+    if args.port is not None:
+        config.dashboard.port = args.port
+    return serve(config)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="polymath", description="Polymath autonomous learning agent")
     p.add_argument("--config", help="path to polymath.toml (default /etc/polymath/polymath.toml)")
@@ -212,6 +406,38 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_run)
 
     sub.add_parser("status", help="agent health and queue summary").set_defaults(func=cmd_status)
+
+    a = sub.add_parser("ask", help="ask what the agent knows (offline, with citations)")
+    a.add_argument("question", nargs="+")
+    a.add_argument("--json", action="store_true")
+    a.set_defaults(func=cmd_ask)
+
+    t = sub.add_parser("topics", help="what it wants to learn next")
+    t.add_argument("--weakest", action="store_true", help="topics with the largest knowledge gap")
+    t.add_argument("-n", type=int, default=15)
+    t.add_argument("--json", action="store_true")
+    t.set_defaults(func=cmd_topics)
+
+    w = sub.add_parser("why", help="explain a topic's priority, a fact's provenance, or recent decisions")
+    w.add_argument("query", nargs="*")
+    w.add_argument("-n", type=int, default=10)
+    w.add_argument("--json", action="store_true")
+    w.set_defaults(func=cmd_why)
+
+    lr = sub.add_parser("learn", help="research a topic (or crawl a URL) as a priority")
+    lr.add_argument("query", nargs="+")
+    lr.set_defaults(func=cmd_learn)
+
+    rp = sub.add_parser("report", help="learning report (default: last 24 h, Markdown)")
+    rp.add_argument("--hours", type=float, default=24.0)
+    rp.add_argument("--json", action="store_true")
+    rp.add_argument("--write", action="store_true", help="write the nightly report files now")
+    rp.set_defaults(func=cmd_report)
+
+    d = sub.add_parser("dashboard", help="serve the dashboard (what polymath-dashboard.service starts)")
+    d.add_argument("--host", default=None)
+    d.add_argument("--port", type=int, default=None)
+    d.set_defaults(func=cmd_dashboard)
 
     sub.add_parser("sources", help="list data sources and their licenses").set_defaults(func=cmd_sources)
 

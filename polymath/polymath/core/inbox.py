@@ -22,7 +22,7 @@ from polymath.core.scheduler import Scheduler
 
 log = get_logger("inbox")
 MAX_PER_CYCLE = 50
-KINDS = {"enqueue"}
+KINDS = {"enqueue", "learn"}
 
 
 def inbox_dir(data_dir: Path) -> Path:
@@ -62,6 +62,9 @@ def ingest(db: Database, scheduler: Scheduler, data_dir: Path) -> int:
                 scheduler.enqueue(
                     req["kind"], req.get("payload") or {}, key=req.get("key"), priority=float(req.get("priority", 0.0))
                 )
+            elif req.get("type") == "learn" and str(req.get("query", "")).strip():
+                q = str(req["query"]).strip()
+                scheduler.enqueue("drive.learn", {"query": q}, key=f"learn:{q}:{int(time.time())}", priority=3.5)
             else:
                 log.warning("dropping invalid inbox request", extra={"file": path.name})
             applied.append(path)

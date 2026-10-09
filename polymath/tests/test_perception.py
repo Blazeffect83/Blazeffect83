@@ -46,8 +46,15 @@ def ctx_for(config, db, kind, services, payload=None):
     s = Scheduler(db)
     key = f"{kind}:{time.time_ns()}"
     jid, _ = s.enqueue(kind, payload or {}, key=key)
-    return JobContext(config=config, db=db, scheduler=s, job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
-                      deadline=time.monotonic() + 60, stop_event=threading.Event(), services=services)
+    return JobContext(
+        config=config,
+        db=db,
+        scheduler=s,
+        job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
+        deadline=time.monotonic() + 60,
+        stop_event=threading.Event(),
+        services=services,
+    )
 
 
 # ---------------------------------------------------------------- tokenizer
@@ -72,15 +79,33 @@ def test_tokenizer_kinds_offsets_and_helpers():
 
 
 def test_porter_matches_classic_examples_and_fts5():
-    pairs = {"caresses": "caress", "ponies": "poni", "relational": "relat", "conditional": "condit",
-             "generalizations": "gener", "hopping": "hop", "filing": "file", "happy": "happi", "goodness": "good",
-             "oscillators": "oscil", "temperatures": "temperatur", "running": "run", "sky": "sky", "a": "a"}
+    pairs = {
+        "caresses": "caress",
+        "ponies": "poni",
+        "relational": "relat",
+        "conditional": "condit",
+        "generalizations": "gener",
+        "hopping": "hop",
+        "filing": "file",
+        "happy": "happi",
+        "goodness": "good",
+        "oscillators": "oscil",
+        "temperatures": "temperatur",
+        "running": "run",
+        "sky": "sky",
+        "a": "a",
+    }
     for w, s in pairs.items():
         assert stem(w) == s, w
     rng = random.Random(5)
     letters = "abcdefghijklmnoprstuvwyeeaaioou"
-    vocab = sorted({"".join(rng.choice(letters) for _ in range(rng.randint(3, 12))) + rng.choice(
-        ["", "s", "ing", "ed", "ation", "ness", "ly", "ies", "ational", "izer", "ful", "ement"]) for _ in range(3000)})
+    vocab = sorted(
+        {
+            "".join(rng.choice(letters) for _ in range(rng.randint(3, 12)))
+            + rng.choice(["", "s", "ing", "ed", "ation", "ness", "ly", "ies", "ational", "izer", "ful", "ement"])
+            for _ in range(3000)
+        }
+    )
     con = sqlite3.connect(":memory:")
     con.execute("CREATE VIRTUAL TABLE f USING fts5(x, tokenize='porter unicode61 remove_diacritics 2')")
     con.executemany("INSERT INTO f(rowid, x) VALUES(?,?)", list(enumerate(vocab)))
@@ -105,13 +130,24 @@ def test_punkt_learns_abbreviations_and_splits():
         assert ab in model.abbreviations, ab
     assert "lab" not in model.abbreviations and "however" in model.starters
     sp = SentenceSplitter(model)
-    assert sp.split("Dr. Adams met Mr. Clark. However, it rained.") == ["Dr. Adams met Mr. Clark.", "However, it rained."]
-    assert sp.split('He said "Stop." Then he left. Is it over? Yes!') == ['He said "Stop."', "Then he left.",
-                                                                       "Is it over?", "Yes!"]
-    assert sp.split("Values rose to 3.5 percent. See Jan. 5 notes.") == ["Values rose to 3.5 percent.",
-                                                                        "See Jan. 5 notes."]
-    assert sp.split("It was described by J. R. Tolkien. The book sold.") == ["It was described by J. R. Tolkien.",
-                                                                            "The book sold."]
+    assert sp.split("Dr. Adams met Mr. Clark. However, it rained.") == [
+        "Dr. Adams met Mr. Clark.",
+        "However, it rained.",
+    ]
+    assert sp.split('He said "Stop." Then he left. Is it over? Yes!') == [
+        'He said "Stop."',
+        "Then he left.",
+        "Is it over?",
+        "Yes!",
+    ]
+    assert sp.split("Values rose to 3.5 percent. See Jan. 5 notes.") == [
+        "Values rose to 3.5 percent.",
+        "See Jan. 5 notes.",
+    ]
+    assert sp.split("It was described by J. R. Tolkien. The book sold.") == [
+        "It was described by J. R. Tolkien.",
+        "The book sold.",
+    ]
     assert sp.split("First line\nSecond line without period") == ["First line", "Second line without period"]
     assert sp.split("Wait... What happened? nothing.") == ["Wait... What happened? nothing."]
     assert sp.split("") == []
@@ -134,7 +170,7 @@ def test_phrase_learning_npmi_and_merge(db):
     for _ in range(400):
         sent = [rng.choice(filler) for _ in range(6)] + [rng.choice(content) for _ in range(3)]
         sent[rng.randrange(len(sent))] = "new york"
-        learner.add_sentence(" ".join(sent).split() + ["bank", "of", "america"])
+        learner.add_sentence([*" ".join(sent).split(), "bank", "of", "america"])
     assert learner.flush() > 0 and learner.flush() == 0
     assert db.kv_get("ngram_tokens") > 1000
     n = ph.recompute_phrases(db, min_count=5, threshold=0.4)
@@ -142,7 +178,11 @@ def test_phrase_learning_npmi_and_merge(db):
     assert n == len(phrases) and "new york" in phrases and "bank of america" in phrases
     assert not any(p.split()[0] in filler and p.split()[-1] in filler for p in phrases)
     assert ph.merge_phrases(["i", "love", "new", "york", "bank", "of", "america"], phrases) == [
-        "i", "love", "new_york", "bank_of_america"]
+        "i",
+        "love",
+        "new_york",
+        "bank_of_america",
+    ]
     assert ph.npmi(0, 1, 1, 10) == -1.0 and ph.npmi(10, 10, 10, 10) == 1.0
     assert ph.stopwords(db, rank=5) == set()  # 26-word vocabulary: too small to call anything a stop-word
 
@@ -160,8 +200,12 @@ def test_aho_corasick_against_brute_force_and_persistence(tmp_path):
     auto.add([])
     auto.build()
     text = [rng.choice(vocab) for _ in range(3000)]
-    brute = sorted((i, i + n) for i in range(len(text)) for n in range(1, 5)
-                   if i + n <= len(text) and tuple(text[i : i + n]) in patterns)
+    brute = sorted(
+        (i, i + n)
+        for i in range(len(text))
+        for n in range(1, 5)
+        if i + n <= len(text) and tuple(text[i : i + n]) in patterns
+    )
     assert sorted(auto.finditer(text)) == brute and auto.n_patterns == len(patterns)
     path = tmp_path / "a.npz"
     auto.save(path)
@@ -181,9 +225,9 @@ def test_aho_corasick_against_brute_force_and_persistence(tmp_path):
 
 TEXTS = {
     "Paris": "Paris is the capital and largest city of France, on the river Seine, known for art and museums. "
-             "The French government and parliament sit in Paris.",
+    "The French government and parliament sit in Paris.",
     "Paris (mythology)": "In Greek mythology Paris was a prince of Troy, son of Priam, who abducted Helen and caused "
-                         "the Trojan War described by Homer.",
+    "the Trojan War described by Homer.",
     "France": "France is a country in Western Europe with Paris as its capital and a French government.",
     "Troy": "Troy was an ancient city in Anatolia, the setting of the Trojan War in Greek mythology and Homer.",
 }
@@ -195,8 +239,10 @@ def build_kb(db, store):
     for title, text in TEXTS.items():
         did, _ = store.add(Document("wikipedia", title, title, text * 3, "CC BY-SA 4.0"))
         ids[title] = g.upsert_entity(f"wiki:{title}", title, wiki_title=title, doc_id=did, kind="item")
-        db.execute("INSERT OR REPLACE INTO entity_profiles(entity_id, terms) VALUES(?,?)",
-                   (ids[title], json.dumps(context_vector(text))))
+        db.execute(
+            "INSERT OR REPLACE INTO entity_profiles(entity_id, terms) VALUES(?,?)",
+            (ids[title], json.dumps(context_vector(text))),
+        )
     g.add_alias("Paris", ids["Paris"], "anchor", 30)
     g.add_alias("Paris", ids["Paris (mythology)"], "anchor", 4)
     g.add_alias("France", ids["France"], "title", 1)
@@ -205,8 +251,11 @@ def build_kb(db, store):
     for alias, linked, seen in (("paris", 40, 60), ("france", 30, 40), ("troy", 10, 12), ("the", 1, 5000)):
         db.execute("INSERT INTO surface_stats(alias, linked, seen) VALUES(?,?,?)", (alias, linked, seen))
     for d in range(1, 6):  # co-linking documents: Paris~France, mythology~Troy
-        db.execute("INSERT INTO documents(source, external_id, title, license, fetched, content_hash, nchars) "
-                   "VALUES('x', ?, 't', 'x', 0, ?, 1)", (f"co{d}", f"h{d}"))
+        db.execute(
+            "INSERT INTO documents(source, external_id, title, license, fetched, content_hash, nchars) "
+            "VALUES('x', ?, 't', 'x', 0, ?, 1)",
+            (f"co{d}", f"h{d}"),
+        )
         doc = int(db.scalar("SELECT MAX(id) FROM documents"))
         pair = ("Paris", "France") if d <= 3 else ("Paris (mythology)", "Troy")
         for t in pair:
@@ -284,11 +333,33 @@ def test_infobox_values_and_alignment(db):
         other = g.upsert_entity(f"Q{i}", f"C{i}", wiki_title=f"C{i}")
         cap = g.upsert_entity(f"Q{i + 100}", f"K{i}", wiki_title=f"K{i}")
         g.add_triple(other, g.predicate("P36", "capital"), o=cap, kind="wikidata", source="wikidata")
-        extract_infobox_triples(db, g, other, 1, [{"name": "Infobox country", "params": {"capital": f"[[K{i}]]"}}],
-                                lambda t: g.by_wiki_title(t).id if g.by_wiki_title(t) else None)
-    n = extract_infobox_triples(db, g, fr, 1, [{"name": "Infobox country", "params": {
-        "capital": "[[Paris]]", "image_flag": "x.svg", "population_total": "68,000,000", "": "x", "motto": " "}}],
-        lambda t: pa if t == "Paris" else None)
+        extract_infobox_triples(
+            db,
+            g,
+            other,
+            1,
+            [{"name": "Infobox country", "params": {"capital": f"[[K{i}]]"}}],
+            lambda t: g.by_wiki_title(t).id if g.by_wiki_title(t) else None,
+        )
+    n = extract_infobox_triples(
+        db,
+        g,
+        fr,
+        1,
+        [
+            {
+                "name": "Infobox country",
+                "params": {
+                    "capital": "[[Paris]]",
+                    "image_flag": "x.svg",
+                    "population_total": "68,000,000",
+                    "": "x",
+                    "motto": " ",
+                },
+            }
+        ],
+        lambda t: pa if t == "Paris" else None,
+    )
     assert n == 2
     assert aligned_property(db, "capital") == "P36" and aligned_property(db, "motto") is None
 
@@ -301,10 +372,12 @@ def test_pagerank_keywords_and_summary():
     r = pagerank(adj)
     assert abs(r.sum() - 1) < 1e-6 and r[0] > r[1] and pagerank(np.zeros((0, 0))).size == 0
     assert abs(pagerank(np.zeros((3, 3))).sum() - 1) < 1e-6
-    text = ("Compatibility of systems of linear constraints over the set of natural numbers. Criteria of "
-            "compatibility of a system of linear Diophantine equations, strict inequations, and nonstrict "
-            "inequations are considered. Upper bounds for components of a minimal set of solutions and algorithms "
-            "of construction of minimal generating sets of solutions for all types of systems are given.")
+    text = (
+        "Compatibility of systems of linear constraints over the set of natural numbers. Criteria of "
+        "compatibility of a system of linear Diophantine equations, strict inequations, and nonstrict "
+        "inequations are considered. Upper bounds for components of a minimal set of solutions and algorithms "
+        "of construction of minimal generating sets of solutions for all types of systems are given."
+    )
     kws = keywords(text, {"of", "the", "and", "for", "are", "a", "all", "over"}, top=5)
     assert any("linear" in k for k in kws) and any("systems" in k or "system" in k for k in kws)
     sents = ["Cats are small mammals.", "Cats hunt mice and birds.", "The weather was nice.", "Small cats hunt birds."]
@@ -336,13 +409,18 @@ def test_bootstrapped_relation_learning(db):
         rows.append((cities[i], countries[i], 1, "x", normalize_middle(" is the capital of "), "y", "s", now))
     for i in range(10):  # noise pattern
         rows.append((cities[i], countries[(i + 3) % 30], 1, "x", normalize_middle(" is far from "), "y", "s", now))
-    db.executemany("INSERT INTO pair_contexts(e1, e2, doc_id, left_ctx, middle, right_ctx, sentence, created) "
-                   "VALUES(?,?,?,?,?,?,?,?)", rows)
+    db.executemany(
+        "INSERT INTO pair_contexts(e1, e2, doc_id, left_ctx, middle, right_ctx, sentence, created) "
+        "VALUES(?,?,?,?,?,?,?,?)",
+        rows,
+    )
     assert cap in functional_predicates(db, min_subjects=5)
     res = learn_and_extract(db)
     assert res["confident_patterns"] >= 1
-    new = {(int(r["s"]), int(r["o"])) for r in db.query(
-        "SELECT t.s, t.o FROM triples t JOIN provenance v ON v.triple_id=t.id WHERE v.kind='pattern'")}
+    new = {
+        (int(r["s"]), int(r["o"]))
+        for r in db.query("SELECT t.s, t.o FROM triples t JOIN provenance v ON v.triple_id=t.id WHERE v.kind='pattern'")
+    }
     assert (countries[22], cities[22]) in new and (countries[25], cities[25]) in new
     assert not any(o == countries[(s % 30)] for s, o in new)
     pat = db.one("SELECT * FROM patterns WHERE middle='is <det> capital of'")
@@ -354,21 +432,39 @@ def test_bootstrapped_relation_learning(db):
 
 # --------------------------------------------------------------------- jobs
 
-WIKI_TEXT = ("Mars is the fourth planet from the Sun. It is named after the Roman god of war. Mars has two moons "
-             "called Phobos and Deimos. The Sun is a star at the center of the Solar System.")
+WIKI_TEXT = (
+    "Mars is the fourth planet from the Sun. It is named after the Roman god of war. Mars has two moons "
+    "called Phobos and Deimos. The Sun is a star at the center of the Solar System."
+)
 
 
 def test_perception_pipeline_jobs(config, db):
     store = DocumentStore(db)
     s1 = WIKI_TEXT.index("Sun")
-    links = [(s1, s1 + 3, "Sun"), (WIKI_TEXT.index("Phobos"), WIKI_TEXT.index("Phobos") + 6, "Phobos (moon)"),
-             (WIKI_TEXT.index("Deimos"), WIKI_TEXT.index("Deimos") + 6, "Deimos (moon)")]
-    store.add(Document("wikipedia", "en:1", "Mars", WIKI_TEXT, "CC BY-SA 4.0", links=links,
-                       extra={"infoboxes": [{"name": "Infobox planet", "params": {"satellites": "[[Phobos (moon)|Phobos]]"}}]}))
-    store.add(Document("wikipedia", "en:2", "Sun", "The Sun is the star at the centre of the Solar System. " * 4,
-                       "CC BY-SA 4.0"))
-    store.add(Document("web", "w1", "News", "Astronomers watched Phobos and Deimos orbit Mars near the Sun. " * 3,
-                       "unknown"))
+    links = [
+        (s1, s1 + 3, "Sun"),
+        (WIKI_TEXT.index("Phobos"), WIKI_TEXT.index("Phobos") + 6, "Phobos (moon)"),
+        (WIKI_TEXT.index("Deimos"), WIKI_TEXT.index("Deimos") + 6, "Deimos (moon)"),
+    ]
+    store.add(
+        Document(
+            "wikipedia",
+            "en:1",
+            "Mars",
+            WIKI_TEXT,
+            "CC BY-SA 4.0",
+            links=links,
+            extra={"infoboxes": [{"name": "Infobox planet", "params": {"satellites": "[[Phobos (moon)|Phobos]]"}}]},
+        )
+    )
+    store.add(
+        Document(
+            "wikipedia", "en:2", "Sun", "The Sun is the star at the centre of the Solar System. " * 4, "CC BY-SA 4.0"
+        )
+    )
+    store.add(
+        Document("web", "w1", "News", "Astronomers watched Phobos and Deimos orbit Mars near the Sun. " * 3, "unknown")
+    )
     db.execute("INSERT INTO wiki_redirects(lang, title, target) VALUES('en', 'Phobos (moon)', 'Phobos')")
     services = {"docs": store}
     mj.index_documents(ctx_for(config, db, "memory.index", services))

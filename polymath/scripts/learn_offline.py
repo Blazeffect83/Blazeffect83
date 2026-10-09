@@ -5,7 +5,10 @@ Uses the real agent loop with only the memory/perception/learning planners, so
 it exercises exactly what runs on the Pi — minus fetching new data. Useful for
 acceptance runs on a copy of a real database.
 
-Usage: python scripts/learn_offline.py --config polymath.toml [--minutes 60] [--only kind1,kind2]
+Usage: python scripts/learn_offline.py --config polymath.toml [--minutes 60] [--full]
+
+``--full`` adds reasoning, curiosity (PageRank, priorities) and self-evaluation
+(hold-out, quiz, report) — everything the agent does that needs no network.
 """
 
 from __future__ import annotations
@@ -24,11 +27,16 @@ from polymath.core.config import load_config
 from polymath.core.db import open_database
 from polymath.core.logging import setup_logging
 from polymath.core.loop import Agent
+from polymath.drive import jobs as djobs
+from polymath.drive.bandit import BanditPolicy
+from polymath.evaluation import jobs as vjobs
 from polymath.memory import jobs as memjobs
 from polymath.perception import embed_jobs as ejobs
 from polymath.perception import jobs as pjobs
+from polymath.reasoning import jobs as rjobs
 
 LEARNING_PLANNERS = [(5.0, memjobs.planner), (5.0, pjobs.planner), (5.0, ejobs.planner)]
+FULL_PLANNERS = [*LEARNING_PLANNERS, (5.0, rjobs.planner), (5.0, djobs.planner), (5.0, vjobs.planner)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,13 +44,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--config", required=True)
     ap.add_argument("--minutes", type=float, default=60.0)
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--full", action="store_true", help="also reason, rank topics and quiz itself")
+    ap.add_argument("--summary", default="", help="also write the summary JSON to this file")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)
     setup_logging("WARNING" if args.quiet else cfg.log_level)
     check_storage(cfg)
     db = open_database(cfg.paths.db_path)
     comps = build_components(cfg, db, planners=False)
-    agent = Agent(cfg, db, comps.registry, services=comps.services, planners=list(LEARNING_PLANNERS))
+    planners = FULL_PLANNERS if args.full else LEARNING_PLANNERS
+    agent = Agent(cfg, db, comps.registry, services=comps.services, planners=list(planners), policy=BanditPolicy(db))
     agent.install_signal_handlers()
     agent.start()
     db.execute(
@@ -89,9 +100,30 @@ def main(argv: list[str] | None = None) -> int:
         "linker_model": db.kv_get("linker_model"),
         "phrases": db.scalar("SELECT COUNT(*) FROM phrases"),
         "topics": db.scalar("SELECT COUNT(*) FROM topics"),
+        "rules": [
+            dict(r)
+            for r in db.query(
+                "SELECT r.kind, p.label AS p, r.q, r.confidence, r.support FROM rules r JOIN predicates p ON p.id=r.p "
+                "ORDER BY r.support DESC LIMIT 15"
+            )
+        ],
+        "quizzes": [dict(r) for r in db.query("SELECT id, n, correct, accuracy, chance, details FROM quizzes")],
+        "top_topics": [
+            dict(r)
+            for r in db.query(
+                "SELECT t.name, p.priority, p.gap, p.importance FROM topic_priority p JOIN topics t ON t.id=p.topic_id "
+                "ORDER BY p.priority DESC LIMIT 10"
+            )
+        ],
+        "bandit": [
+            dict(r) for r in db.query("SELECT context, action, n, mean FROM bandit_arms ORDER BY n DESC LIMIT 20")
+        ],
         "dead_jobs": [dict(r) for r in db.query("SELECT kind, last_error FROM jobs WHERE state='dead' LIMIT 10")],
     }
-    print(json.dumps(summary, indent=2, default=str))
+    text = json.dumps(summary, indent=2, default=str)
+    print(text)
+    if args.summary:
+        Path(args.summary).write_text(text)
     db.close()
     return 0
 

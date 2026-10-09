@@ -19,8 +19,15 @@ def ctx_for(config, db, kind, payload=None):
     s = Scheduler(db)
     key = f"{kind}:{time.time_ns()}"
     jid, _ = s.enqueue(kind, payload or {}, key=key)
-    return JobContext(config=config, db=db, scheduler=s, job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
-                      deadline=time.monotonic() + 60, stop_event=threading.Event(), services={})
+    return JobContext(
+        config=config,
+        db=db,
+        scheduler=s,
+        job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
+        deadline=time.monotonic() + 60,
+        stop_event=threading.Event(),
+        services={},
+    )
 
 
 def countries_graph(db, n: int = 30):
@@ -105,8 +112,7 @@ def test_rule_learning_from_property_metadata_and_statistics(db):
     prop279 = g.upsert_entity("P279", "subclass of", kind="property")
     g.add_triple(prop279, p31, o=g.stub("Q18647515"), kind="wikidata", source="wikidata")
     prop40 = g.upsert_entity("P40", "child", kind="property")
-    g.add_triple(prop40, p1696, o=g.upsert_entity("P22", "father", kind="property"), kind="wikidata",
-                 source="wikidata")
+    g.add_triple(prop40, p1696, o=g.upsert_entity("P22", "father", kind="property"), kind="wikidata", source="wikidata")
     classes = [g.upsert_entity(f"Q{100 + i}", f"Class{i}") for i in range(30)]
     for i in range(29):  # a chain of subclasses
         g.add_triple(classes[i], p279, o=classes[i + 1], kind="wikidata", source="wikidata")
@@ -129,7 +135,9 @@ def test_rule_learning_from_property_metadata_and_statistics(db):
     assert found["transitive"] >= 1
     res = forward_chain(db)
     assert res["new"] > 0
-    assert db.scalar("SELECT status FROM triples WHERE s=? AND p=? AND o=?", (classes[0], p279, classes[2])) == "inferred"
+    assert (
+        db.scalar("SELECT status FROM triples WHERE s=? AND p=? AND o=?", (classes[0], p279, classes[2])) == "inferred"
+    )
     assert db.scalar("SELECT 1 FROM triples WHERE s=? AND p=? AND o=?", (kids[20], p22, parents[20])) == 1
     prov = db.one("SELECT detail FROM provenance WHERE kind='rule' LIMIT 1")
     assert prov and "#" in prov["detail"]
@@ -148,8 +156,9 @@ def test_type_constraints_flag_bad_extractions(db):
     g = KnowledgeGraph(db)
     p31 = g.predicate("P31", "instance of")
     cap = g.predicate("P36", "capital")
-    country, city, person = (g.upsert_entity(k, lab) for k, lab in (("Q6256", "country"), ("Q515", "city"),
-                                                                     ("Q5", "human")))
+    country, city, person = (
+        g.upsert_entity(k, lab) for k, lab in (("Q6256", "country"), ("Q515", "city"), ("Q5", "human"))
+    )
     for i in range(25):
         c = g.upsert_entity(f"Q{i}", f"C{i}")
         t = g.upsert_entity(f"Q{100 + i}", f"T{i}")
@@ -170,8 +179,12 @@ def test_reasoning_jobs_and_planner(config, db):
     from polymath.core.loop import Agent
 
     countries_graph(db)
-    for kind, fn in (("reason.rules", rj.rules_job), ("reason.infer", rj.infer_job),
-                     ("reason.contradictions", rj.contradictions_job), ("reason.reliability", rj.reliability_job)):
+    for kind, fn in (
+        ("reason.rules", rj.rules_job),
+        ("reason.infer", rj.infer_job),
+        ("reason.contradictions", rj.contradictions_job),
+        ("reason.reliability", rj.reliability_job),
+    ):
         out = fn(ctx_for(config, db, kind))
         assert out.done, kind
     assert db.scalar("SELECT COUNT(*) FROM reasoning_runs") == 4

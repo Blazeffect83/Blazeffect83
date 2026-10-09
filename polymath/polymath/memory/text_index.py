@@ -131,6 +131,21 @@ class TextIndex:
             return sorted(known, key=lambda w: df[stems[w]])[:3], True
         return kept, False
 
+    def content_terms(self, text: str) -> set[str]:
+        """Stems of the words in ``text`` that are specific: known to the index and in at most a quarter of passages.
+
+        Unlike :meth:`plan` there is no absolute floor, so even a small corpus treats "the" as uninformative.
+        """
+        stems = {stem(t.replace("'", "").replace("’", "")) for t in _TERM.findall(text.lower())}
+        stems.discard("")
+        if not stems:
+            return set()
+        total = max(1, self.total_chunks())
+        rows = self.db.query(
+            f"SELECT term, doc FROM chunk_vocab WHERE term IN ({','.join('?' * len(stems))})", sorted(stems)
+        )
+        return {str(r["term"]) for r in rows if int(r["doc"]) <= VAGUE_DF_SHARE * total or total < 8}
+
     def index(self, doc_id: int, title: str, text: str) -> int:
         spans = chunk_spans(text)
         for ord_, (a, b) in enumerate(spans):

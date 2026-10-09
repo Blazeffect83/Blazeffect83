@@ -15,11 +15,15 @@ TITLES_PER_TOPIC = 25
 
 def pagerank_job(ctx: JobContext) -> JobOutcome:
     res = entity_pagerank(ctx.db)
+    ctx.db.kv_set("pagerank_at", time.time())
     return JobOutcome(done=True, value=0.3, result=res)
 
 
 def priorities_job(ctx: JobContext) -> JobOutcome:
     """Job ``drive.priorities``: rank topics, then queue targeted reading for the best ones."""
+    if ctx.db.kv_get("pagerank_at") is None:  # importance is summed PageRank: compute it first
+        entity_pagerank(ctx.db)
+        ctx.db.kv_set("pagerank_at", time.time())
     res = compute_priorities(ctx.db)
     hour = int(time.time() // 3600)
     pursued = []

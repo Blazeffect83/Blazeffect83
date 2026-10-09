@@ -44,12 +44,24 @@ class Components:
 
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
     from polymath.drive import jobs as djobs
+    from polymath.drive import learn as dlearn
+    from polymath.evaluation import jobs as vjobs
     from polymath.memory import jobs as memjobs
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
     from polymath.perception import jobs as pjobs
     from polymath.reasoning import jobs as rjobs
-    from polymath.senses import books_qa, crawler, dumpfiles, feeds, scholarly, sources, wikidata, wikipedia
+    from polymath.senses import (
+        books_qa,
+        crawler,
+        dumpfiles,
+        feeds,
+        scholarly,
+        sources,
+        wikidata,
+        wikidata_props,
+        wikipedia,
+    )
     from polymath.senses.net import client_from_config
 
     http = client_from_config(config.senses)
@@ -58,6 +70,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     allow = list(config.senses.crawl_allow_domains) or sorted(
         {crawler.host_of(u) for u in config.senses.seeds if crawler.host_of(u)}
     )
+    allow += [d for d in (db.kv_get("user_allow_domains", []) or []) if d not in allow]
     crawl = crawler.Crawler(
         db,
         http,
@@ -74,6 +87,8 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("dump.download", dumpfiles.download_job, "Resumable download of a dump file", action="download")
     reg("wikipedia.part", wikipedia.ingest_part, "Read Wikipedia multistream dump streams", action="read", heavy=True)
     reg("wikidata.dump", wikidata.ingest_dump, "Read Wikidata entity dump blocks", action="read", heavy=True)
+    reg("wikidata.propindex", wikidata_props.propindex_job, "Locate Wikidata property pages", action="download")
+    reg("wikidata.properties", wikidata_props.properties_job, "Read Wikidata property records", action="read")
     reg("openalex.ingest", scholarly.ingest_openalex, "Read an OpenAlex works file", action="read", heavy=True)
     reg("pubmed.ingest", scholarly.ingest_pubmed, "Read a PubMed XML file", action="read", heavy=True)
     reg("gutenberg.books", books_qa.gutenberg_job, "Fetch Project Gutenberg books", action="read")
@@ -107,15 +122,21 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
+    reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
+    reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
+    reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
+    reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
     services: dict[str, Any] = {"http": http, "docs": docs, "crawler": crawl}
     plan: list[tuple[float, Planner]] = (
         [
             (60.0, sources.planner),
+            (300.0, wikidata_props.planner),
             (20.0, memjobs.planner),
             (30.0, pjobs.planner),
             (60.0, ejobs.planner),
             (120.0, rjobs.planner),
             (300.0, djobs.planner),
+            (300.0, vjobs.planner),
         ]
         if planners
         else []

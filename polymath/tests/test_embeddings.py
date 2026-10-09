@@ -80,7 +80,9 @@ def test_sif_document_vectors():
     assert float(a @ b) > float(a @ c)
     assert sif.embed(["zzz"]) is None and SIF(model).fit_pc([]) is None
     assert list(sentence_tokens("The cat sat on the mat. A dog ran.", set())) == [
-        ["the", "cat", "sat", "on", "the", "mat"], ["a", "dog", "ran"]]
+        ["the", "cat", "sat", "on", "the", "mat"],
+        ["a", "dog", "ran"],
+    ]
     assert list(sentence_tokens("new york is big", {"new york"})) == [["new_york", "is", "big"]]
 
 
@@ -138,8 +140,15 @@ def ctx_for(config, db, kind, services, payload=None):
     s = Scheduler(db)
     key = f"{kind}:{time.time_ns()}"
     jid, _ = s.enqueue(kind, payload or {}, key=key)
-    return JobContext(config=config, db=db, scheduler=s, job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
-                      deadline=time.monotonic() + 60, stop_event=threading.Event(), services=services)
+    return JobContext(
+        config=config,
+        db=db,
+        scheduler=s,
+        job=Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0),
+        deadline=time.monotonic() + 60,
+        stop_event=threading.Event(),
+        services=services,
+    )
 
 
 def test_embedding_jobs_end_to_end_with_quality_report(config, db):

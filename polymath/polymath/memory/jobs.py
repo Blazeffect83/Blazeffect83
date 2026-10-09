@@ -68,6 +68,9 @@ def index_documents(ctx: JobContext) -> JobOutcome:
     )
 
 
+PROPERTY_META = {"P31", "P279", "P1647", "P1696", "P461"}  # instance of, subclass, subproperty, inverse, opposite
+
+
 def _claims_to_triples(graph: KnowledgeGraph, eid: int, claims: dict[str, list[Any]]) -> int:
     n = 0
     for pid, values in claims.items():
@@ -105,6 +108,9 @@ def build_graph(ctx: JobContext) -> JobOutcome:
                 pent = graph.upsert_entity(qid, r["label"], description=r["description"], kind="property")
                 for a in [r["label"], *json.loads(r["aliases"])]:
                     graph.add_alias(a, pent, "label")
+                # the property's own semantics (class, inverse, super-property) feed rule learning
+                meta = {k: v for k, v in claims.items() if k in PROPERTY_META}
+                stats["triples"] += _claims_to_triples(graph, pent, meta)
             else:
                 doc_id = None
                 if r["enwiki"]:

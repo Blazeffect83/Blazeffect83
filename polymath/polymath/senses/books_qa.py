@@ -72,8 +72,9 @@ def gutenberg_job(ctx: JobContext) -> JobOutcome:
     first = True
     retry_in = 0.0
     while cp["position"] < len(rows) and cp["stored"] < limit and (first or not ctx.should_stop()):
-        if ctx.db.scalar("SELECT 1 FROM documents WHERE source='gutenberg' AND external_id=?",
-                         (rows[cp["position"]]["Text#"],)):
+        if ctx.db.scalar(
+            "SELECT 1 FROM documents WHERE source='gutenberg' AND external_id=?", (rows[cp["position"]]["Text#"],)
+        ):
             cp["position"] += 1  # already in memory: no request needed, and it counts towards the target
             cp["stored"] += 1
             continue

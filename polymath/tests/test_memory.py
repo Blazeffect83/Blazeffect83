@@ -22,7 +22,34 @@ from polymath.memory.text_index import TextIndex, chunk_spans, fts_query
 from polymath.memory.topics import TopicMap, clean_topic, labels_from_meta
 from polymath.senses.wikipedia import Page, store_category_edges
 
-WORDS = ["energy", "matter", "atom", "photon", "electron", "proton", "neutron", "field", "wave", "particle", "force", "mass", "charge", "spin", "quark", "lepton", "boson", "gluon", "star", "planet", "galaxy", "orbit", "gravity", "light", "time", "space"]
+WORDS = [
+    "energy",
+    "matter",
+    "atom",
+    "photon",
+    "electron",
+    "proton",
+    "neutron",
+    "field",
+    "wave",
+    "particle",
+    "force",
+    "mass",
+    "charge",
+    "spin",
+    "quark",
+    "lepton",
+    "boson",
+    "gluon",
+    "star",
+    "planet",
+    "galaxy",
+    "orbit",
+    "gravity",
+    "light",
+    "time",
+    "space",
+]
 
 
 def prose(seed: int, n: int = 120) -> str:
@@ -35,8 +62,15 @@ def ctx_for(config, db, kind, services, payload=None):
     key = f"{kind}:{time.time_ns()}"
     jid, _ = s.enqueue(kind, payload or {}, key=key)
     job = Job(jid, kind, key, payload or {}, None, 0, 0, 0, 5, 0)
-    return JobContext(config=config, db=db, scheduler=s, job=job, deadline=time.monotonic() + 30,
-                      stop_event=threading.Event(), services=services)
+    return JobContext(
+        config=config,
+        db=db,
+        scheduler=s,
+        job=job,
+        deadline=time.monotonic() + 30,
+        stop_event=threading.Event(),
+        services=services,
+    )
 
 
 # ------------------------------------------------------------------ passages
@@ -62,9 +96,11 @@ def test_fts_query_is_injection_safe():
 def test_text_index_search_unindex_and_update(db):
     store = DocumentStore(db)
     ti = TextIndex(db, store)
-    docs = [("Raspberry Pi thermal throttling", "The Raspberry Pi 5 throttles its CPU at 85 degrees Celsius. " * 5),
-            ("Photosynthesis", "Plants convert light into chemical energy using chlorophyll in chloroplasts. " * 5),
-            ("Minecraft servers", "PaperMC is a fast Minecraft server that runs plugins written in Java. " * 5)]
+    docs = [
+        ("Raspberry Pi thermal throttling", "The Raspberry Pi 5 throttles its CPU at 85 degrees Celsius. " * 5),
+        ("Photosynthesis", "Plants convert light into chemical energy using chlorophyll in chloroplasts. " * 5),
+        ("Minecraft servers", "PaperMC is a fast Minecraft server that runs plugins written in Java. " * 5),
+    ]
     ids = []
     for i, (title, text) in enumerate(docs):
         did, _ = store.add(Document("wikipedia" if i < 2 else "web", str(i), title, text, "CC BY-SA 4.0"))
@@ -76,8 +112,9 @@ def test_text_index_search_unindex_and_update(db):
     assert ti.search_docs("minecraft plugins")[0][0] == ids[2]
     assert ti.search("") == [] and ti.search_docs("!!!") == []
     # updating a document removes its old passages from the contentless index
-    store.add(Document("wikipedia", "0", docs[0][0], "Completely different words about gardening tools. " * 4,
-                       "CC BY-SA 4.0"))
+    store.add(
+        Document("wikipedia", "0", docs[0][0], "Completely different words about gardening tools. " * 4, "CC BY-SA 4.0")
+    )
     assert ti.search("throttles celsius") == []
     ti.unindex(ids[1], docs[1][0], docs[1][1])
     assert ti.search("chlorophyll") == []
@@ -178,9 +215,17 @@ def test_topic_cleaning_and_labels():
     assert clean_topic("Living people") is None and clean_topic("1950 births") is None
     assert clean_topic("Articles with short description") is None and clean_topic("1990s") is None
     assert clean_topic("planetary_science") == "Planetary science"
-    labels = labels_from_meta("x", {"categories": ["Planets", "Living people"], "mesh": ["Humans"],
-                                    "tags": ["neural-networks"], "bookshelves": ["Category: Novels"],
-                                    "topics": ["Machine learning"], "subjects": ["Fiction -- Juvenile"]})
+    labels = labels_from_meta(
+        "x",
+        {
+            "categories": ["Planets", "Living people"],
+            "mesh": ["Humans"],
+            "tags": ["neural-networks"],
+            "bookshelves": ["Category: Novels"],
+            "topics": ["Machine learning"],
+            "subjects": ["Fiction -- Juvenile"],
+        },
+    )
     assert ("Planets", "category") in labels and ("Neural networks", "tag") in labels
     assert ("Novels", "subject") in labels and ("Fiction", "subject") in labels
     assert len(labels) == len(set(labels))
@@ -214,8 +259,14 @@ def test_topic_hierarchy_levels_rollup_and_cycles(db):
 
 def test_category_pages_become_topic_edges(config, db):
     ctx = ctx_for(config, db, "x", {})
-    page = Page(1, 14, "Category:Planets of the Solar System", None,
-                "[[Category:Planets]] [[Category:Solar System|P]] [[Category:Planets of the Solar System]]", None)
+    page = Page(
+        1,
+        14,
+        "Category:Planets of the Solar System",
+        None,
+        "[[Category:Planets]] [[Category:Solar System|P]] [[Category:Planets of the Solar System]]",
+        None,
+    )
     assert store_category_edges(ctx, "en", page) == 3
     tm = TopicMap(db)
     tm.topic("Planets of the Solar System", "category")
@@ -229,8 +280,16 @@ def test_category_pages_become_topic_edges(config, db):
 def test_index_job_dedupes_links_entities_and_topics(config, db):
     store = DocumentStore(db)
     base = prose(11, 600)
-    store.add(Document("wikipedia", "en:1", "Atom", base, "CC BY-SA 4.0",
-                       meta={"categories": ["Physics", "Living people"], "short_description": "Basic unit"}))
+    store.add(
+        Document(
+            "wikipedia",
+            "en:1",
+            "Atom",
+            base,
+            "CC BY-SA 4.0",
+            meta={"categories": ["Physics", "Living people"], "short_description": "Basic unit"},
+        )
+    )
     store.add(Document("web", "u", "Atom copy", base + " A mirror footer line.", "unknown"))
     store.add(Document("pubmed", "9", "Trial", prose(12, 300), "NLM", meta={"mesh": ["Humans"]}))
     store.add(Document("wikipedia", "en:2", "Disambig", prose(13, 300), "CC", meta={"disambiguation": True}))
@@ -250,13 +309,22 @@ def test_graph_job_from_wikidata_and_redirects(config, db):
     now = time.time()
     rows = [
         ("P36", "capital", None, [], None, {"_datatype": ["wikibase-item"]}),
-        ("Q142", "France", "country in Europe", ["République française"], "France",
-         {"P36": ["Q90"], "P1082": [{"amount": 68e6, "unit": None}], "P31": ["Q6256"]}),
+        (
+            "Q142",
+            "France",
+            "country in Europe",
+            ["République française"],
+            "France",
+            {"P36": ["Q90"], "P1082": [{"amount": 68e6, "unit": None}], "P31": ["Q6256"]},
+        ),
         ("Q90", "Paris", "capital of France", ["City of Light"], "Paris", {"P17": ["Q142"]}),
     ]
     for qid, label, desc, aliases, enwiki, claims in rows:
-        db.execute("INSERT INTO wd_entities(qid,label,description,aliases,enwiki,claims,state,fetched) "
-                   "VALUES(?,?,?,?,?,?,'new',?)", (qid, label, desc, json.dumps(aliases), enwiki, json.dumps(claims), now))
+        db.execute(
+            "INSERT INTO wd_entities(qid,label,description,aliases,enwiki,claims,state,fetched) "
+            "VALUES(?,?,?,?,?,?,'new',?)",
+            (qid, label, desc, json.dumps(aliases), enwiki, json.dumps(claims), now),
+        )
     store = DocumentStore(db)
     store.add(Document("wikipedia", "en:5", "Paris", prose(20, 300), "CC BY-SA 4.0"))
     mj.index_documents(ctx_for(config, db, "memory.index", {"docs": store}))

@@ -104,9 +104,6 @@ def learn_rules(db: Database, *, min_support: int = 20, sample: int = 5000) -> d
             if len(chains) >= min_support and ratio >= 0.5 and p not in meta_transitive:
                 _upsert_rule(db, "transitive", p, None, ratio, len(chains))
                 found["transitive"] += 1
-        if p in meta_transitive:  # Wikidata never stores closures: the property's declaration is the evidence
-            _upsert_rule(db, "transitive", p, None, 0.9, len(chains))
-            found["transitive"] += 1
         # symmetry
         facts = db.query("SELECT s, o FROM triples WHERE p=? AND o != 0 AND holdout=0 LIMIT ?", (p, sample))
         mirrored = sum(
@@ -115,9 +112,17 @@ def learn_rules(db: Database, *, min_support: int = 20, sample: int = 5000) -> d
             if db.scalar("SELECT 1 FROM triples WHERE s=? AND p=? AND o=? AND holdout=0", (f["o"], p, f["s"]))
         )
         ratio = mirrored / max(1, len(facts))
-        if p in meta_symmetric or (len(facts) >= min_support and ratio >= 0.8):
-            _upsert_rule(db, "symmetric", p, None, 0.9 if p in meta_symmetric else ratio, len(facts))
+        if p not in meta_symmetric and len(facts) >= min_support and ratio >= 0.8:
+            _upsert_rule(db, "symmetric", p, None, ratio, len(facts))
             found["symmetric"] += 1
+    # Declared by the property itself (Wikidata never stores closures or mirrors): the declaration is the
+    # evidence, so these hold for every predicate that has facts, however few.
+    for kind, declared in (("transitive", meta_transitive), ("symmetric", meta_symmetric)):
+        for p in sorted(declared):
+            support = int(db.scalar("SELECT COUNT(*) FROM triples WHERE p=? AND o != 0 AND holdout=0", (p,), 0))
+            if support:
+                _upsert_rule(db, kind, p, None, 0.9, support)
+                found[kind] += 1
     for p, q in meta_inverse:  # declared by the property itself (P1696), so trusted like the declarations above
         support = int(db.scalar("SELECT COUNT(*) FROM triples WHERE p=? AND o != 0 AND holdout=0", (p,), 0))
         _upsert_rule(db, "inverse", p, q, 0.9, support)

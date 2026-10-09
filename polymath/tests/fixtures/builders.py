@@ -10,6 +10,7 @@ import json
 import lzma
 import struct
 import zlib
+from typing import Any
 from xml.sax.saxutils import escape
 
 # ----------------------------------------------------------------- Wikipedia
@@ -24,8 +25,11 @@ def wiki_page_xml(page_id: int, title: str, text: str, *, ns: int = 0, redirect:
     )
 
 
-def wiki_multistream(pages: list[tuple[int, str, str, str | None]], per_stream: int = 2) -> tuple[bytes, bytes]:
-    """Build (dump.xml.bz2, index.txt.bz2) exactly like Wikimedia's multistream format."""
+def wiki_multistream(pages: list[tuple[Any, ...]], per_stream: int = 2) -> tuple[bytes, bytes]:
+    """Build (dump.xml.bz2, index.txt.bz2) exactly like Wikimedia's multistream format.
+
+    Pages are ``(page_id, title, text, redirect)`` with an optional 5th element: the namespace.
+    """
     header = (
         '<mediawiki xmlns="http://www.mediawiki.org/xml/export-0.11/" version="0.11" xml:lang="en">\n'
         "  <siteinfo><sitename>Wikipedia</sitename></siteinfo>\n"
@@ -35,9 +39,11 @@ def wiki_multistream(pages: list[tuple[int, str, str, str | None]], per_stream: 
     for i in range(0, len(pages), per_stream):
         chunk = pages[i : i + per_stream]
         offset = len(out)
-        xml = "".join(wiki_page_xml(pid, title, text, redirect=red) for pid, title, text, red in chunk)
+        xml = "".join(
+            wiki_page_xml(pg[0], pg[1], pg[2], redirect=pg[3], ns=pg[4] if len(pg) > 4 else 0) for pg in chunk
+        )
         out += bz2.compress(xml.encode())
-        index_lines += [f"{offset}:{pid}:{title}" for pid, title, _t, _r in chunk]
+        index_lines += [f"{offset}:{pg[0]}:{pg[1]}" for pg in chunk]
     out += bz2.compress(b"</mediawiki>\n")
     return bytes(out), bz2.compress(("\n".join(index_lines) + "\n").encode())
 
