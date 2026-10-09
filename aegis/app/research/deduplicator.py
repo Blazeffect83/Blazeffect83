@@ -59,3 +59,19 @@ def jaccard(a: str, b: str) -> float:
 
 def claim_key(text: str) -> str:
     return hashlib.sha256(" ".join(tokens(text)).encode()).hexdigest()
+
+
+_SUFFIXES = ("ations", "ation", "ings", "ing", "ers", "er", "ies", "ied", "es", "ed", "ly", "s")
+
+
+def stem(word: str) -> str:
+    """Light suffix stemmer (cooling/cooled/cooler → cool, throttles/throttling → throttl)."""
+    for suf in _SUFFIXES:
+        if word.endswith(suf) and len(word) - len(suf) >= 4:
+            word = word[: -len(suf)]
+            break
+    return word[:-1] if len(word) > 4 and word[-1] == word[-2] else word
+
+
+def stems(text: str) -> set[str]:
+    return {stem(w) for w in tokens(text)}

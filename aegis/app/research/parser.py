@@ -13,7 +13,11 @@ from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
+import logging
+
 from defusedxml import ElementTree as SafeET
+
+log = logging.getLogger(__name__)
 
 _SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "nav", "footer", "header", "form",
               "button", "iframe", "object", "embed", "aside", "select", "canvas"}
@@ -29,11 +33,36 @@ class ParsedDocument:
     author: str | None = None
     published_at: str | None = None
     links: list[str] = field(default_factory=list)
+    anchors: dict[str, str] = field(default_factory=dict)  # url -> anchor text (HTML only)
     list_items: list[str] = field(default_factory=list)
     headings: list[str] = field(default_factory=list)
     hidden_text: str = ""  # text the page tried to hide from humans
     feed_entries: list[dict] = field(default_factory=list)
     kind: str = "html"
+
+
+# Boilerplate containers (comment threads, sidebars, share widgets, ads, cookie banners). A class/id
+# token must *start* with the keyword ("comments-area" yes, "has-sidebar" no), so main content survives.
+_BOILERPLATE = re.compile(
+    r"^(comments?|comment-list|replies|respond|disqus|sidebar|related|share|sharing|social|newsletter|"
+    r"subscribe|advert|ads|sponsor|cookie|consent|breadcrumbs?|promo|popup|modal|footer|navbar|menu|toc|"
+    r"mw-navigation|navbox|reflist|references?|mw-references|mw-editsection|noprint|mw-jump-link|"
+    r"hatnote|metadata|ambox|infobox-caption)([_-].*)?$", re.I)
+
+
+def _is_boilerplate(attrs: dict) -> bool:
+    if attrs.get("role") in ("navigation", "complementary", "banner", "contentinfo"):
+        return True
+    toks = " ".join(filter(None, (attrs.get("class"), attrs.get("id")))).split()
+    return any(_BOILERPLATE.match(t) for t in toks)
+
+
+_REFLIST = re.compile(r"^(references?|reflist|mw-references|citations?|bibliography)([_-].*)?$", re.I)
+
+
+def _is_reference_list(attrs: dict) -> bool:
+    toks = " ".join(filter(None, (attrs.get("class"), attrs.get("id")))).split()
+    return any(_REFLIST.match(t) for t in toks)
 
 
 def _is_hidden(attrs: dict) -> bool:
@@ -49,13 +78,15 @@ class _TextExtractor(HTMLParser):
     def __init__(self, base_url: str):
         super().__init__(convert_charrefs=True)
         self.base = base_url
-        self.stack: list[tuple[str, bool, bool]] = []  # (tag, suppress, css/attr-hidden)
+        self.stack: list[tuple[str, bool, bool, bool]] = []  # (tag, suppress, hidden, reference-list)
         self.parts: list[str] = []
         self.hidden: list[str] = []
         self.title = ""
         self._in_title = False
         self.meta: dict[str, str] = {}
         self.links: list[str] = []
+        self.anchors: dict[str, str] = {}
+        self._cur_a: tuple[str, list[str]] | None = None
         self.list_items: list[str] = []
         self.headings: list[str] = []
         self._cur_li: list[str] | None = None
@@ -63,7 +94,13 @@ class _TextExtractor(HTMLParser):
 
     @property
     def suppressed(self) -> bool:
-        return any(s for _, s, _h in self.stack)
+        return any(s for _, s, _h, _r in self.stack)
+
+    @property
+    def links_allowed(self) -> bool:
+        """Links count unless suppressed by something other than a reference list
+        (reference lists are noise as text but are where the primary sources are)."""
+        return all(r or not s for _, s, _h, r in self.stack)
 
     def handle_starttag(self, tag, attrs):
         a = {k: (v or "") for k, v in attrs}
@@ -72,8 +109,10 @@ class _TextExtractor(HTMLParser):
             if key and a.get("content"):
                 self.meta[key] = a["content"]
             return
-        if tag == "a" and a.get("href") and not self.suppressed:
-            self.links.append(urljoin(self.base, a["href"]))
+        if tag == "a" and a.get("href") and self.links_allowed:
+            href = urljoin(self.base, a["href"]).split("#", 1)[0]
+            self.links.append(href)
+            self._cur_a = (href, [])
         if tag == "title":
             self._in_title = True
         if tag in _VOID:
@@ -81,7 +120,9 @@ class _TextExtractor(HTMLParser):
                 self.parts.append("\n")
             return
         hidden = _is_hidden(a)
-        self.stack.append((tag, tag in _SKIP_TAGS or hidden, hidden))
+        boiler = tag in ("div", "section", "aside", "ol", "ul", "table", "span", "p", "sup") and _is_boilerplate(a)
+        refs = boiler and _is_reference_list(a)
+        self.stack.append((tag, tag in _SKIP_TAGS or hidden or boiler, hidden, refs))
         if tag in _BLOCK_TAGS:
             self.parts.append("\n")
         if tag == "li" and not self.suppressed:
@@ -92,6 +133,12 @@ class _TextExtractor(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "title":
             self._in_title = False
+        if tag == "a" and self._cur_a is not None:
+            href, parts = self._cur_a
+            text = " ".join("".join(parts).split())[:200]
+            if text and len(text) > len(self.anchors.get(href, "")):
+                self.anchors[href] = text
+            self._cur_a = None
         if tag == "li" and self._cur_li is not None:
             item = " ".join("".join(self._cur_li).split())
             if item:
@@ -114,12 +161,14 @@ class _TextExtractor(HTMLParser):
         if self._in_title:
             self.title += data
             return
+        if self._cur_a is not None:
+            self._cur_a[1].append(data)  # anchor text, even inside reference lists
         if self.suppressed:
             # Record text hidden via CSS/attributes (not scripts/styles) for injection screening.
-            if any(h for _t, _s, h in self.stack):
+            if any(h for _t, _s, h, _r in self.stack):
                 self.hidden.append(data)
             return
-        if not any(t == "pre" for t, _s, _h in self.stack):
+        if not any(t == "pre" for t, _s, _h, _r in self.stack):
             # Source line breaks inside a paragraph are not sentence boundaries.
             data = re.sub(r"\s+", " ", data)
         self.parts.append(data)
@@ -148,8 +197,8 @@ def parse_html(html: str, base_url: str) -> ParsedDocument:
     try:
         p.feed(html)
         p.close()
-    except Exception:  # pragma: no cover - HTMLParser is very tolerant
-        pass
+    except AssertionError:  # pragma: no cover - malformed markup HTMLParser gives up on; keep what was parsed
+        log.warning("HTML parser stopped early on malformed markup at %s", base_url)
     meta = p.meta
     return ParsedDocument(
         title=_clean(unescape(meta.get("og:title") or p.title))[:500],
@@ -158,6 +207,7 @@ def parse_html(html: str, base_url: str) -> ParsedDocument:
         published_at=meta.get("article:published_time") or meta.get("date") or meta.get("dc.date")
         or meta.get("pubdate"),
         links=list(dict.fromkeys(p.links))[:500],
+        anchors=p.anchors,
         list_items=p.list_items[:200],
         headings=p.headings[:100],
         hidden_text=_clean(" ".join(p.hidden))[:5000],

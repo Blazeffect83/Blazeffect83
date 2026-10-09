@@ -54,7 +54,7 @@ def score_source(*, url: str, domain: str, text: str, published_at: str | None, 
     base = 40.0
     b["base"] = base
     primary = domain_matches(domain, primary_domains) or any(h in url.lower() for h in _PRIMARY_PATH_HINTS) \
-        or domain.endswith((".gov", ".edu", ".int"))
+        or domain.endswith((".gov", ".edu", ".int")) or domain.startswith("doi.org")
     if primary:
         b["primary_source"] = 15
     if any(h in domain for h in _SECONDARY_HINTS):

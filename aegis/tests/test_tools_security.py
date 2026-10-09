@@ -261,3 +261,13 @@ def test_run_tests_and_parse(services):
     run(services, "file_write", path="calc.py", content="def add(a, b):\n    return a + b\n")
     r = run(services, "run_tests")
     assert r.ok and r.output["summary"]["counts"] == {"passed": 2}
+
+
+def test_workspace_not_world_writable(services):
+    if services.sandbox.backend == "unavailable":
+        pytest.skip("no sandbox")
+    r = run(services, "python_run", code="open('/workspace/out.txt', 'w').write('ok')")
+    assert r.ok, r.error
+    ws = services.settings.workspace / "obj_tools"
+    assert (ws / "out.txt").read_text() == "ok"
+    assert ws.stat().st_mode & 0o002 == 0

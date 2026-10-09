@@ -19,7 +19,6 @@ from .search import fts_query
 
 _NEGATIONS = {"not", "no", "never", "cannot", "can't", "doesn't", "don't", "isn't", "aren't", "won't",
               "unsupported", "without", "neither", "nor", "lacks", "fails"}
-_NUM = re.compile(r"\b\d+(?:\.\d+)?\b")
 
 
 def _negated(text: str) -> bool:
@@ -27,16 +26,36 @@ def _negated(text: str) -> bool:
     return bool(words & _NEGATIONS)
 
 
+_QUANT = re.compile(r"\b(\d+(?:\.\d+)?)\s*(%|°\s?c|[a-z]+(?:/[a-z]+)?)?", re.I)
+_YEAR = re.compile(r"^(1[89]|20)\d\d$")
+
+
+def _quantities(text: str) -> dict[str, set[str]]:
+    """unit -> numbers. Years and bare numbers (no unit) are ignored: they usually
+    identify things (model numbers, dates) rather than measure them."""
+    out: dict[str, set[str]] = {}
+    for num, unit in _QUANT.findall(text):
+        if not unit or _YEAR.match(num):
+            continue
+        unit = unit.lower().replace(" ", "")
+        if unit in _NEGATIONS or len(unit) > 12:
+            continue
+        out.setdefault(unit, set()).add(num)
+    return out
+
+
 def conflict_signal(a: str, b: str) -> str | None:
     """Heuristic contradiction detector for two similar claims."""
     if _negated(a) != _negated(b):
         return "negation differs"
-    na, nb = set(_NUM.findall(a)), set(_NUM.findall(b))
-    if na and nb and na != nb:
+    qa, qb = _quantities(a), _quantities(b)
+    shared = [u for u in qa if u in qb and qa[u] != qb[u]]
+    if shared:
         ta = {t for t in tokens(a) if not t.isdigit()}
         tb = {t for t in tokens(b) if not t.isdigit()}
         if ta and tb and len(ta & tb) / len(ta | tb) >= 0.6:
-            return f"numeric values differ ({', '.join(sorted(na))} vs {', '.join(sorted(nb))})"
+            u = shared[0]
+            return f"values differ ({', '.join(sorted(qa[u]))} vs {', '.join(sorted(qb[u]))} {u})"
     return None
 
 

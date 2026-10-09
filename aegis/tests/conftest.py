@@ -24,6 +24,7 @@ class FakeWeb:
 
     def __init__(self):
         self.pages: dict[str, tuple[int, dict, bytes]] = {}
+        self.routes: list[tuple[str, object]] = []  # (url prefix, fn(request) -> httpx.Response)
         self.requests: list[str] = []
 
     def add(self, url: str, body: str | bytes, content_type: str = "text/html; charset=utf-8", status: int = 200,
@@ -31,12 +32,18 @@ class FakeWeb:
         b = body.encode() if isinstance(body, str) else body
         self.pages[url] = (status, {"content-type": content_type, **(headers or {})}, b)
 
+    def route(self, prefix: str, fn) -> None:
+        self.routes.append((prefix, fn))
+
     def redirect(self, url: str, location: str, status: int = 302):
         self.pages[url] = (status, {"location": location}, b"")
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         url = str(request.url)
         self.requests.append(url)
+        for prefix, fn in self.routes:
+            if url.startswith(prefix):
+                return fn(request)
         if url in self.pages:
             status, headers, body = self.pages[url]
             return httpx.Response(status, headers=headers, content=body)

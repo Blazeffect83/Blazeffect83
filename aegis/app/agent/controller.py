@@ -74,7 +74,8 @@ class Controller:
     def _check_limits(self, o: dict) -> None:
         tb = o["time_budget_minutes"] or self.s.settings.objective_time_budget_minutes
         started = parse_iso(o["started_at"])
-        if started and utcnow() - started > timedelta(minutes=tb):
+        # Deep research tracks its own *active* research time and finishes (not fails) when it is used.
+        if o["kind"] != "deep_research" and started and utcnow() - started > timedelta(minutes=tb):
             self._finish(o, sm.FAILED, f"time budget of {tb} minutes expired")
             raise StopRun("time budget")
         executed = int(self.s.db.scalar("SELECT COALESCE(SUM(attempts),0) FROM tasks WHERE objective_id = ?",
@@ -124,6 +125,10 @@ class Controller:
                     break
                 self._check_limits(o)
                 st = o["status"]
+                if o["kind"] == "deep_research":
+                    if self._deep_research(o, stop):
+                        continue
+                    break
                 if st == sm.QUEUED:
                     self._plan(o)
                 elif st == sm.PLANNING:
@@ -139,6 +144,53 @@ class Controller:
             self._pause(o, str(exc))
             self.s.notifier.notify("critical", "budget_exhausted", "API budget limit reached", str(exc))
         return self.sm.objective_status(oid)
+
+    # -- deep research campaigns ------------------------------------------
+    def _deep_research(self, o: dict, stop) -> bool:
+        """One campaign step. Returns True to keep looping, False to return to the worker."""
+        from ..research.campaign import Campaign
+        camp = Campaign(self.s)
+        st = o["status"]
+        if st in (sm.QUEUED, sm.PLANNING):
+            refusal = screen_objective(o["goal"])
+            if st == sm.QUEUED:
+                extra = {} if o["started_at"] else {"started_at": now_iso()}
+                self._move(o["id"], sm.PLANNING, "preparing research questions", expect=sm.QUEUED, **extra)
+            if refusal:
+                self.s.audit.record("objective.refused", objective_id=o["id"], decision="deny", result=refusal)
+                self._finish(self._obj(o["id"]), sm.FAILED, refusal)
+                return False
+            camp.initialize(self._obj(o["id"]))
+            self._move(o["id"], sm.READY, "research campaign initialised", expect=sm.PLANNING, plan_version=1)
+            self.s.audit.record("research.campaign_started", objective_id=o["id"], result=o["goal"][:300])
+            return True
+        if st == sm.VERIFYING:
+            report = camp.report(o, final=True)
+            stop_reason = camp.progress(o)["stop_reason"] or "completed"
+            self._write_report(o["id"], report)
+            self._finish(o, sm.COMPLETED, f"research complete: {stop_reason}", summary=report)
+            return False
+        self._move(o["id"], sm.RUNNING, "researching", expect=st)
+
+        def keep_going() -> bool:
+            if stop is not None and stop.is_set():
+                return False
+            if self.s.db.kv_get("resource_pause"):
+                return False
+            return self.sm.objective_status(o["id"]) == sm.RUNNING
+
+        result = camp.run_slice(self._obj(o["id"]), keep_going)
+        if result == "finished":
+            self._move(o["id"], sm.VERIFYING, "writing research report", expect=sm.RUNNING)
+            return True
+        # Yield the worker (time slice over, shutdown, resource pressure); stay resumable.
+        self.sm.transition_objective(o["id"], sm.READY, "research continues (time slice)", expect=sm.RUNNING)
+        return False
+
+    def _write_report(self, oid: str, report: str) -> None:
+        ws = self.s.settings.workspace / oid
+        ws.mkdir(parents=True, exist_ok=True)
+        (ws / "report.md").write_text(report, encoding="utf-8")
 
     def _plan(self, o: dict, already_planning: bool = False) -> None:
         refusal = screen_objective(o["goal"])

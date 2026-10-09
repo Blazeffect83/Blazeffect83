@@ -2,6 +2,7 @@
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -58,6 +59,16 @@ def test_migrations_idempotent_and_schema(settings):
         assert t in tables
     assert db.scalar("PRAGMA foreign_keys") == 1
     assert db.integrity_check()[0]
+
+
+def test_migrations_ship_inside_package_and_missing_dir_fails(tmp_path):
+    import app
+    from app.config import Settings
+    pkg = Path(app.__file__).resolve().parent
+    assert Settings().migrations_dir == pkg / "migrations"
+    assert (pkg / "migrations" / "0001_initial.sql").is_file()
+    with pytest.raises(RuntimeError, match="no migration scripts"):
+        Database(tmp_path / "x.db", tmp_path / "missing").migrate()
 
 
 def test_foreign_keys_enforced(services):

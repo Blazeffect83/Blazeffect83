@@ -54,7 +54,7 @@ class SandboxResult:
 class SandboxLimits:
     timeout_seconds: int = 120
     memory_mb: int = 512
-    max_processes: int = 64
+    max_processes: int = 128
     max_file_mb: int = 50
 
 
@@ -199,7 +199,6 @@ class Sandbox:
         workdir.mkdir(parents=True, exist_ok=True)
         timeout = timeout or self.limits.timeout_seconds
         if backend == "bwrap":
-            os.chmod(workdir, 0o777)  # uid 65534 inside the userns must be able to write
             full = self._bwrap_argv(workdir, "/workspace", network) + list(argv)
             env = {"PATH": SAFE_PATH}
             cwd = "/"

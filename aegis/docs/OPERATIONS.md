@@ -65,6 +65,15 @@ This removes the service and its drop-ins, `/opt/aegis`, the AppArmor profile, `
 
 Keep the data directory on the SSD rather than a microSD card (write endurance, speed).
 
+## Deep research guidance
+
+* **Time.** Budgets are in hours of *active* research. Paused time and time spent yielding to other objectives don't count. Typical throughput is about 20–40 sources per minute through APIs, limited by politeness delays (2 s per domain). A 4-hour campaign can examine thousands of sources if discovery supplies them.
+* **Discovery reach.** Without `BRAVE_SEARCH_API_KEY` or `SEARXNG_URL`, campaigns draw on Wikipedia, OpenAlex and the links they cite. Practical or niche topics may end early with "sources exhausted"; that is honest, not a failure.
+* **Storage.** About 1–3 MB per 100 documents. Off-topic documents are kept (and searchable) but not cited.
+* **Cost.** Without a model it is $0. With a model: one question-generation call at start and on each refresh (about 1.2k output tokens max), plus one synthesis call at the end. All calls count against the research spend limit. When that limit is hit, the campaign continues deterministically.
+* **Global domain allowlist.** If you set `RESEARCH_ALLOWED_DOMAINS`, include `api.wikimedia.org`, `wikipedia.org` and `api.openalex.org` (plus `api.search.brave.com` if used), or discovery is blocked by design.
+* Set `RESEARCH_CONTACT` to an e-mail address. OpenAlex and Wikimedia ask API clients to identify themselves.
+
 ## Cost guidance
 
 * AEGIS never sends model requests just to stay busy. Research is deterministic by default (`RESEARCH_USE_MODEL_EXTRACTION=false`), so scheduled research costs **$0**.

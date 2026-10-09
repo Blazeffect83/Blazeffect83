@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Report{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row between wrap"><a href="/tasks/{{ o.id }}">← back to objective</a>
+    <a class="chip" href="/api/objectives/{{ o.id }}/report">Download Markdown</a></div>
+  <div class="md">{{ text|markdown }}</div>
+</section>
+{% endblock %}

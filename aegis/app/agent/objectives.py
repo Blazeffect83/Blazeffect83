@@ -4,7 +4,7 @@ from __future__ import annotations
 from ..db import dumps, loads, new_id, now_iso
 from . import state_machine as sm
 
-KINDS = ("general", "research", "coding", "monitor")
+KINDS = ("general", "research", "coding", "monitor", "deep_research")
 
 
 class ObjectiveError(Exception):
@@ -17,7 +17,8 @@ class ObjectiveManager:
 
     def create(self, goal: str, *, kind: str = "general", priority: int = 5, success_criteria=None,
                constraints=None, allowed_tools=None, deadline: str | None = None, budget_tokens: int | None = None,
-               budget_usd: float | None = None, time_budget_minutes: int | None = None, actor: str = "user") -> str:
+               budget_usd: float | None = None, time_budget_minutes: int | None = None, actor: str = "user",
+               research_params: dict | None = None) -> str:
         goal = (goal or "").strip()
         if len(goal) < 5:
             raise ObjectiveError("goal is too short")
@@ -37,6 +38,7 @@ class ObjectiveManager:
             "constraints": dumps([c for c in (constraints or []) if c]), "allowed_tools": dumps(tools),
             "deadline": deadline or None, "budget_tokens": budget_tokens, "budget_usd": budget_usd,
             "time_budget_minutes": time_budget_minutes, "status": sm.QUEUED, "status_reason": "submitted",
+            "checkpoint": dumps({"params": research_params}) if kind == "deep_research" else None,
             "created_at": ts, "updated_at": ts})
         self.s.db.insert("task_events", {"objective_id": oid, "task_id": None, "from_status": None,
                                          "to_status": sm.QUEUED, "reason": "submitted", "created_at": ts})
@@ -55,6 +57,11 @@ class ObjectiveManager:
             for k, d in (("args", {}), ("checks", []), ("result", None), ("verification", None)):
                 t[k] = loads(t[k], d)
         o["events"] = self.s.state.events(oid)
+        if o["kind"] == "deep_research":
+            from ..research.campaign import Campaign
+            raw = self.s.db.one("SELECT * FROM objectives WHERE id = ?", (oid,))
+            o["campaign"] = Campaign(self.s).progress(raw)
+            o["checkpoint"] = None  # large; exposed via the summarised progress instead
         o["approvals"] = self.s.db.query("SELECT id, tool, status, created_at, expires_at FROM approvals "
                                          "WHERE objective_id = ? ORDER BY created_at", (oid,))
         return o

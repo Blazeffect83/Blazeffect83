@@ -145,7 +145,7 @@ class Worker:
         if capacity <= 0:
             return
         rows = self.s.db.query(
-            "SELECT id FROM objectives WHERE status IN ('QUEUED','READY','RETRYING') ORDER BY priority, created_at "
+            "SELECT id FROM objectives WHERE status IN ('QUEUED','READY','RETRYING') ORDER BY priority, updated_at "
             "LIMIT ?", (capacity + len(self._running),))
         for r in rows:
             if r["id"] in self._running or capacity <= 0:

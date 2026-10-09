@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..agent.objectives import ObjectiveError, ObjectiveManager
 from ..api.authentication import SESSION_COOKIE
+from .markdown import render as render_markdown
 from ..api.routes import BUDGET_KEYS, apply_budget_overrides, graceful_shutdown, overview
 from ..db import loads
 from ..knowledge import search as ks
@@ -23,6 +24,7 @@ from ..security.approvals import ApprovalError
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 TEMPLATES.env.filters["fromjson"] = lambda v: loads(v, v) if isinstance(v, str) else v
+TEMPLATES.env.filters["markdown"] = render_markdown
 TEMPLATES.env.filters["pretty"] = lambda v: json.dumps(v, indent=2, default=str) if not isinstance(v, str) else v
 
 
@@ -135,6 +137,20 @@ def build_dashboard() -> APIRouter:
                                      "FROM tool_runs WHERE objective_id = ? ORDER BY id", (oid,))
         return page(request, "task_detail.html", o=o, runs=runs)
 
+    @r.get("/tasks/{oid}/report", response_class=HTMLResponse)
+    def task_report(oid: str, request: Request):
+        if not auth_get(request):
+            return RedirectResponse("/login", status_code=303)
+        raw = svc(request).db.one("SELECT * FROM objectives WHERE id = ?", (oid,))
+        if not raw:
+            raise HTTPException(404, "objective not found")
+        if raw["kind"] == "deep_research" and raw["status"] != "COMPLETED":
+            from ..research.campaign import Campaign
+            text = Campaign(svc(request)).report(raw, final=False)
+        else:
+            text = raw["completion_summary"] or "No report yet."
+        return page(request, "report_view.html", o=raw, text=text)
+
     @r.post("/tasks/{oid}/{action}")
     async def task_action(oid: str, action: str, request: Request):
         who, f = await auth_post(request)
@@ -195,7 +211,29 @@ def build_dashboard() -> APIRouter:
                     topics=[schedules.topic_view(t) for t in s.db.query("SELECT * FROM research_topics ORDER BY name")],
                     contradictions=s.knowledge.contradictions()[:20],
                     paused=bool(s.db.kv_get("research_paused", False)),
-                    policy={"allowed": s.settings.research_allowed_domains, "blocked": s.settings.research_blocked_domains})
+                    policy={"allowed": s.settings.research_allowed_domains, "blocked": s.settings.research_blocked_domains},
+                    searx=bool(s.settings.searxng_url), brave=bool(s.settings.brave_search_api_key))
+
+    @r.post("/research/deep")
+    async def deep_research(request: Request):
+        who, f = await auth_post(request)
+        # Unchecked boxes are absent from the form; if the source checkboxes were not submitted at all, use all.
+        submitted = "sources_submitted" in f
+        sources = [x for x in ("wikipedia", "openalex", "searxng", "web", "links")
+                   if (f.get(f"src_{x}") == "on") or not submitted]
+        try:
+            params = {
+                "hours": max(0.05, min(48.0, float(f.get("hours") or 2))),
+                "max_documents": max(1, min(5000, int(f.get("max_documents") or 200))),
+                "allowed_domains": _lines(f.get("allowed_domains")), "seed_urls": _lines(f.get("seed_urls")),
+                "sources": sources or ["wikipedia", "openalex", "links"],
+                "stop_on_saturation": (f.get("stop_on_saturation") == "on") or not submitted,
+            }
+            oid = ObjectiveManager(svc(request)).create(str(f.get("topic", "")), kind="deep_research",
+                                                       priority=6, research_params=params, actor=who)
+        except (ObjectiveError, ValueError) as exc:
+            return back("/research", err=str(exc))
+        return back(f"/tasks/{oid}", msg="Deep research started")
 
     @r.post("/research/topics")
     async def topic_create(request: Request):

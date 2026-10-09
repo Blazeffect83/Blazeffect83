@@ -53,10 +53,8 @@ class Executor:
         approval_id = None
         if decision.verdict == REQUIRE_APPROVAL:
             approval_id = task.get("approval_id")
-            appr = s.approvals.get(approval_id) if approval_id else None
             s.approvals.expire_stale()
-            if appr:
-                appr = s.approvals.get(approval_id)
+            appr = s.approvals.get(approval_id) if approval_id else None
             if appr and appr["status"] == "rejected":
                 s.audit.record("tool.approval_rejected", decision="rejected", approval_id=approval_id, **audit_common)
                 return ExecOutcome("rejected", approval_id=approval_id, reason="action rejected by the user")

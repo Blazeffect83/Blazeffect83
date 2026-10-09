@@ -57,7 +57,9 @@ def build_services(settings: Settings, *, providers: dict[str, ModelProvider] | 
     url_policy = URLPolicy(settings.research_allowed_domains, settings.research_blocked_domains)
     fkw = dict(max_bytes=settings.research_max_bytes, connect_timeout=settings.research_connect_timeout,
                read_timeout=settings.research_read_timeout, max_redirects=settings.research_max_redirects,
-               user_agent=settings.research_user_agent, per_domain_delay=settings.research_per_domain_delay_seconds,
+               user_agent=settings.research_user_agent + (f" contact: {settings.research_contact}"
+                                                          if settings.research_contact else ""),
+               per_domain_delay=settings.research_per_domain_delay_seconds,
                transport=http_transport)
     if fetch_sleep is not None:
         fkw["sleep"] = fetch_sleep

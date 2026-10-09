@@ -63,10 +63,24 @@ AEGIS does **not** fine-tune model weights. It improves by:
 
 Discovery (feeds, seed URLs, SearXNG) → `research_sources` queue with method and origin → SSRF-safe fetch (`fetcher.py`) → parse (`parser.py`: HTML without scripts, nav or hidden text; RSS/Atom/JSON Feed via defusedxml) → exact dedupe (SHA-256 of normalised text) and near dedupe (64-bit SimHash, Hamming ≤ 6) → injection screen → extraction (deterministic, or the model with verbatim-passage verification) → quality score (`source_quality.py`, an itemised breakdown) → store documents, topics, claims and evidence → contradiction detection → stale marking. Daily reports count only rows that exist in the database.
 
+## Deep research campaigns (`app/research/campaign.py`)
+
+A campaign is an objective of kind `deep_research`. Its whole state lives in the objective's checkpoint: parameters, sub-questions, query queue, URL frontier, visited set, cited document ids, per-domain counts, term statistics, yields and log. Every unit of work is checkpointed, so pause, resume, crash and reboot continue exactly where they left off, and nothing is fetched twice.
+
+* **Time slices.** The controller runs a campaign for `slice_seconds` (default 300 s, always at least one unit), then hands it back as READY. The worker schedules by priority, then least-recently-updated, so other objectives run between slices. Budget is measured in *active* research time.
+* **Units of work.** A unit is either one search (across all enabled providers) or one candidate fetch. Searches and fetches are interleaved; refreshes of questions and verification happen every 15 or 30 cited documents and on saturation.
+* **Relevance model.**
+  * The topic is split into concepts at function words. A concept counts in full when all its words occur (light stemming), and half when only its head word occurs.
+  * *Core* material covers essentially the whole topic. *Background* covers part of it. Anything else is off-topic: kept in the knowledge base but never cited, and its links are not followed.
+  * Topic-term weights adapt to document frequency within the campaign. Extraction ranks sentences by the within-document rarity of query terms, and long documents get up to 40 claims.
+* **Discovery providers** (`app/research/discovery.py`): Wikimedia search API, OpenAlex (search and `cites:` snowballing; abstracts are ingested directly, and independence is tracked per DOI-prefix publisher), SearXNG, Brave Search API. Wikipedia's `/w/api.php` and arXiv's export API disallow crawlers in robots.txt, so they are not used.
+* **Saturation.** If the last 20 documents together add fewer than 3 new or reinforced claims, new questions are generated. A third consecutive strike, or a refresh that yields nothing new, ends the campaign ("diminishing returns").
+* **Model use** (optional). The model generates sub-questions and queries, with findings passed as untrusted data, and writes the executive summary from cited findings only; citations to non-existent sources are stripped. If the budget runs out, the model is switched off for the rest of the campaign and research continues deterministically.
+
 ## Model routing (`app/models/router.py`)
 
 Roles: `planning`, `debugging`, `evaluation` (heavy) and `extraction`, `classification`, `summary` (light, using `MODEL_NAME_LIGHT` if set). Before every call the router checks the daily spend limit, the research spend limit, the hourly request cap and the per-objective token budget, and stops hard if any is exceeded. Each call (including failures) is recorded in `model_usage`. A fallback provider is used only if one is explicitly configured, and `LOCAL_ONLY` disables paid providers completely.
 
 ## Data model
 
-See `migrations/0001_initial.sql`. It has foreign keys with cascades, indexes on status and time columns, FTS5 external-content tables kept in sync by triggers, and audit triggers that make the audit table append-only.
+See `app/migrations/0001_initial.sql`. It has foreign keys with cascades, indexes on status and time columns, FTS5 external-content tables kept in sync by triggers, and audit triggers that make the audit table append-only.

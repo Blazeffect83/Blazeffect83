@@ -15,7 +15,9 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 
-from .deduplicator import normalize, tokens
+import math
+
+from .deduplicator import normalize, stem, stems, tokens
 from .injection import wrap_untrusted
 
 log = logging.getLogger(__name__)
@@ -24,7 +26,10 @@ _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
 _CLAIM_VERBS = re.compile(
     r"\b(is|are|was|were|requires?|supports?|uses?|provides?|includes?|has|have|allows?|enables?|runs?|"
     r"recommends?|must|should|can|cannot|will|consumes?|needs?|offers?|achieves?|reduces?|increases?|"
-    r"improves?|outperforms?|introduces?|adds?|removes?|deprecates?)\b", re.I)
+    r"improves?|outperforms?|introduces?|adds?|removes?|deprecates?|be|been|being|may|might|could|would|"
+    r"features?|contains?|exceeds?|reach(?:es)?|causes?|results?|shows?|showed|found|leads?|prevents?|"
+    r"depends?|helps?|keeps?|operates?|throttles?|limits?|lowers?|raises?|drops?|rises?|"
+    r"\w{3,}ed)\b", re.I)
 _DEFINITION = re.compile(
     r"^(?:An?\s+|The\s+)?([A-Z][\w.+\- ]{1,50}?)\s+(?:is|are|refers to|means|is defined as)\s+"
     r"(?:an?|the|one|any)\s+(.{10,250})$")
@@ -38,6 +43,10 @@ _IMPERATIVE = re.compile(
 _DATE = re.compile(
     r"\b(\d{4}-\d{2}-\d{2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|"
     r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.? \d{1,2},? \d{4})\b")
+_FIRST_PERSON = re.compile(r"\b(I|I'm|I've|I'd|my|me|mine)\b")
+_BAD_TERM_START = {"this", "that", "these", "those", "it", "there", "here", "which", "what", "one", "our", "we",
+                   "i", "my", "your", "his", "her", "their", "its", "overall", "however", "but", "and", "so",
+                   "most", "while", "although", "if", "when", "another", "each", "every", "some", "all"}
 _HEDGE = re.compile(r"\b(may|might|could|possibly|likely|reportedly|appears?|seems?|rumou?red|allegedly)\b", re.I)
 
 
@@ -73,16 +82,35 @@ class Extraction:
         }
 
 
+def _good_term(term: str) -> bool:
+    words = term.split()
+    return 1 <= len(words) <= 4 and words[0].lower() not in _BAD_TERM_START \
+        and not any(w.lower() in ("this", "these", "that", "those", "which", "of") for w in words)
+
+
+_CITE_MARK = re.compile(r"\[(?:\d{1,4}|[a-z]|citation needed|note \d+|edit)\]", re.I)
+_ABSTRACT_LABEL = re.compile(
+    r"^(BACKGROUND|OBJECTIVES?|AIMS?|PURPOSE|INTRODUCTION|METHODS?|DESIGN|SETTING|PARTICIPANTS|RESULTS?|"
+    r"FINDINGS|CONCLUSIONS?|INTERPRETATION|SIGNIFICANCE|CONTEXT)\b\s*[:.\-–]?\s*")
+# Statements of purpose describe what a study set out to do, not what it found.
+_AIM = re.compile(r"\b(this (study|review|paper|work|article|trial) (aimed|aims|sought|seeks|was designed|"
+                  r"investigat\w*|evaluat\w*|examin\w*|explor\w*)|we (aimed|sought|set out)|sought to test|"
+                  r"the (aim|objective|purpose) of this)\b", re.I)
+_QUESTION = re.compile(r"^(what|how|why|when|where|which|who|is|are|can|could|does|do|did|should|will|would)\b",
+                       re.I)
+
+
 def sentences(text: str) -> list[str]:
+    text = _CITE_MARK.sub("", text)
     out = []
     for para in text.split("\n"):
         para = para.strip()
         if not para:
             continue
         for s in _SENT_SPLIT.split(para):
-            s = s.strip()
+            s = _ABSTRACT_LABEL.sub("", s.strip())
             if s:
-                out.append(s)
+                out.append(s[0].upper() + s[1:])
     return out
 
 
@@ -96,9 +124,18 @@ def relevance(text: str, query: str) -> float:
 
 
 def extract_deterministic(title: str, text: str, list_items: list[str] | None = None, query: str = "",
-                          max_claims: int = 15) -> Extraction:
+                          max_claims: int | None = None) -> Extraction:
     sents = sentences(text)
     qtok = set(tokens(query))
+    # Long documents get a larger claim budget (15 … 40).
+    if max_claims is None:
+        max_claims = max(15, min(40, 15 + len(sents) // 40))
+    # Within-document rarity of query terms: in an article about the Raspberry Pi, "raspberry"
+    # occurs in most sentences and says little; "throttled" or "cooling" are the signal.
+    qstems = {stem(t) for t in qtok if not t.isdigit() and len(t) > 2}
+    sent_stems = [stems(x) for x in sents] if qstems else []
+    n_s = max(1, len(sent_stems))
+    idf = {q: math.log((n_s + 1) / (1 + sum(1 for ss in sent_stems if q in ss))) + 0.1 for q in qstems}
     informative = [s for s in sents if 40 <= len(s) <= 320 and len(s.split()) >= 6 and not s.endswith("?")]
     # Summaries use complete sentences only (skips navigation/table-of-contents fragments).
     complete = [s for s in informative if s[-1] in ".!" and _CLAIM_VERBS.search(s)]
@@ -116,7 +153,10 @@ def extract_deterministic(title: str, text: str, list_items: list[str] | None = 
             continue
         seen.add(key)
         m = _DEFINITION.match(s)
-        if m and len(defs) < 10:
+        if m and not _good_term(m.group(1)):
+            m = None
+        first_person = bool(_FIRST_PERSON.search(s))
+        if m and len(defs) < 10 and not first_person:
             defs.append({"term": m.group(1).strip(), "definition": s})
             claims.append(ExtractedClaim(s, "definition", s))
             continue
@@ -124,21 +164,36 @@ def extract_deterministic(title: str, text: str, list_items: list[str] | None = 
             limits.append(s)
             claims.append(ExtractedClaim(s, "limitation", s, bool(_HEDGE.search(s))))
             continue
+        if _AIM.search(s):
+            continue
         if _CLAIM_VERBS.search(s):
-            claims.append(ExtractedClaim(s, "statement", s, bool(_HEDGE.search(s))))
+            # First-person statements are anecdotes: kept, but marked hedged (lower weight).
+            claims.append(ExtractedClaim(s, "statement", s, bool(_HEDGE.search(s)) or first_person))
 
     def rank(c: ExtractedClaim) -> tuple:
-        overlap = len(qtok & set(tokens(c.text))) if qtok else 0
+        rel = round(sum(idf[q] for q in stems(c.text) & qstems), 3) if qstems else 0
         has_num = bool(re.search(r"\d", c.text))
-        return (-overlap, c.kind != "definition", c.kind != "limitation", not has_num, c.hedged)
+        return (-rel, c.hedged, c.kind != "definition", c.kind != "limitation", not has_num)
 
-    claims.sort(key=rank)
-    procedures = [li for li in (list_items or []) if _IMPERATIVE.match(li)][:30]
+    procedures = [li for li in (list_items or []) if _IMPERATIVE.match(li) and not _FIRST_PERSON.search(li)
+                  and len(li.split()) >= 3][:30]
     if not procedures:
-        procedures = [s for s in sents if _IMPERATIVE.match(s) and len(s) < 250][:15]
+        procedures = [s for s in sents if _IMPERATIVE.match(s) and len(s) < 250 and len(s.split()) >= 4
+                      and not _FIRST_PERSON.search(s) and not s.rstrip().endswith((":", "?"))][:15]
     for p in procedures[:5]:
         claims.append(ExtractedClaim(p, "procedure", p))
-    questions = [s for s in sents if s.endswith("?") and 15 < len(s) < 200][:5]
+    # Descriptive list items ("Active cooler (2023) – a heatsink and fan for thermal management")
+    # carry facts too; they compete on relevance like any other claim.
+    seen_li = {normalize(c.text) for c in claims}
+    for li in (list_items or [])[:200]:
+        li = _CITE_MARK.sub("", li).strip()
+        if 6 <= len(li.split()) <= 60 and normalize(li) not in seen_li and not _IMPERATIVE.match(li) \
+                and (not qstems or stems(li) & qstems):
+            claims.append(ExtractedClaim(li, "statement", li))
+            seen_li.add(normalize(li))
+    claims.sort(key=rank)
+    questions = [s for s in sents if s.endswith("?") and 15 < len(s) < 200 and _QUESTION.match(s)
+                 and len(s.split()) >= 5 and "[" not in s][:5]
     return Extraction(
         subject=subject[:300], summary=summary, claims=claims[:max_claims], definitions=defs,
         procedures=procedures, limitations=limits, dates=list(dict.fromkeys(_DATE.findall(text)))[:10],

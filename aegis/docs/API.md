@@ -21,7 +21,7 @@ Unauthenticated requests get `401`, and a bad or missing CSRF token gets `403`. 
 | GET | `/api/health` | detailed health checks |
 | POST | `/api/objectives` | create: `goal`, `kind` (general/research/coding/monitor), `priority` 1–9, `success_criteria[]`, `constraints[]`, `allowed_tools[]`, `deadline`, `budget_tokens`, `budget_usd`, `time_budget_minutes` → `{"id"}` |
 | GET | `/api/objectives?status=` | list |
-| GET | `/api/objectives/{id}` | full detail: plan, tasks (args/result/verification), events, approvals |
+| GET | `/api/objectives/{id}` | full detail: plan, tasks (args/result/verification), events, approvals; `campaign` progress for deep research |
 | POST | `/api/objectives/{id}/pause\|resume\|cancel\|retry` | lifecycle |
 | POST | `/api/objectives/{id}/clarify` | `{"answer"}` for a pending clarification question |
 | GET | `/api/approvals?status=pending` | approval requests |
@@ -29,6 +29,8 @@ Unauthenticated requests get `401`, and a bad or missing CSRF token gets `403`. 
 | GET/POST | `/api/topics` | list / create research topic (`name`, `query`, `feeds[]`, `seed_urls[]`, `allowed_domains[]`, `interval_minutes` ≥ 15, `max_docs_per_run`, `freshness_days`, `priority`, `enabled`) |
 | PATCH | `/api/topics/{id}` | update fields |
 | POST | `/api/topics/{id}/run` | run at next worker cycle |
+| POST | `/api/research/deep` | start a deep research campaign: `topic`, `hours` (≤48), `max_documents`, `max_depth`, `max_per_domain`, `sources` ⊆ {wikipedia, openalex, searxng, web, links}, `allowed_domains[]`, `seed_urls[]`, `stop_on_saturation`, `priority`, `budget_usd` → `{"id"}` |
+| GET | `/api/objectives/{id}/report` | Markdown report (interim while a campaign runs, final when completed) |
 | POST | `/api/research/pause\|resume` | global research switch |
 | GET | `/api/search?q=&kind=documents\|claims\|experiments&topic=&domain=&min_quality=&limit=` | FTS5 search |
 | GET/DELETE | `/api/documents/{id}` | document with quality breakdown, claims, related docs / delete it |
@@ -57,4 +59,13 @@ curl -s -H "Authorization: Bearer $T" -H 'content-type: application/json' \
   -d '{"goal":"Research Raspberry Pi 5 NVMe boot using https://www.raspberrypi.com/documentation/computers/raspberry-pi.html","kind":"research"}' \
   http://127.0.0.1:8600/api/objectives
 curl -s -H "Authorization: Bearer $T" http://127.0.0.1:8600/api/objectives/obj_… | jq .status
+```
+
+Deep research:
+
+```bash
+curl -s -H "Authorization: Bearer $T" -H 'content-type: application/json' \
+  -d '{"topic":"Effects of intermittent fasting on insulin sensitivity","hours":3,"max_documents":300}' \
+  http://127.0.0.1:8600/api/research/deep
+curl -s -H "Authorization: Bearer $T" http://127.0.0.1:8600/api/objectives/obj_…/report > report.md
 ```

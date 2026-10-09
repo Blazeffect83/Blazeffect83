@@ -26,3 +26,6 @@ Start with `journalctl -u aegis -n 100 --no-pager`, then check System → Health
 | Audit `CHAIN BROKEN` | the audit table was edited outside AEGIS | investigate: the DB was modified with external tools. Restore a backup if needed |
 | `pip_install` approved but fails | no network to the index, or package build failure | check `PACKAGE_INDEX_URL`; the tool output appears in the task detail |
 | `service_restart` fails with sudo error | expected default (`NoNewPrivileges=yes`) | see SECURITY.md → Service control |
+| Deep research stops quickly with "sources exhausted" | discovery limited to Wikipedia/OpenAlex for a practical or niche topic | add `BRAVE_SEARCH_API_KEY` or `SEARXNG_URL`, add seed URLs (e.g. vendor docs), or rephrase the topic with its key terms |
+| Deep research report has few "Key findings" but much "Background" | sources discuss parts of the topic, not the whole | expected and honest; widen or rephrase the topic, or add seed URLs |
+| Deep research discovery errors in the activity log | global `RESEARCH_ALLOWED_DOMAINS` excludes the discovery APIs | add `api.wikimedia.org`, `wikipedia.org`, `api.openalex.org` |

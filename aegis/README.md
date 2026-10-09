@@ -8,6 +8,7 @@ OBSERVE → REASON → PLAN → ACT → VERIFY → LEARN → REPEAT
 
 * **Plans and executes.** It turns vague goals into validated, testable steps. It retries transient errors within limits, replans on real failures, and asks you when a requirement is missing.
 * **Verifies its work.** Deterministic checks (exit codes, tests passing, files present) decide success. A model "judge" can send work back for another round, but it can never pass a check that failed.
+* **Researches a topic in depth, for hours.** Give it a topic and a time budget. It breaks the topic into sub-questions, searches Wikipedia, OpenAlex (scholarly abstracts), and optionally your SearXNG instance or Brave web search. It follows citations and relevant links, snowballs through papers that cite good sources, and hunts for corroboration of single-source claims. It filters off-topic material and detects diminishing returns. The result is a **cited report**: answers per sub-question, key findings with confidence, contested points, background, gaps and a numbered source list. It runs in time slices, survives pauses and reboots, and never blocks other work.
 * **Researches continuously.** It reads RSS/Atom feeds, seed URLs and optional self-hosted SearXNG search. Fetching is SSRF-safe. It scores source quality, removes duplicates, detects prompt injection, extracts source-backed claims with citations, flags contradictions (it never silently overwrites them), and writes daily reports.
 * **Learns without retraining.** "Learning" here means saved, source-backed knowledge plus a record of past experiments (what worked and what failed, in which context). It looks these up before every plan. The model's weights never change.
 * **Safe by design.** Tools fall into four permission tiers. Code runs in a bubblewrap sandbox with no network, no secrets, uid 65534 and only its own workspace writable. Approvals are single-use and bound to the exact action. The audit log is append-only and hash-chained. All retrieved content is treated as untrusted data.
@@ -41,6 +42,25 @@ You need the server once, to run the installer and join it to Tailscale. After t
 
 Research and objectives keep running with the iPad closed. The worker lives in the service, not in the browser.
 
+## Deep research (topic → hours of research → cited report)
+
+On the iPad, open **Research → Deep research**, enter a topic (for example *"Effects of intermittent fasting on insulin sensitivity"*), choose the hours and sources, and start. You can also use the API (`POST /api/research/deep`) or the CLI (`aegis research "topic" --hours 4`).
+
+| Phase | What happens |
+|---|---|
+| Questions | Sub-questions and search queries: from the model if one is configured, otherwise templates, plus terms mined from findings |
+| Discovery | Wikipedia (Wikimedia API), OpenAlex scholarly abstracts, SearXNG and Brave web search when configured. Only APIs whose robots.txt permits automated access are used |
+| Ingestion | SSRF-safe fetching, comment and boilerplate removal, dedupe, injection screening, claim extraction, quality scoring |
+| Relevance | The topic is split into concepts ("thermal throttling", "cooling", "Raspberry Pi"). Material must address several of them, so pages sharing only a name or an aspect are kept but never cited |
+| Expansion | Citation and reference links, relevant outbound links (bounded depth), papers citing on-topic papers (snowballing), searches for related titles |
+| Verification | Targeted searches for corroboration of single-source claims; contradictions between sources are flagged |
+| Stopping | Time budget used, document limit reached, sources exhausted, or diminishing returns (new sources stop adding knowledge) |
+| Report | Executive summary (model-written, only when a model is set, citations validated), answers by sub-question, key findings, background, contested points, definitions, procedures, limitations, gaps, method statistics, sources |
+
+The **Interim report** button shows results while research is still running. Progress, budget used, sub-questions, next searches and an activity log appear on the objective page.
+
+**How far it reaches.** Without a web search API, discovery is encyclopedic and scholarly: Wikipedia, OpenAlex and the links they cite. That is strong for science and technology topics. Topics covered mainly by vendor docs, forums or news run out of sources sooner, and AEGIS says so ("sources exhausted"). For hours of web-scale research, set `BRAVE_SEARCH_API_KEY` (free tier) or `SEARXNG_URL`.
+
 ## Configuration
 
 Everything goes in `/etc/aegis/aegis.env`. Every key is documented in [`.env.example`](.env.example). Model identifiers are **never hardcoded**: choose a current one from the provider's model list (links are in the example file). With `MODEL_PROVIDER=none`, AEGIS still runs research objectives that include explicit URLs, using a deterministic planner and extractor.
@@ -65,11 +85,11 @@ app/
   observability/ audit log (hash chain), metrics, health
   maintenance/   backups/restore, retention, environment report
   api/ dashboard/  authenticated JSON API and server-rendered iPad dashboard
-migrations/      SQLite schema (FTS5, foreign keys, indexes, append-only audit triggers)
+  migrations/    SQLite schema (FTS5, foreign keys, indexes, append-only audit triggers)
 deploy/          systemd unit, AppArmor profile for bubblewrap, sudoers example
 scripts/         install, uninstall, upgrade/rollback, backup, restore
 config/          sample research topics
-tests/           214 automated tests (unit, integration, security, end-to-end, crash)
+tests/           236 automated tests (unit, integration, security, end-to-end, crash)
 docs/            install, security, API, operations, troubleshooting, architecture, verification
 ```
 

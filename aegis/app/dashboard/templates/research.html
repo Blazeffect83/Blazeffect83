@@ -24,6 +24,30 @@
   {% endif %}
 </section>
 
+<section class="card"><h2>Deep research</h2>
+  <p class="muted small">Give AEGIS a topic and a time budget. It plans sub-questions, searches Wikipedia, OpenAlex (scholarly
+    abstracts){% if searx %}, SearXNG{% endif %}{% if brave %}, Brave web search{% endif %}, follows citations and relevant links,
+    hunts for corroboration, flags contradictions, and writes a cited report. Runs in the background — you can close the iPad.</p>
+  <form method="post" action="/research/deep" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Topic or research question <textarea name="topic" rows="2" required minlength="5" placeholder="e.g. Effects of intermittent fasting on insulin sensitivity"></textarea></label>
+    <div class="row wrap">
+      <label>Hours <input name="hours" type="number" step="0.25" min="0.25" max="48" value="2"></label>
+      <label>Max documents <input name="max_documents" type="number" min="5" max="5000" value="200"></label>
+      <label class="check"><input type="checkbox" name="stop_on_saturation" checked> stop early when nothing new is found</label>
+    </div>
+    <div class="row wrap small">Sources:
+      {% for s, label in [('wikipedia','Wikipedia'),('openalex','Scholarly (OpenAlex)'),('searxng','SearXNG'),('web','Web (Brave)'),('links','Follow links')] %}
+      <label class="check"><input type="checkbox" name="src_{{ s }}" checked> {{ label }}</label>{% endfor %}
+      <input type="hidden" name="sources_submitted" value="1">
+    </div>
+    <details><summary class="small">Limit to domains / add seed URLs</summary>
+      <label>Only these domains (one per line) <textarea name="allowed_domains" rows="2"></textarea></label>
+      <label>Seed URLs (one per line) <textarea name="seed_urls" rows="2"></textarea></label></details>
+    <button class="primary">Start deep research</button>
+  </form>
+</section>
+
 <section class="card"><h2>Topics</h2>
   <table class="list small"><thead><tr><th>Topic</th><th>Every</th><th>Last run</th><th>Next</th><th></th></tr></thead><tbody>
   {% for t in topics %}<tr><td><b>{{ t.name }}</b>{% if not t.enabled %} <span class="badge">disabled</span>{% endif %}<div class="muted">{{ t.description }}</div>

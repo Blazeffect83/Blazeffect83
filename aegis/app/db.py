@@ -146,12 +146,16 @@ class Database:
     def migrate(self) -> list[str]:
         if not self.migrations_dir:
             raise RuntimeError("migrations_dir not configured")
+        scripts = sorted(self.migrations_dir.glob("*.sql")) if self.migrations_dir.is_dir() else []
+        if not scripts:
+            # Never report "up to date" against an empty schema.
+            raise RuntimeError(f"no migration scripts found in {self.migrations_dir}")
         self.execute(
             "CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
         )
         applied = {r["version"] for r in self.query("SELECT version FROM schema_migrations")}
         done = []
-        for path in sorted(self.migrations_dir.glob("*.sql")):
+        for path in scripts:
             version = path.stem
             if version in applied:
                 continue

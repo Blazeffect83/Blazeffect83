@@ -6,7 +6,7 @@ This file separates **what has been verified** from **what still has to be verif
 
 The development host was a cloud container, **not the Pi**: Ubuntu 24.04.5 LTS, x86_64, kernel 6.18, 4 vCPU, 16 GB RAM, Python 3.13.16, SQLite 3.45.1 (FTS5), bubblewrap 0.9.0. No systemd as PID 1 and no Docker daemon.
 
-## Automated tests — 214 passing (`python -m pytest`, ~25 s)
+## Automated tests — 236 passing (`python -m pytest`, ~35 s)
 
 | File | Tests | Covers (spec Part 13) |
 |---|---|---|
@@ -17,6 +17,7 @@ The development host was a cloud container, **not the Pi**: Ubuntu 24.04.5 LTS, 
 | `test_tools_security.py` | 32 | frozen registry, tier-3 unregistrable, tool contracts, no permission-changing tools, tier decisions + escalation, out-of-scope objective screen, **approval bound to exact args / single-use / expiry**, file roundtrip, **path traversal (6 forms)**, **symlink escapes**, DB/logs unreachable, log/service allowlists, **sandbox: env secrets invisible, `.env`/DB/Docker socket invisible, uid 65534, network blocked, root FS read-only (host unaffected), host PIDs hidden, timeout kill, memory limit, output cap**, weak sandbox refused unless allowed, workdir confinement, pip argument injection, pytest result parsing |
 | `test_agent.py` | 22 | **coding objective: generate code → tests fail → diagnose from output → fix → tests pass → independent verification** (+ learning records), **state persists across restart**, research objective with no model, clear failure without a model, **approval gate blocks until approved, then executes once**, rejected approval never executes, expired approval re-requested, prohibited objective blocked before planning, disallowed tool rejected, plan repair, malicious plan arguments contained, clarification flow, **budget exhaustion pauses**, per-objective spend budget, pause/resume, cancel, time budget, replans exhausted, transient tool failure retried, provider outage deferral, model judge can force replan, **model cannot override a failed deterministic check** |
 | `test_operations.py` | 14 | **real SIGKILL mid-action**: non-idempotent step paused for review (not re-run); idempotent step resumed under a new idempotency key and completed; interrupted planning requeued; finished-but-unrecorded step not repeated; worker runs objectives and research without the dashboard; background thread lifecycle; research pause; **resource pressure pauses work and notifies**; failing topic back-off; **backup → verify → restore round trip**; corrupted backup detected and refused; rotation; retention keeps knowledge; maintenance tick; export and delete |
+| `test_deep_research.py` | 20 | concept relevance tiers, stemming, rarity-ranked extraction, reference links kept / comments dropped, **end-to-end campaign** (Wikipedia + OpenAlex APIs, citation links, snowballing via `cites:`, off-topic decoys never cited, every `[n]` citation resolves to a listed source, 80 °C vs 85 °C contradiction surfaced), document limit, **time budget finishes (not fails)**, **time slices + pause/resume never refetch**, **crash mid-slice → restart → completes without duplicates**, **long campaign does not starve other objectives**, domain allowlist, resource-pressure yield, diminishing-returns stop, **model questions + synthesis with fabricated citation stripped**, model budget exhaustion → deterministic fallback, injection page inert, Brave web-search provider (API key header), API + dashboard form/progress/report, study aims excluded, consensus signal ≠ corroboration |
 | `test_api.py` | 43 | **every API GET/POST route returns 401 without auth**; dashboard pages redirect; dashboard POSTs need auth; minimal public health; bearer tokens; **login rate limiting**; cookie flags; **CSRF required**; all 12 pages render with real data; approve/reject through the UI writes an audit record; security headers; body-size limit; input validation; logout and expired sessions; secrets never in the API; budget updates |
 
 The tests use scripted mock models and an in-process fake web. **No paid API calls, and no exploit is tried against a real third-party system.**
@@ -37,6 +38,31 @@ The tests use scripted mock models and an in-process fake web. **No paid API cal
 6. **Installer** (`install.sh --yes --no-systemd`) ran on the host: pre-flight, user creation, code copy, venv + pip install, config creation, data dir. Its first run stopped at `aegis init` because of the env-comment bug above, which is fixed. A second end-to-end run was blocked by the session's permission policy (system-wide install), so **a full successful run of the installer is not yet verified**. **`uninstall.sh --purge-data` was verified**: it removed the user, `/opt/aegis`, `/etc/aegis` and the data dir, and reported no units, crontab or processes.
 7. Lint: `ruff check app tests` is clean.
 8. **systemd hardening and bubblewrap:** a test reproduced that a `/proc` overmount, as created by `ProtectKernelTunables` and similar settings, makes `bwrap --proc` fail. Those directives are therefore excluded from the unit, with a comment explaining why.
+9. **Second verification round** (the 236-test suite):
+   * **Same suite in three more configurations:**
+     * Python **3.12.3** (Ubuntu 24.04's version) and **3.11**: 236/236.
+     * **Unprivileged uid 65534** with a clean systemd-style environment (`env -i`): 236/236. This run exercises real `RLIMIT_NPROC` and user-namespace mapping.
+     * **Non-editable wheel install**: verified (the way `install.sh` installs). It exposed that the migrations were not packaged: `aegis init` reported "up to date" on an empty database. Fixed by moving them into the package; a missing migrations directory is now a hard error.
+   * **Deep research against the real web** (Wikipedia, OpenAlex, public pages):
+     * "Thermal throttling and cooling of the Raspberry Pi 5" ran 8 times while relevance was tuned.
+     * "Effects of intermittent fasting on insulin sensitivity" ran on the **live service, started from the iPad form**. The service was gracefully stopped twice mid-campaign and restarted on new code; the campaign **resumed from its checkpoint** each time.
+   * **Kinks found and fixed in this round, each with a regression test:**
+     * topic drift onto pages sharing only the entity name;
+     * comment sections extracted as claims;
+     * junk "definitions";
+     * false numeric contradictions (years and model numbers);
+     * Wikipedia citation markers in claim text;
+     * reference-list links lost;
+     * the 15-claim cap dropping the most relevant sentences;
+     * a narrow claim-verb list;
+     * paper titles and study aims treated as findings;
+     * long pages accepted on scattered mentions;
+     * a zero-length time slice never progressing;
+     * a world-writable workspace;
+     * an `RLIMIT_NPROC` default too low for the web server's threads;
+     * a parser exception silently producing empty documents;
+     * a `--env-file` value needed for `serve`;
+     * an approval re-read.
 
 ## Definition of Done — status
 
@@ -56,7 +82,7 @@ The tests use scripted mock models and an in-process fake web. **No paid API cal
 | 12 | Dangerous operations blocked or gated | ✅ tests |
 | 13 | Dashboard authentication | ✅ tests and live |
 | 14 | Backups restore successfully | ✅ tests |
-| 15 | Automated tests pass | ✅ 214/214 |
+| 15 | Automated tests pass | ✅ 236/236 (also as non-root, on Python 3.11/3.12/3.13) |
 | 16 | Installation and maintenance docs | ✅ README + docs/ |
 | 17 | Clean stop and removal | ✅ uninstall verified on the host; ⏳ systemd unit removal on a systemd host |
 

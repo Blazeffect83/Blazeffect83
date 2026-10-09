@@ -23,6 +23,7 @@ SECRET_FIELDS = {
     "smtp_password",
     "api_token_hash",
     "admin_password_hash",
+    "brave_search_api_key",
 }
 
 
@@ -62,7 +63,7 @@ class Settings(BaseModel):
     workspace_dir: Path | None = None  # default: <data_dir>/workspace
     backup_dir: Path | None = None  # default: <data_dir>/backups
     log_dir: Path | None = None  # default: <data_dir>/logs
-    migrations_dir: Path = APP_ROOT / "migrations"
+    migrations_dir: Path = Path(__file__).resolve().parent / "migrations"
 
     # --- web ---------------------------------------------------------------
     bind_host: str = "127.0.0.1"
@@ -114,7 +115,7 @@ class Settings(BaseModel):
     sandbox_allow_weak: bool = False
     sandbox_timeout_seconds: int = 120
     sandbox_memory_mb: int = 512
-    sandbox_max_processes: int = 64
+    sandbox_max_processes: int = 128
     sandbox_max_file_mb: int = 50
     sandbox_python: str = ""  # default: interpreter running AEGIS
     package_index_url: str = "https://pypi.org/simple"
@@ -132,6 +133,9 @@ class Settings(BaseModel):
     research_max_docs_per_run: int = 25
     searxng_url: str = ""  # optional self-hosted metasearch
     research_use_model_extraction: bool = False
+    # Contact (e-mail or URL) sent to public APIs (OpenAlex "polite pool", User-Agent), per their policies.
+    research_contact: str = ""
+    brave_search_api_key: str = ""  # optional web-scale discovery for deep research
     primary_source_domains: list[str] = Field(
         default_factory=lambda: [
             "docs.python.org", "python.org", "kernel.org", "ubuntu.com",

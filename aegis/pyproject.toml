@@ -30,7 +30,7 @@ aegis = "app.cli:main"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["dashboard/templates/*.html", "dashboard/static/*"]
+app = ["dashboard/templates/*.html", "dashboard/static/*", "migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

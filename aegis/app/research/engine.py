@@ -14,7 +14,7 @@ from . import deduplicator as dd
 from . import injection
 from .extractor import extract_deterministic, extract_with_model
 from .fetcher import FetchError
-from .parser import parse
+from .parser import ParsedDocument, parse
 from .source_quality import score_source
 
 log = logging.getLogger(__name__)
@@ -32,6 +32,8 @@ class IngestOutcome:
     claims_reinforced: int = 0
     contradictions: int = 0
     new_sources: int = 0
+    links: list[tuple[str, str]] = field(default_factory=list)  # (url, anchor text) for link expansion
+    quality: float | None = None
 
 
 @dataclass
@@ -127,8 +129,9 @@ class ResearchEngine:
 
     # -- ingestion ----------------------------------------------------------
     def ingest_url(self, url: str, *, topic: dict | None = None, method: str = "manual",
-                   query: str | None = None, objective_id: str | None = None, refresh: bool = False) -> IngestOutcome:
-        allowed = (loads(topic["allowed_domains"], []) if topic else []) or None
+                   query: str | None = None, objective_id: str | None = None, refresh: bool = False,
+                   topic_name: str | None = None, allowed_domains: list[str] | None = None) -> IngestOutcome:
+        allowed = allowed_domains or (loads(topic["allowed_domains"], []) if topic else []) or None
         topic_id = topic["id"] if topic else None
         query = query if query is not None else (topic["query"] or topic["name"]) if topic else ""
         host = urlsplit(url).hostname or ""
@@ -154,52 +157,75 @@ class ResearchEngine:
             self.store.set_source_status(src["id"], "fetched", f"feed with {len(doc.feed_entries)} entries",
                                          res.status)
             return IngestOutcome(url, "feed", new_sources=new)
+        out = self.store_content(
+            src, url=url, final_url=res.final_url, content_type=res.content_type, http_status=res.status, doc=doc,
+            query=query, topic_name=topic_name or (topic["name"] if topic else None),
+            freshness_days=(topic or {}).get("freshness_days", 365), objective_id=objective_id)
+        if out.status in ("stored", "near_duplicate"):
+            out.links = [(u, doc.anchors.get(u, "")) for u in doc.links[:300]]
+        return out
 
+    def ingest_content(self, *, url: str, title: str, text: str, method: str, domain: str | None = None,
+                       published_at: str | None = None, author: str | None = None, query: str = "",
+                       topic_name: str | None = None, objective_id: str | None = None,
+                       content_type: str = "text/plain") -> IngestOutcome:
+        """Store content obtained from an official API (e.g. a paper abstract) with the
+        same dedupe, injection screening, extraction and scoring as fetched pages."""
+        src = self.store.upsert_source(url, domain or urlsplit(url).hostname or "", method, None)
+        if src["status"] in ("fetched", "duplicate"):
+            return IngestOutcome(url, "skipped", "already processed")
+        doc = ParsedDocument(title=title[:500], text=text, author=author, published_at=published_at, kind="api")
+        return self.store_content(src, url=url, final_url=url, content_type=content_type, http_status=200, doc=doc,
+                                  query=query, topic_name=topic_name, freshness_days=3650,
+                                  objective_id=objective_id, domain=domain)
+
+    def store_content(self, src: dict, *, url: str, final_url: str, content_type: str, http_status: int | None,
+                      doc: ParsedDocument, query: str, topic_name: str | None, freshness_days: int,
+                      objective_id: str | None, domain: str | None = None) -> IngestOutcome:
+        host = urlsplit(url).hostname or ""
         words = len(doc.text.split())
         if words < MIN_WORDS:
             self.store.set_source_status(src["id"], "rejected", f"too little readable text ({words} words)",
-                                         res.status)
+                                         http_status)
             return IngestOutcome(url, "rejected", "too little readable text")
 
         chash = dd.content_hash(doc.text)
         dup = self.store.document_by_hash(chash)
         if dup:
             self.store.set_source_status(src["id"], "duplicate", f"exact duplicate of document {dup['id']}",
-                                         res.status)
+                                         http_status)
             return IngestOutcome(url, "duplicate", f"duplicate of {dup['url']}", document_id=dup["id"])
 
         sh = dd.simhash(doc.text)
         near = next((i for i, h, _dom in self.store.recent_simhashes() if dd.is_near_duplicate(sh, h)), None)
         flags = injection.detect(doc.text, doc.hidden_text)
-        domain = urlsplit(res.final_url).hostname or host
+        domain = domain or urlsplit(final_url).hostname or host
 
         ext = extract_deterministic(doc.title, doc.text, doc.list_items, query)
         if self.settings.research_use_model_extraction and self.s.router.available:
             try:
-                ext = extract_with_model(self.s.router, doc.title, doc.text, res.final_url, query, ext)
+                ext = extract_with_model(self.s.router, doc.title, doc.text, final_url, query, ext)
             except ModelError as exc:
                 log.warning("model extraction unavailable (%s); using deterministic extraction", exc.error_class)
 
-        fresh_days = (topic or {}).get("freshness_days", 365)
-        q = score_source(url=res.final_url, domain=domain, text=doc.text, published_at=doc.published_at,
+        q = score_source(url=final_url, domain=domain, text=doc.text, published_at=doc.published_at,
                          author=doc.author, primary_domains=self.settings.primary_source_domains,
-                         relevance=ext.relevance, injection_flags=flags, freshness_days=fresh_days)
+                         relevance=ext.relevance, injection_flags=flags, freshness_days=freshness_days)
         doc_id = self.store.add_document(
-            source_id=src["id"], url=url, final_url=res.final_url, domain=domain, title=doc.title or ext.subject,
-            author=doc.author, published_at=doc.published_at, content_type=res.content_type, content_hash=chash,
+            source_id=src["id"], url=url, final_url=final_url, domain=domain, title=doc.title or ext.subject,
+            author=doc.author, published_at=doc.published_at, content_type=content_type, content_hash=chash,
             simhash=f"{sh:016x}", text=doc.text[:400_000], summary=ext.summary, subject=ext.subject,
             quality_score=q.score, quality_breakdown=q.breakdown, injection_flags=flags,
             near_duplicate_of=near, extraction=ext.as_dict())
-        topics = [topic["name"]] if topic else []
-        self.store.tag_document(doc_id, topics + ext.keywords[:5])
-        self.store.set_source_status(src["id"], "fetched", None, res.status)
+        self.store.tag_document(doc_id, ([topic_name] if topic_name else []) + ext.keywords[:5])
+        self.store.set_source_status(src["id"], "fetched", None, http_status)
 
-        out = IngestOutcome(url, "near_duplicate" if near else "stored", document_id=doc_id)
+        out = IngestOutcome(url, "near_duplicate" if near else "stored", document_id=doc_id, quality=q.score)
         # Suspected injection: keep the document for inspection but do not promote its claims.
         if not flags:
             for c in ext.claims:
                 r = self.store.add_claim(c.text, kind=c.kind, origin="source", document_id=doc_id,
-                                         passage=c.passage, topic=topic["name"] if topic else None,
+                                         passage=c.passage, topic=topic_name,
                                          independent=near is None, primary=q.is_primary)
                 if r["action"] == "created":
                     out.claims_created += 1

@@ -97,11 +97,11 @@ class Fetcher:
         rp = self._robots[origin]
         return True if rp is None else rp.can_fetch(self.user_agent, url)
 
-    def fetch(self, url: str, extra_allowed: list[str] | None = None) -> FetchResult:
-        return self._get(url, extra_allowed, check_robots=True)
+    def fetch(self, url: str, extra_allowed: list[str] | None = None, headers: dict | None = None) -> FetchResult:
+        return self._get(url, extra_allowed, check_robots=True, headers=headers)
 
     def _get(self, url: str, extra_allowed, *, check_robots: bool, accept_any_type: bool = False,
-             max_bytes: int | None = None) -> FetchResult:
+             max_bytes: int | None = None, headers: dict | None = None) -> FetchResult:
         max_bytes = max_bytes or self.max_bytes
         redirects: list[str] = []
         current = url
@@ -114,7 +114,9 @@ class Fetcher:
                 raise FetchError(f"robots.txt disallows {current}", "robots")
             self._pace(host)
             try:
-                with self._client.stream("GET", current) as resp:
+                # Request headers (e.g. an API key) go only to the original host, never across redirects.
+                hop_headers = headers if headers and urlsplit(current).hostname == urlsplit(url).hostname else None
+                with self._client.stream("GET", current, headers=hop_headers) as resp:
                     if resp.status_code in (301, 302, 303, 307, 308):
                         loc = resp.headers.get("location")
                         if not loc:

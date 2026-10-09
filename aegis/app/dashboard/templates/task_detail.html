@@ -27,8 +27,28 @@
   </div>
   {% if o.success_criteria %}<h3>Success criteria</h3><ul>{% for c in o.success_criteria %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
   {% if o.constraints %}<h3>Constraints</h3><ul>{% for c in o.constraints %}<li>{{ c }}</li>{% endfor %}</ul>{% endif %}
-  {% if o.completion_summary %}<h3>Report</h3><pre class="report">{{ o.completion_summary }}</pre>{% endif %}
+  {% if o.kind != 'deep_research' and o.completion_summary %}<h3>Report</h3><pre class="report">{{ o.completion_summary }}</pre>{% endif %}
 </section>
+
+{% if o.kind == 'deep_research' and o.campaign %}{% set c = o.campaign %}
+<section class="card">
+  <div class="row between wrap"><h2>Deep research</h2>
+    <a class="chip" href="/tasks/{{ o.id }}/report">{{ 'Open report' if o.status == 'COMPLETED' else 'Interim report' }}</a></div>
+  <progress class="meter" max="100" value="{{ [c.percent_time, 100]|min }}" title="{{ c.percent_time }}% of the time budget"></progress>
+  <p class="small">{{ c.active_hours }} h of {{ c.budget_hours }} h active research · {{ c.stats.stored }} documents stored
+    ({{ c.stats.get('off_topic', 0) }} off-topic, not cited) · {{ c.stats.claims_created }} claims · {{ c.stats.contradictions }} contradictions ·
+    {{ c.domains }} domains · {{ c.stats.queries_run }} searches · {{ c.frontier_size }} candidates queued
+    {% if c.stop_reason %}<br><b>Stopped:</b> {{ c.stop_reason }}{% endif %}
+    {% if c.model_disabled %}<br><span class="warn">Model budget reached — continuing deterministically.</span>{% endif %}</p>
+  <div class="grid two">
+    <div><h3>Sub-questions</h3>{% for q in c.subquestions %}<div class="small">• {{ q }}</div>{% else %}<p class="muted small">none yet</p>{% endfor %}
+      {% if c.queued_queries %}<h3>Next searches</h3>{% for q in c.queued_queries %}<div class="small muted">{{ q }}</div>{% endfor %}{% endif %}</div>
+    <div><h3>Activity</h3><pre class="small">{% for l in c.log|reverse %}{{ l }}
+{% endfor %}</pre></div>
+  </div>
+  {% if o.status == 'COMPLETED' %}<div class="md">{{ o.completion_summary|markdown }}</div>{% endif %}
+</section>
+{% endif %}
 
 <section class="card"><h2>Plan &amp; steps</h2>
   {% if o.plan and o.plan.rationale %}<p class="muted">{{ o.plan.rationale }}</p>{% endif %}

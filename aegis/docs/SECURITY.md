@@ -60,6 +60,8 @@ Escape attempts that fail in the tests: reading env secrets, reading the data di
 * Limits on response size, connect and read timeouts and content types. Proxies from the environment are ignored, robots.txt is respected, and requests to each domain are paced.
 * Domain allowlists and blocklists apply globally (`RESEARCH_ALLOWED_DOMAINS`) and per topic. The optional SearXNG backend may live on the LAN, so it gets a pinned-origin policy that allows exactly that scheme, host and port.
 
+**Deep-research discovery** uses only official APIs (Wikimedia, OpenAlex, Brave, your SearXNG) through the same SSRF-safe fetcher. robots.txt is respected; this is why Wikipedia's `/w/api.php` and arXiv's export API are not used. API keys are sent only to the host they belong to, never across redirects. Every discovered URL passes the same policy checks as any other fetch.
+
 ## Prompt injection
 
 * Research processing never has tool access. A web page cannot cause a tool call, an approval or a config change (test: `test_prompt_injection_page_is_inert`).

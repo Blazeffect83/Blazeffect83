@@ -21,7 +21,7 @@ from ..observability.health import health_report
 from ..scheduler import schedules
 from ..security.approvals import ApprovalError
 from .authentication import SESSION_COOKIE
-from .schemas import BudgetIn, ClarifyIn, LoginIn, ObjectiveIn, ResolveIn, TopicIn, TopicPatch
+from .schemas import BudgetIn, ClarifyIn, DeepResearchIn, LoginIn, ObjectiveIn, ResolveIn, TopicIn, TopicPatch
 
 BUDGET_KEYS = ("daily_spend_limit_usd", "research_daily_spend_limit_usd", "max_requests_per_hour",
                "max_tokens_per_objective")
@@ -217,6 +217,32 @@ def build_router() -> APIRouter:
             raise HTTPException(404, "topic not found")
         schedules.update_topic(s.db, tid, next_run_at="1970-01-01T00:00:00+00:00")
         return {"ok": True, "detail": "scheduled for the next worker cycle"}
+
+    @r.post("/api/research/deep", status_code=201)
+    def deep_research(body: DeepResearchIn, request: Request, who: str = Depends(principal)):
+        params = body.model_dump(exclude={"topic", "priority", "budget_usd"})
+        try:
+            oid = ObjectiveManager(services(request)).create(
+                body.topic, kind="deep_research", priority=body.priority, budget_usd=body.budget_usd,
+                research_params=params, actor=who)
+        except ObjectiveError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return {"id": oid}
+
+    @r.get("/api/objectives/{oid}/report")
+    def objective_report(oid: str, request: Request, who: str = Depends(principal)):
+        s = services(request)
+        o = s.db.one("SELECT * FROM objectives WHERE id = ?", (oid,))
+        if not o:
+            raise HTTPException(404, "objective not found")
+        if o["kind"] == "deep_research":
+            from ..research.campaign import Campaign
+            text = o["completion_summary"] if o["status"] == "COMPLETED" and o["completion_summary"] \
+                else Campaign(s).report(o, final=False)
+        else:
+            text = o["completion_summary"] or "No report yet."
+        return PlainTextResponse(text, media_type="text/markdown",
+                                 headers={"content-disposition": f"inline; filename=aegis-{oid}.md"})
 
     @r.post("/api/research/{action}")
     def research_toggle(action: str, request: Request, who: str = Depends(principal)):

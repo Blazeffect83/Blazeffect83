@@ -146,6 +146,17 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_research(args) -> int:
+    from .agent.objectives import ObjectiveManager
+    s = _services(args)
+    params = {"hours": args.hours, "max_documents": args.max_documents,
+              "allowed_domains": args.domain or [], "seed_urls": args.seed or []}
+    oid = ObjectiveManager(s).create(args.topic, kind="deep_research", priority=6, research_params=params, actor="cli")
+    print(f"deep research queued: {oid} ({args.hours:g} h budget). The running service picks it up; "
+          f"follow it on the dashboard under Tasks, or: curl /api/objectives/{oid}/report")
+    return 0
+
+
 def cmd_export(args) -> int:
     s = _services(args)
     data = s.knowledge.export()
@@ -180,6 +191,13 @@ def main(argv: list[str] | None = None) -> int:
     lt.set_defaults(fn=cmd_load_topics)
     sub.add_parser("verify-audit", help="verify the audit log hash chain").set_defaults(fn=cmd_verify_audit)
     sub.add_parser("status", help="print the health report").set_defaults(fn=cmd_status)
+    rs = sub.add_parser("research", help="start a deep research campaign on a topic")
+    rs.add_argument("topic")
+    rs.add_argument("--hours", type=float, default=2.0)
+    rs.add_argument("--max-documents", type=int, default=200)
+    rs.add_argument("--domain", action="append", help="restrict to this domain (repeatable)")
+    rs.add_argument("--seed", action="append", help="seed URL (repeatable)")
+    rs.set_defaults(fn=cmd_research)
     ex = sub.add_parser("export-knowledge", help="export knowledge as JSON")
     ex.add_argument("out")
     ex.set_defaults(fn=cmd_export)
