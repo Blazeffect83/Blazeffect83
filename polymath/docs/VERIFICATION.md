@@ -23,11 +23,11 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** All automated tests pass (`pytest`), including:
+- **Tests:** 232 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
-- **Coverage:** ≥ 90 % (exact figure in the final run below) of statements and branches (`pytest --cov=polymath`).
+- **Coverage:** 93 % of statements and branches (`pytest --cov=polymath`).
 - **Lint and types:** `ruff check`, `ruff format --check` and `mypy --strict` (package and scripts) are clean.
 - **Purity:**
   - `tests/test_purity.py` imports every runtime module and fails on any third-party import other than numpy.
@@ -110,7 +110,42 @@ The corpora are synthetic Zipf-distributed text and power-law graphs, so the siz
 
 ## 6. Learning on real data (phases 6–8)
 
-_The full offline learning run on the real learning copy is in progress; results are added when it completes._
+This was run on the **learning copy**: the real phase-2 sample, reprocessed offline by the real agent loop
+(`scripts/learn_offline.py --full`), plus the live Wikidata property bootstrap.
+
+| what | result |
+|---|---|
+| documents read and indexed | 6,931 (443 near-duplicates set aside) |
+| entities / aliases | 162,768 / 184,053 |
+| sourced facts (Wikidata + infoboxes) | 76,790 (13,266 from infoboxes) |
+| Wikidata property records read | 13,315 of 13,930 located; 15,098 of 15,101 predicates named |
+| rules learned | 210 inverse, 13 transitive, 6 symmetric (declared by the properties), 41 domain (statistics) |
+| facts inferred by forward chaining | 19,917 |
+| disputed facts | 1,115 |
+| entity linker, Wikipedia-anchor validation | precision 0.909, recall 0.875 |
+| **self-quiz on held-out facts** | **22 / 27 = 81.5 %** (95 % Wilson CI 63–92 %), chance 25 %; P(≥ 22 by chance) ≈ 1e-9 |
+| quiz answers by deciding evidence | related facts 18/19, embedding 3/4, no evidence 1/4 |
+| learned evidence weights (leave-one-out on 100 visible facts) | related 0.61, embedding 0.51, text 0.02, association 0.00, graph 3.0 (prior; a hidden fact never counts directly) |
+| calibration fit | log-likelihood −0.57 vs −1.39 for chance; 83 % training accuracy |
+
+**Reading the quiz honestly.**
+- **Sample size.** It is only 27 questions. The phase-2 sample holds 1,000 Wikidata items, and only held-out
+  facts whose subject *and* answer have names can be asked. On the Pi, reading the full dump makes this grow
+  by orders of magnitude.
+- **Where the answers come from.** Most correct answers come from *other* facts the agent knows, for example
+  an inverse relation or a part-of chain. That is reasoning over its own graph, not text understanding.
+- **Before the fix.** The earlier run, before the property bootstrap and the link predictor, scored **12/50 =
+  24 %**, which is chance. That run is kept in the database as quiz #1.
+
+**Curiosity on real data.** Topic priorities are non-zero once PageRank precedes them. The top topics were
+the Gutenberg bookshelf "Novels" (0.97), "Days of August", "Days of April" (Wikipedia date categories) and
+"American Literature". Each one shows its gap × importance × novelty breakdown in `polymath why`.
+
+**Answers on real data** (no network):
+- "When was Albert Einstein born?" → 1879-03-14, citing the Wikipedia article.
+- "What is the population of Brazil?" → 214,211,951, citing Wikidata.
+- "What is the capital of Belgium?" → "Q239 (an entity whose name I have not read yet)". Brussels' record is
+  not in the 1,000-item sample, and the agent says so instead of guessing.
 
 ## 7. Dashboard in a real browser
 
