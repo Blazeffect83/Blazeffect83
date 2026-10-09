@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Example Tech News</title>
+<item><title>Pi storage guide</title><link>https://www.raspberrypi.com/docs/storage</link><pubDate>Mon, 01 Jun 2026 10:00:00 GMT</pubDate><description>&lt;p&gt;Storage &amp;amp; cooling&lt;/p&gt;</description></item>
+<item><title>Build log</title><link>https://blog.example.org/pi5-build</link><pubDate>Tue, 02 Jun 2026 10:00:00 GMT</pubDate><description>A home server build.</description></item>
+</channel></rss>

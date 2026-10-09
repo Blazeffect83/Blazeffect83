@@ -1,0 +1,6 @@
+# OPTIONAL. Only if you want the approval-gated service_restart tool to work.
+# Install with: sudo visudo -f /etc/sudoers.d/aegis   (and add a systemd drop-in
+# setting NoNewPrivileges=no — see docs/SECURITY.md). List each service explicitly;
+# never use wildcards.
+# aegis ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
+# aegis ALL=(root) NOPASSWD: /usr/bin/systemctl restart ollama

@@ -1,0 +1,56 @@
+# /etc/systemd/system/aegis.service — installed by scripts/install.sh
+[Unit]
+Description=AEGIS autonomous research & execution agent
+Documentation=file:///opt/aegis/README.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=aegis
+Group=aegis
+Environment=AEGIS_ENV_FILE=/etc/aegis/aegis.env
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/var/lib/aegis
+ExecStart=/opt/aegis/.venv/bin/aegis serve
+# Graceful stop: SIGTERM → worker finishes the current step boundary, then exits.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=10
+
+# ---- resource limits (Raspberry Pi 5 friendly; tune in a drop-in) ----
+MemoryHigh=1G
+MemoryMax=1536M
+CPUQuota=300%
+TasksMax=256
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+
+# ---- hardening ----
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/aegis
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+UMask=0027
+# Deliberately NOT set: ProtectKernelTunables, ProtectKernelLogs, ProtectProc,
+# ProcSubset, RestrictNamespaces. They over-mount /proc or forbid user
+# namespaces, which prevents bubblewrap from creating the sandbox's private
+# /proc (verified: "Can't mount proc on /newroot/proc").
+# NoNewPrivileges=yes also blocks sudo, so the approval-gated service_restart
+# tool is inert unless you opt in (docs/SECURITY.md, "Service control").
+
+[Install]
+WantedBy=multi-user.target

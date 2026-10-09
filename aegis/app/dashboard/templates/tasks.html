@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% from "_status.html" import badge %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Submit an objective</h2>
+  <form method="post" action="/tasks" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Goal <textarea name="goal" rows="3" required minlength="5" placeholder="Describe what you want achieved. The agent plans the steps."></textarea></label>
+    <div class="row wrap">
+      <label>Kind <select name="kind"><option>general</option><option>research</option><option>coding</option><option>monitor</option></select></label>
+      <label>Priority <input name="priority" type="number" min="1" max="9" value="5"></label>
+      <label>Budget USD <input name="budget_usd" type="number" step="0.01" min="0" placeholder="optional"></label>
+      <label>Time budget (min) <input name="time_budget_minutes" type="number" min="1" placeholder="default"></label>
+    </div>
+    <label>Success criteria <span class="muted small">(one per line)</span><textarea name="success_criteria" rows="2" placeholder="All tests pass&#10;Report cites at least 3 official sources"></textarea></label>
+    <label>Constraints <span class="muted small">(one per line)</span><textarea name="constraints" rows="2" placeholder="Use only the Python standard library"></textarea></label>
+    <label>Allowed tools <span class="muted small">(blank = all; space separated)</span><input name="allowed_tools" placeholder="{{ tools|join(' ') }}"></label>
+    <button class="primary">Submit objective</button>
+  </form>
+</section>
+<section class="card">
+  <div class="row between wrap"><h2>Objectives</h2>
+    <div class="row wrap small">{% for s in ['', 'QUEUED','RUNNING','WAITING_FOR_APPROVAL','PAUSED','COMPLETED','FAILED','CANCELLED'] %}<a href="/tasks{{ '?status=' ~ s if s }}" class="chip {{ 'on' if (status or '') == s }}">{{ s or 'all' }}</a>{% endfor %}</div></div>
+  <table class="list"><thead><tr><th>Status</th><th>Goal</th><th>Kind</th><th>Updated</th></tr></thead><tbody>
+  {% for x in objectives %}<tr><td>{{ badge(x.status) }}</td><td><a href="/tasks/{{ x.id }}">{{ x.goal[:140] }}</a><div class="muted small">{{ x.status_reason or '' }}</div></td><td>{{ x.kind }}</td><td class="small">{{ x.updated_at }}</td></tr>
+  {% else %}<tr><td colspan="4" class="muted">No objectives.</td></tr>{% endfor %}
+  </tbody></table>
+</section>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Report{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="row between wrap"><h1>Research report</h1>
+    <form method="get" class="row"><select name="hours">{% for h in [24, 72, 168, 720] %}<option value="{{ h }}" {{ 'selected' if hours==h }}>{{ h }} h</option>{% endfor %}</select><button>Show</button>
+    <a class="chip" href="/api/reports/daily?hours={{ hours }}&format=markdown">Export Markdown</a><a class="chip" href="/api/reports/daily?hours={{ hours }}">Export JSON</a></form></div>
+  <p class="muted small">All counts are computed from database records.</p>
+  <pre class="report">{{ md }}</pre>
+</section>
+{% endblock %}

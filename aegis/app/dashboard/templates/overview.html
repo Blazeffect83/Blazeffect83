@@ -1,0 +1,48 @@
+{% extends "base.html" %}{% from "_status.html" import badge %}
+{% block title %}Overview{% endblock %}
+{% block bodyattrs %}data-refresh="20"{% endblock %}
+{% block content %}
+<div class="grid kpis">
+  <div class="kpi"><div class="k">Agent</div><div class="v">{% if o.agent.stopping %}stopping{% elif o.agent.running_objectives %}working{% else %}idle{% endif %}</div>
+    <div class="muted small">{{ o.agent.running_objectives|length }} running{% if not o.agent.resource_ok %} · <b class="warn">resources paused</b>{% endif %}</div></div>
+  <div class="kpi"><div class="k">Approvals</div><div class="v"><a href="/approvals">{{ o.pending_approvals }}</a></div><div class="muted small">pending</div></div>
+  <div class="kpi"><div class="k">CPU / Mem</div><div class="v">{{ o.metrics.cpu_percent if o.metrics else '–' }}% / {{ o.metrics.memory_percent if o.metrics else '–' }}%</div>
+    <div class="muted small">{% if o.metrics and o.metrics.cpu_temp_c %}{{ o.metrics.cpu_temp_c }} °C{% else %}temp n/a{% endif %}</div></div>
+  <div class="kpi"><div class="k">Disk free</div><div class="v">{{ ((o.metrics.disk_free_mb or 0)/1024)|round(1) if o.metrics else '–' }} GB</div><div class="muted small">{{ o.metrics.disk_percent if o.metrics else '–' }}% used</div></div>
+  <div class="kpi"><div class="k">Model</div><div class="v small">{{ o.model.provider }}</div><div class="muted small">{{ o.model.model or 'no model set' }}{% if o.model.local_only %} · local only{% endif %}{% if not o.model.available %} · <b class="warn">unavailable</b>{% endif %}</div></div>
+  <div class="kpi"><div class="k">API spend today</div><div class="v">${{ '%.4f'|format(o.usage.spent_today) }}</div><div class="muted small">limit ${{ '%.2f'|format(o.usage.daily_limit) }}{% if o.usage.estimate %} · estimate{% endif %}</div></div>
+  <div class="kpi"><div class="k">Knowledge</div><div class="v">{{ o.research.documents }} docs</div><div class="muted small">{{ o.research.claims }} claims · {{ o.research.open_contradictions }} contradictions</div></div>
+  <div class="kpi"><div class="k">Research</div><div class="v">{{ 'paused' if o.research.paused else 'active' }}</div><div class="muted small">{{ o.research.topics }} topics</div></div>
+</div>
+
+<section class="card">
+  <div class="row between"><h2>New objective</h2><a href="/tasks" class="small">advanced options →</a></div>
+  <form method="post" action="/tasks" class="row wrap">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="goal" placeholder="e.g. Research and compare local LLM runtimes for Raspberry Pi 5" class="grow" required minlength="5">
+    <select name="kind"><option>general</option><option>research</option><option>coding</option><option>monitor</option></select>
+    <button class="primary">Submit</button>
+  </form>
+</section>
+
+<div class="grid two">
+<section class="card"><h2>Active</h2>
+  {% for x in o.active %}<a class="item" href="/tasks/{{ x.id }}">{{ badge(x.status) }} {{ x.goal[:120] }}<div class="muted small">{{ x.status_reason }}</div></a>
+  {% else %}<p class="muted">Nothing running.</p>{% endfor %}
+</section>
+<section class="card"><h2>Waiting / paused</h2>
+  {% for x in o.waiting %}<a class="item" href="/tasks/{{ x.id }}">{{ badge(x.status) }} {{ x.goal[:120] }}<div class="muted small">{{ x.status_reason }}</div></a>
+  {% else %}<p class="muted">Nothing waiting.</p>{% endfor %}
+</section>
+<section class="card"><h2>Recently finished</h2>
+  {% for x in o.recent %}<a class="item" href="/tasks/{{ x.id }}">{{ badge(x.status) }} {{ x.goal[:120] }}<div class="muted small">{{ x.finished_at }}</div></a>
+  {% else %}<p class="muted">No finished objectives yet.</p>{% endfor %}
+</section>
+<section class="card"><div class="row between"><h2>Notifications</h2>
+  <form method="post" action="/system/notifications/read" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost small">mark all read</button></form></div>
+  {% for n in notes %}<div class="item {{ 'unread' if not n.read }}"><span class="badge l-{{ n.level }}">{{ n.level }}</span> {{ n.title }}<div class="muted small">{{ n.body[:200] }} · {{ n.created_at }}</div></div>
+  {% else %}<p class="muted">No notifications.</p>{% endfor %}
+</section>
+</div>
+{% if o.sandbox.backend != 'bwrap' %}<div class="flash err">Sandbox: {{ o.sandbox.backend }} — {{ o.sandbox.detail }}</div>{% endif %}
+{% endblock %}

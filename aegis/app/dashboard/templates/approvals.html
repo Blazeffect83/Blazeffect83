@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Approvals{% endblock %}
+{% block bodyattrs %}data-refresh="30"{% endblock %}
+{% block content %}
+<section class="card"><h2>Pending approvals</h2>
+{% for a in pending %}
+  <article class="approval">
+    <div class="row between wrap"><h3><code>{{ a.tool }}</code></h3><span class="muted small">expires {{ a.expires_at }}</span></div>
+    <dl>
+      <dt>Why it is needed</dt><dd>{{ a.reason }}</dd>
+      <dt>Affected</dt><dd>{{ a.affected }}</dd>
+      <dt>Potential consequences</dt><dd>{{ a.consequences }}</dd>
+      <dt>Reversible</dt><dd>{{ 'yes' if a.reversible else 'NO' }}</dd>
+      <dt>Exact operation</dt><dd><pre>{{ a.operation }}</pre></dd>
+      <dt>Arguments</dt><dd><pre>{{ a.args|pretty }}</pre></dd>
+      <dt>Permission scope</dt><dd>{{ a.scope }}</dd>
+      <dt>Objective</dt><dd><a href="/tasks/{{ a.objective_id }}">{{ a.objective_id }}</a></dd>
+    </dl>
+    <div class="row">
+      <form method="post" action="/approvals/{{ a.id }}/approve" class="inline" data-confirm="Approve exactly this action once?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Approve once</button></form>
+      <form method="post" action="/approvals/{{ a.id }}/reject" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Reject</button></form>
+    </div>
+  </article>
+{% else %}<p class="muted">No pending approvals.</p>{% endfor %}
+</section>
+<section class="card"><h2>History</h2>
+<table class="list small"><thead><tr><th>Created</th><th>Tool</th><th>Status</th><th>By</th><th>Decided</th></tr></thead><tbody>
+{% for a in history %}<tr><td>{{ a.created_at }}</td><td>{{ a.tool }}</td><td>{{ a.status }}</td><td>{{ a.decided_by or '' }}</td><td>{{ a.decided_at or '' }}</td></tr>
+{% else %}<tr><td class="muted" colspan="5">none</td></tr>{% endfor %}</tbody></table>
+</section>
+{% endblock %}

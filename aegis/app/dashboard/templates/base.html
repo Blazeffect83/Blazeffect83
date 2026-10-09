@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="AEGIS">
+<meta name="theme-color" content="#0f1720">
+<title>{% block title %}AEGIS{% endblock %} · AEGIS</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon.svg">
+<script src="/static/app.js" defer></script>
+</head>
+<body {% block bodyattrs %}{% endblock %}>
+{% if active != 'login' %}
+<header class="top">
+  <a class="brand" href="/">AEGIS</a>
+  <nav>
+    <a href="/" class="{{ 'on' if active == 'overview' }}">Overview</a>
+    <a href="/tasks" class="{{ 'on' if active in ('tasks','task_detail') }}">Tasks</a>
+    <a href="/research" class="{{ 'on' if active in ('research','document','claim','report') }}">Research</a>
+    <a href="/approvals" class="{{ 'on' if active == 'approvals' }}">Approvals</a>
+    <a href="/system" class="{{ 'on' if active == 'system' }}">System</a>
+  </nav>
+  <form method="post" action="/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost">Sign out</button></form>
+</header>
+{% endif %}
+<main>
+{% if request.query_params.get('msg') %}<div class="flash ok">{{ request.query_params.get('msg') }}</div>{% endif %}
+{% if request.query_params.get('err') %}<div class="flash err">{{ request.query_params.get('err') }}</div>{% endif %}
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>
