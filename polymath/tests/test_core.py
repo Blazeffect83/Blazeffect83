@@ -644,3 +644,20 @@ def test_cli_enqueue_uses_inbox_while_agent_runs(tmp_path, capsys):
     assert cli.main(["--config", str(tmp_path / "polymath.toml"), "enqueue", "noop", "--key", "via"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["queued_via"] == "inbox" and (cfg.paths.data_dir / "inbox" / out["file"]).exists()
+
+
+def test_ready_stats_and_housekeeping(db):
+    now = [1_000_000.0]
+    s = Scheduler(db, clock=lambda: now[0])
+    s.enqueue("a", {}, key="a1")
+    s.enqueue("b", {}, key="b1", not_before=now[0] + 60)
+    st = s.ready_stats(["a", "b", "c"])
+    assert st.ready_by_kind == {"a": 1} and st.ready == 1
+    jid, _ = s.ensure_recurring("r", 3600)
+    db.execute("UPDATE jobs SET state='done', updated=? WHERE id=?", (now[0], jid))
+    one, _ = s.enqueue("dump", {}, key="download:x")
+    db.execute("UPDATE jobs SET state='done', updated=? WHERE id=?", (now[0], one))
+    db.execute("INSERT INTO cycles(started, ended, status) VALUES(?, ?, 'done')", (now[0], now[0]))
+    now[0] += 100 * 86400
+    assert s.purge() == {"jobs": 1, "cycles": 1}
+    assert db.scalar("SELECT COUNT(*) FROM jobs WHERE key='download:x'") == 1  # one-shot idempotency kept

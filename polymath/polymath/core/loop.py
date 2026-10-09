@@ -246,7 +246,8 @@ class Agent:
                     planner(self)
                 except Exception:
                     log.exception("planner failed", extra={"planner": getattr(planner, "__name__", "?")})
-        return Observation(now=now, body=self.body.observe(), queue=self.scheduler.stats(), cycle=self.cycle_no)
+        queue = self.scheduler.ready_stats(self.registry.kinds())
+        return Observation(now=now, body=self.body.observe(), queue=queue, cycle=self.cycle_no)
 
     def cycle(self) -> CycleRecord:
         started = time.time()

@@ -128,6 +128,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
     reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
+    reg("body.housekeeping", maintenance.housekeeping_job, "Prune old job and cycle records", action="maintain")
     reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")

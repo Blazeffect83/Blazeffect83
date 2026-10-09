@@ -229,6 +229,31 @@ class Scheduler:
         st.ready = sum(st.ready_by_kind.values())
         return st
 
+    def ready_stats(self, kinds: Iterable[str]) -> QueueStats:
+        """What the loop needs every cycle — which kinds have a ready job — in one index seek per kind.
+
+        ``stats()`` counts the whole table; on a queue that has run for months that would make every cycle
+        slower. ``ready_by_kind`` values here are 1 ("at least one"), not counts."""
+        now = self.clock()
+        st = QueueStats()
+        for kind in kinds:
+            if self.db.scalar(
+                "SELECT 1 FROM jobs WHERE kind=? AND state='queued' AND not_before<=? LIMIT 1", (kind, now)
+            ):
+                st.ready_by_kind[kind] = 1
+        st.ready = len(st.ready_by_kind)
+        return st
+
+    def purge(self, *, recurring_days: float = 7.0, cycles_days: float = 90.0) -> dict[str, int]:
+        """Housekeeping: finished jobs of past recurring windows (their keys are never reused) and old cycle
+        records. One-shot jobs stay: their done rows are what makes them idempotent (a dump is read once)."""
+        now = self.clock()
+        jobs = self.db.execute(
+            "DELETE FROM jobs WHERE state='done' AND key LIKE '%@%' AND updated < ?", (now - recurring_days * 86400,)
+        ).rowcount
+        cycles = self.db.execute("DELETE FROM cycles WHERE ended < ?", (now - cycles_days * 86400,)).rowcount
+        return {"jobs": int(jobs), "cycles": int(cycles)}
+
     def claimable(self, kinds: Iterable[str]) -> bool:
         """Is a job of one of ``kinds`` ready right now?"""
         ks = list(kinds)

@@ -231,6 +231,13 @@ def evict_job(ctx: JobContext) -> JobOutcome:
     return JobOutcome(done=True, value=0.05, result=result)
 
 
+def housekeeping_job(ctx: JobContext) -> JobOutcome:
+    """Job ``body.housekeeping`` (daily): prune finished recurring jobs (> 7 days) and cycle records (> 90 days)."""
+    res = ctx.scheduler.purge()
+    return JobOutcome(done=True, value=0.01, result=res)
+
+
 def planner(agent: Any) -> None:
     hour = agent.config.body.backup_hour
     agent.scheduler.ensure_recurring("body.backup", 86400, priority=3.0, phase=local_phase(hour))
+    agent.scheduler.ensure_recurring("body.housekeeping", 86400, priority=3.0, phase=local_phase((hour + 2) % 24))
