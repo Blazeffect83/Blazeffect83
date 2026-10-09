@@ -42,20 +42,98 @@ class Components:
     planners: list[tuple[float, Planner]] = field(default_factory=list)
 
 
-def build_components(config: Config, db: Database) -> Components:
+def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
+    from polymath.drive import jobs as djobs
+    from polymath.memory import jobs as memjobs
+    from polymath.memory.documents import DocumentStore
+    from polymath.perception import embed_jobs as ejobs
+    from polymath.perception import jobs as pjobs
+    from polymath.reasoning import jobs as rjobs
+    from polymath.senses import books_qa, crawler, dumpfiles, feeds, scholarly, sources, wikidata, wikipedia
+    from polymath.senses.net import client_from_config
+
+    http = client_from_config(config.senses)
+    docs = DocumentStore(db)
+    sources.register_sources(docs)
+    allow = list(config.senses.crawl_allow_domains) or sorted(
+        {crawler.host_of(u) for u in config.senses.seeds if crawler.host_of(u)}
+    )
+    crawl = crawler.Crawler(
+        db,
+        http,
+        docs,
+        user_agent=http.user_agent,
+        allow_domains=allow,
+        max_bytes=config.senses.crawl_max_bytes,
+        rate=config.senses.crawl_rate,
+    )
     registry = JobRegistry()
-    registry.register("noop", noop_handler, "No-op job used for loop acceptance tests")
-    return Components(registry=registry)
+    reg = registry.register
+    reg("noop", noop_handler, "No-op job used for loop acceptance tests")
+    reg("sources.plan", sources.plan_sources, "Resolve current dumps and feed every source pipeline", action="plan")
+    reg("dump.download", dumpfiles.download_job, "Resumable download of a dump file", action="download")
+    reg("wikipedia.part", wikipedia.ingest_part, "Read Wikipedia multistream dump streams", action="read", heavy=True)
+    reg("wikidata.dump", wikidata.ingest_dump, "Read Wikidata entity dump blocks", action="read", heavy=True)
+    reg("openalex.ingest", scholarly.ingest_openalex, "Read an OpenAlex works file", action="read", heavy=True)
+    reg("pubmed.ingest", scholarly.ingest_pubmed, "Read a PubMed XML file", action="read", heavy=True)
+    reg("gutenberg.books", books_qa.gutenberg_job, "Fetch Project Gutenberg books", action="read")
+    reg("stackexchange.ingest", books_qa.ingest_stackexchange, "Read Stack Exchange posts", action="read", heavy=True)
+    reg("feeds.poll", feeds.feeds_job, "Poll RSS/Atom feeds", action="crawl")
+    reg("crawl.step", crawler.crawl_job, "Polite crawl of the frontier", action="crawl")
+    reg("memory.index", memjobs.index_documents, "Index passages, near-duplicates and topics", action="memorize")
+    reg("memory.graph", memjobs.build_graph, "Build the knowledge graph from Wikidata", action="memorize")
+    reg("memory.topics", memjobs.maintain_topics, "Maintain the hierarchical topic map", action="memorize")
+    reg("perception.anchors", pjobs.anchor_job, "Harvest Wikipedia links, profiles, infoboxes", action="perceive")
+    reg("perception.automaton", pjobs.automaton_job, "Compile the alias automaton", action="perceive", heavy=True)
+    reg(
+        "perception.read",
+        pjobs.read_job,
+        "Read documents: sentences, entities, contexts",
+        action="perceive",
+        heavy=True,
+    )
+    reg("perception.train_sentences", pjobs.train_sentences_job, "Learn sentence boundaries", action="learn")
+    reg("perception.train_phrases", pjobs.train_phrases_job, "Learn phrases (NPMI)", action="learn")
+    reg("perception.train_linker", pjobs.train_linker_job, "Train the entity linker", action="learn", heavy=True)
+    reg("perception.relations", pjobs.relations_job, "Bootstrap relation patterns", action="learn", heavy=True)
+    reg("embed.train", ejobs.train_job, "Train word embeddings (SGNS)", action="learn", heavy=True)
+    reg("embed.docs", ejobs.embed_docs_job, "Embed documents and entities (SIF)", action="learn")
+    reg("embed.rebuild", ejobs.rebuild_index_job, "Rebuild the IVF vector indexes", action="learn", heavy=True)
+    reg("embed.quality", ejobs.quality_job, "Graph-generated embedding quality checks", action="evaluate")
+    reg("reason.rules", rjobs.rules_job, "Learn inference rules and type constraints", action="reason")
+    reg("reason.infer", rjobs.infer_job, "Forward-chain new facts", action="reason", heavy=True)
+    reg("reason.contradictions", rjobs.contradictions_job, "Detect contradictions", action="reason")
+    reg("reason.reliability", rjobs.reliability_job, "Learn source reliability", action="reason")
+    reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
+    reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
+    reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
+    services: dict[str, Any] = {"http": http, "docs": docs, "crawler": crawl}
+    plan: list[tuple[float, Planner]] = (
+        [
+            (60.0, sources.planner),
+            (20.0, memjobs.planner),
+            (30.0, pjobs.planner),
+            (60.0, ejobs.planner),
+            (120.0, rjobs.planner),
+            (300.0, djobs.planner),
+        ]
+        if planners
+        else []
+    )
+    return Components(registry=registry, services=services, planners=plan)
 
 
-def build_agent(config: Config, *, notifier: Notifier | None = None) -> Agent:
+def build_agent(config: Config, *, notifier: Notifier | None = None, planners: bool = True) -> Agent:
     check_storage(config)
     db = open_database(config.paths.db_path)
-    comps = build_components(config, db)
+    comps = build_components(config, db, planners=planners and config.loop.planners)
+    from polymath.drive.bandit import BanditPolicy
+
     return Agent(
         config,
         db,
         comps.registry,
+        policy=BanditPolicy(db),
         notifier=notifier,
         services=comps.services,
         planners=comps.planners,

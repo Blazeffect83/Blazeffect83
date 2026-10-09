@@ -21,6 +21,7 @@ from typing import Any, Protocol
 
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.body.systemd_notify import Notifier
+from polymath.core import inbox
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
@@ -210,6 +211,12 @@ class Agent:
 
     def observe(self) -> Observation:
         now = time.time()
+        try:
+            n = inbox.ingest(self.db, self.scheduler, self.config.paths.data_dir)
+            if n:
+                log.info("inbox requests applied", extra={"count": n})
+        except Exception:
+            log.exception("inbox ingestion failed")
         for i, (interval, planner) in enumerate(self.planners):
             if now >= self._planner_due[i]:
                 self._planner_due[i] = now + interval

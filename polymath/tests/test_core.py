@@ -610,3 +610,37 @@ def test_build_agent(config):
     agent = build_agent(config)
     assert "noop" in agent.registry.kinds()
     agent.db.close()
+
+
+# ------------------------------------------------------------------- inbox
+
+
+def test_inbox_requests_are_ingested_by_the_agent(config, db):
+    from polymath.core import inbox
+
+    agent = _agent(config, db)
+    p = inbox.submit(config.paths.data_dir, {"type": "enqueue", "kind": "noop", "payload": {"x": 1}, "key": "k1"})
+    inbox.submit(config.paths.data_dir, {"type": "enqueue", "kind": "noop", "payload": {"x": 1}, "key": "k1"})
+    (inbox.inbox_dir(config.paths.data_dir) / "zz-bad.json").write_text("{not json")
+    (inbox.inbox_dir(config.paths.data_dir) / "zz-odd.json").write_text('{"type": "enqueue"}')
+    with pytest.raises(ValueError):
+        inbox.submit(config.paths.data_dir, {"type": "rm -rf"})
+    assert p.exists()
+    rec = agent.cycle()
+    assert rec.status == "done" and rec.kind == "noop"
+    assert db.scalar("SELECT COUNT(*) FROM jobs WHERE key='k1'") == 1  # idempotent
+    assert not list(inbox.inbox_dir(config.paths.data_dir).glob("*.json"))
+    assert inbox.ingest(db, agent.scheduler, config.paths.data_dir / "nowhere") == 0
+
+
+def test_cli_enqueue_uses_inbox_while_agent_runs(tmp_path, capsys):
+    make_config(tmp_path)
+    cfg = load_config(tmp_path / "polymath.toml", env={})
+    assert cli.main(["--config", str(tmp_path / "polymath.toml"), "init"]) == 0
+    capsys.readouterr()
+    db = Database(cfg.paths.db_path)
+    db.kv_set("heartbeat", {"ts": time.time(), "cycle": 1, "state": "running"})
+    db.close()
+    assert cli.main(["--config", str(tmp_path / "polymath.toml"), "enqueue", "noop", "--key", "via"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["queued_via"] == "inbox" and (cfg.paths.data_dir / "inbox" / out["file"]).exists()

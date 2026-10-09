@@ -59,6 +59,7 @@ class LoopConfig:
     retry_base: float = 30.0  # seconds; exponential backoff base for failed jobs
     retry_cap: float = 6 * 3600.0
     heartbeat_stale: float = 60.0
+    planners: bool = True  # autonomous planning of source/learning work (off in tests)
 
 
 @dataclass
@@ -106,7 +107,7 @@ class LearningConfig:
     embedding_min_count: int = 5
     embedding_vocab_max: int = 200_000
     index_nlist: int = 0  # 0 → sqrt(N) chosen automatically
-    index_nprobe: int = 16
+    index_nprobe: int = 32
     holdout_fraction: float = 0.05
     quiz_size: int = 50
 

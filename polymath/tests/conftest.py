@@ -23,6 +23,7 @@ require_separate_mount = false
 
 [loop]
 idle_sleep = 0.05
+planners = false
 retry_base = 0.01
 
 [body]
