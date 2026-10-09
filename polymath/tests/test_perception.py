@@ -8,6 +8,7 @@ import random
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -508,3 +509,18 @@ def test_perception_planner_bootstrap_order_and_reread(config, db):
     assert pj.maybe_reread(db) == 0
     db.kv_set("alias_automaton", {"patterns": 250, "aliases_total": 1, "built": time.time()})
     assert pj.maybe_reread(db) == 3 and db.scalar("SELECT MAX(stage) FROM documents") == 1
+
+
+def test_linker_precision_on_200_hand_labelled_held_out_sentences():
+    """Phase 4 acceptance record: 200 sentences from real documents the linker never trained on (feeds, web,
+    papers, abstracts, Q&A, books — no Wikipedia), linked by the trained model on the real learning database,
+    each predicted link labelled correct/incorrect by the AI developer (see docs/VERIFICATION.md)."""
+    fixture = Path(__file__).parent / "fixtures" / "linker_eval_200.jsonl"
+    rows = [json.loads(x) for x in fixture.read_text().splitlines()]
+    assert len(rows) == 200 and len({r["sentence"] for r in rows}) == 200
+    assert "wikipedia" not in {r["source"] for r in rows}
+    links = [k for r in rows for k in r["links"]]
+    assert all(isinstance(k["correct"], bool) and k["mention"] and k["entity"] for k in links)
+    assert all(k["mention"] in r["sentence"] for r in rows for k in r["links"])
+    precision = sum(k["correct"] for k in links) / len(links)
+    assert len(links) == 362 and precision >= 0.85

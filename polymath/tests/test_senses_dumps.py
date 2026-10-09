@@ -769,3 +769,27 @@ def test_cli_sample_and_sources_commands(tmp_path, web, monkeypatch, capsys):
     assert cli.main(["--config", str(cfg), "sources"]) == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     assert {x["name"] for x in lines} >= {"wikipedia", "gutenberg"} and all(x["license"] for x in lines)
+
+
+def test_targeted_reading_by_title(config, db, web, monkeypatch):
+    """wikipedia.titles: read just the streams holding specific articles (curiosity / `polymath learn`)."""
+    serve_wikipedia(web, 9)
+    monkeypatch.setattr(wikipedia, "DUMPS", web.base)
+    part = wikipedia.resolve_multistream(client(), "en")[0]
+    lines = bz2.decompress(B.wiki_multistream(wiki_pages(9), per_stream=2)[1]).decode().splitlines()
+    ctx = ctx_for(config, db, "x", {}, {"http": client(), "docs": DocumentStore(db)})
+    wikipedia.store_title_index(ctx, "en", part.dump_url, lines, multistream_ranges(lines, part.size))
+    assert db.scalar("SELECT COUNT(*) FROM wiki_index WHERE lang='en'") == 12
+    store = DocumentStore(db)
+    payload = {"titles": ["Country 3", "Country 4", "Old name", "Nowhere"], "lang": "en"}
+    reads_before = len(web.log)
+    out = wikipedia.fetch_titles(ctx_for(config, db, "wikipedia.titles", payload, {"http": client(), "docs": store}))
+    assert out.done and out.result["not_in_index"] == 1 and out.result["streams"] == 2
+    assert out.result["stored"] >= 2 and store.count("wikipedia") == out.result["stored"]
+    assert db.scalar("SELECT target FROM wiki_redirects WHERE title='Old name'") == "Country 1"
+    ranged = [h for _t, _m, p, h in web.log[reads_before:] if p.endswith("d1.bz2")]
+    assert len(ranged) == 2 and all(h.get("range") for h in ranged)  # only the two streams, by range
+    again = wikipedia.fetch_titles(
+        ctx_for(config, db, "wikipedia.titles", payload, {"http": client(), "docs": store}, checkpoint=out.checkpoint)
+    )
+    assert again.result["stored"] == 0  # streams already read are skipped on resume

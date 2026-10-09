@@ -1,0 +1,92 @@
+# Architecture
+
+Polymath is one Python process (`polymath run`, started by `polymath.service`) plus a read-only dashboard
+process (`polymath dashboard`). Both share one SQLite database in WAL mode on the NVMe drive.
+
+```
+                 ┌────────────────────────── polymath.service (Type=notify, watchdog 120 s) ──────────────────────────┐
+  dumps, feeds,  │                                                                                                    │
+  crawler  ────► │  SENSES ──► MEMORY ──► PERCEPTION ──► EMBEDDINGS ──► REASONING ──► DRIVE ──► EVALUATION         │
+                 │    │          │            │               │              │           │          │               │
+                 │    └──────────┴────────────┴───────────────┴──────────────┴───────────┴──────────┘               │
+                 │                    every unit of work is a *job slice* in one durable queue                       │
+                 │                                                                                                    │
+                 │   OBSERVE (body, inbox, planners) → DECIDE (bandit) → ACT (one slice) → INTEGRATE → EVALUATE → LEARN │
+                 └──────────────────────────────────────┬─────────────────────────────────────────────────────────────┘
+                                                        │ SQLite WAL  /srv/polymath/db/polymath.sqlite3
+                 polymath-dashboard.service ◄───────────┘ (read-only; the ask box runs the offline answerer)
+```
+
+## The loop (`core/loop.py`)
+
+Each cycle:
+
+1. **OBSERVE.** The body guard reads temperature, load, memory and disk, and pings the Minecraft server. Then:
+   - inbox requests from the CLI or dashboard are applied;
+   - due planners run. Planners are cheap, network-free functions that keep recurring work queued.
+2. **DECIDE.** The Thompson-sampling bandit (`drive/bandit.py`) picks an *action group* (read, perceive, learn,
+   reason, crawl, plan, evaluate, maintain…) for the current context: body mode × day/night × backlog.
+   - Jobs with priority ≥ 2.9 (housekeeping) go first.
+   - In `yield`/`throttle` mode only light jobs are eligible.
+   - In `pause` mode nothing runs, except eviction when the disk is full.
+3. **ACT.** One bounded *slice* of the chosen job runs, with a budget of 15 s × intensity.
+   - Every slice must make progress.
+   - Long handlers call `ctx.tick()`, which feeds the systemd watchdog and touches the heartbeat pulse file.
+4. **INTEGRATE, EVALUATE, LEARN.** These happen **in the same transaction** as the slice:
+   - the handler's writes;
+   - the job's checkpoint or completion;
+   - the cycle record;
+   - the heartbeat;
+   - the bandit's reward update (value per CPU second).
+
+   A power cut therefore loses at most the uncommitted slice, and the job resumes from its last checkpoint.
+
+## The job queue (`core/scheduler.py`)
+
+- **SQLite table.** Jobs have an idempotency key, priority, `not_before`, a JSON checkpoint, attempts and crashes.
+- **Recurring work.** `ensure_recurring(kind, interval, phase)` enqueues one job per time window; the key is the window's slot.
+- **Failures:**
+  - Failed slices back off exponentially.
+  - A job whose process died mid-slice three times is dead-lettered, so one poisonous input cannot crash-loop the Pi.
+- **Inbox.** Other processes never write to the database while the agent runs. They drop JSON files into
+  `<data>/inbox/` instead, and the agent applies them inside its own transaction (`core/inbox.py`).
+
+## Modules
+
+| package | responsibility |
+|---|---|
+| `core` | config, logging (JSON to journald), database and migrations, scheduler, loop, app assembly |
+| `body` | sensors, systemd notify/watchdog, guard (thermal, disk, Minecraft), backups, eviction |
+| `senses` | HTTP client (SSRF-safe, resumable ranges), dump readers, bz2 block seeking, 7z, feeds, crawler, robots.txt |
+| `memory` | documents (lzma bodies), passages + FTS5, near-duplicates, knowledge graph with provenance, topic map, IVF vector index |
+| `perception` | tokenizer, Porter stemmer, Punkt sentences, NPMI phrases, Aho–Corasick, entity linker, infoboxes, TextRank, relation patterns, SGNS embeddings |
+| `reasoning` | source reliability (truth discovery), contradictions, rule learning + forward chaining, link prediction |
+| `drive` | PageRank, topic priorities (curiosity), targeted reading, user-requested learning, the bandit |
+| `evaluation` | held-out facts, quizzes, nightly report |
+| `interface` | CLI, answering engine, dashboard |
+
+## Storage layout (`/srv/polymath`)
+
+```
+db/polymath.sqlite3      the only database (WAL); migrations in polymath/core/migrations
+index/                   alias automaton (.npz), embeddings (w_in/w_out .npy), IVF generations (memmaps)
+raw/                     dump files being downloaded/read; deleted once consumed
+backups/                 polymath-YYYYmmdd-HHMMSS.sqlite3.xz, newest 7 kept
+reports/                 nightly report-YYYY-MM-DD.md / .json
+inbox/                   requests from the CLI and dashboard
+heartbeat                pulse file (mtime) touched by the agent while it works
+```
+
+## Process boundaries and safety
+
+- **Agent unit:**
+  - It runs as the unprivileged `polymath` user.
+  - `ProtectSystem=strict` leaves only `/srv/polymath` writable, and it has no access to home directories.
+  - Limits: `CPUQuota=200%`, `MemoryMax=3G`, `Nice=10`, best-effort IO class 7.
+  - `RequiresMountsFor=/srv/polymath`: it cannot start if the NVMe drive is missing.
+- **Dashboard:**
+  - It opens the database with `mode=ro`.
+  - `/health` is 200 only when the database opens and the agent's heartbeat is under 60 s old.
+  - Every other method than GET/HEAD and `POST /api/ask` returns 405.
+  - A strict Content-Security-Policy is set, request bodies are capped at 4 KB, and `/api/ask` is limited to 20 requests per minute per client.
+- **Outbound HTTP** only reaches public addresses. The resolved IP is pinned at connect time, so DNS rebinding cannot reach the LAN.
