@@ -81,7 +81,32 @@ The crawl ran at ≤ 1 request/s per host, honouring robots.txt. No job ended de
 
 `python scripts/benchmark.py --scale full`, development container. See `the benchmark output` for the raw JSON.
 
-_Full-scale run in progress; numbers are added when it completes._
+| area | measurement | result |
+|---|---|---|
+| loop | no-op cycle overhead, 20k jobs queued | 2.949 ms (339.1 cycles/s) |
+| loop | enqueue | 83,999/s |
+| senses | wikitext → clean text | 156.9 pages/s (2.63 MB/s) |
+| senses | bz2 block decode (own block reader) vs stdlib stream | 108.52 vs 51.78 MB/s |
+| senses | HTML main-text extraction | 3,267.9 pages/s |
+| senses | 7z (LZMA) decode | 1,436.5 MB/s |
+| memory | index 10,000 docs → 71,147 passages | 465.9 docs/s |
+| memory | full-text top-10 | p50 6.93 ms, p95 28.74 ms |
+| memory | graph neighbours (top 50), 997,931 triples | p50 0.19 ms, p95 0.36 ms |
+| perception | tokenize / sentence split | 4.6 / 4.5 M chars/s |
+| perception | Porter stemmer | 148,613 words/s |
+| perception | Aho–Corasick, 200,000 patterns | build 0.38 s; 771,371 tokens/s |
+| embeddings | SGNS training | 271,176 pairs/s (dim 128) |
+| embeddings | IVF, 1,000,000 vectors, 1000 lists | build 10.0 s; top-10 p50 3.56 ms, p95 7.08 ms; recall@10 0.955 |
+| reasoning | forward chaining (transitive, 49,999 facts) | 349,616 inferred in 24.35 s (14,360/s) |
+| reasoning | truth discovery, 50k facts | 0.72 s |
+| drive | PageRank, 2,000,000 nodes / 10,000,000 edges | 1.86 s |
+| drive | bandit decision | p50 0.05 ms |
+| evaluation | link prediction per quiz question (fixture) | 2.6 ms |
+| dashboard | /api/overview, POST /api/ask | p50 1.68 ms, 1.55 ms |
+| body | guard observe | p50 0.02 ms |
+| body | backup (590.4 MB DB): copy + quick_check + xz | 35.37 s (16.7 MB/s) |
+
+The corpora are synthetic Zipf-distributed text and power-law graphs, so the sizes match the spec. The IVF data is clustered. The container was also running the live Wikidata property read, so treat these as conservative.
 
 ## 6. Learning on real data (phases 6–8)
 
