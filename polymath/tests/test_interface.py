@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import time
 
@@ -74,6 +75,8 @@ def test_answers_admit_ignorance_instead_of_guessing(db):
     assert unknown.render().startswith("I don't know yet.")
     gdp = a.ask("What is the GDP of Country03?")  # known subject, unknown relation: no off-topic passage
     assert gdp.statements == [] and "have not learned its GDP" in gdp.note.replace("gdp", "GDP")
+    where = a.ask("Where is Country01?")
+    assert where.statements == [] and where.note == "I know about Country01 but have not learned where it is yet."
     vague = a.ask("is the of and")
     assert vague.statements == [] and vague.confidence == 0.0
 
@@ -112,6 +115,7 @@ def test_disputed_and_inferred_facts_are_labelled(db):
 def test_render_value_kinds(db):
     kb = build(db)
     assert render_value(db, kb.cities[0], "") == "Capitol00"
+    assert render_value(db, kb.graph.stub("Q239"), "") == "Q239 (an entity whose name I have not read yet)"
     assert render_value(db, 0, json.dumps({"time": "1969-07-20"})) == "1969-07-20"
     assert render_value(db, 0, json.dumps({"amount": 2.5, "unit": "km"})) == "2.5 km"
     assert render_value(db, 0, json.dumps({"amount": 12, "unit": "Q6256"})) == "12 country"
@@ -256,8 +260,15 @@ def test_health_reflects_heartbeat(dash):
     assert status == 200 and json.loads(body)["cycle"] == 42
     beat(cfg, age=cfg.loop.heartbeat_stale + 5)
     assert req(port, "GET", "/health")[0] == 503
-    beat(cfg, state="stopped")
+    pulse = cfg.paths.data_dir / "heartbeat"
+    pulse.touch()  # a long job slice: the database heartbeat is old, but the agent's pulse file is fresh
+    assert req(port, "GET", "/health")[0] == 200
+    old = time.time() - cfg.loop.heartbeat_stale - 5
+    os.utime(pulse, (old, old))
     assert req(port, "GET", "/health")[0] == 503
+    pulse.touch()
+    beat(cfg, state="stopped")
+    assert req(port, "GET", "/health")[0] == 503  # a clean stop is never "healthy", whatever the pulse says
     assert req(port, "HEAD", "/health")[2] == b""
 
 

@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import FrameType
 from typing import Any, Protocol
 
@@ -38,6 +39,7 @@ class BodyState:
     reasons: list[str] = field(default_factory=list)
     vitals: Vitals | None = None
     players_online: int | None = None
+    allow: list[str] = field(default_factory=list)  # job kinds that may still run while paused (maintenance)
 
 
 class Body(Protocol):
@@ -107,6 +109,10 @@ class CycleRecord:
 Planner = Callable[["Agent"], None]
 
 
+def heartbeat_path(config: Config) -> Path:
+    return config.paths.data_dir / "heartbeat"
+
+
 class Agent:
     def __init__(
         self,
@@ -139,6 +145,7 @@ class Agent:
         self.cycle_no = int(db.scalar("SELECT MAX(id) FROM cycles", default=0))
         self.started = False
         self.last: CycleRecord | None = None
+        self._pulsed = -1e18
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -205,9 +212,24 @@ class Agent:
     # ------------------------------------------------------------------- cycle
     def _tick(self) -> None:
         self.notifier.watchdog()
+        self._pulse()
+
+    def _pulse(self, *, force: bool = False) -> None:
+        """Touch ``<data_dir>/heartbeat``: proof of life that does not wait for the slice's transaction to commit
+        (a long backup or quiz holds one), so the dashboard's /health stays truthful during long work."""
+        now = time.monotonic()
+        if not force and now - self._pulsed < 5.0:
+            return
+        self._pulsed = now
+        path = heartbeat_path(self.config)
+        try:
+            path.touch(exist_ok=True)
+        except OSError:  # pragma: no cover - data dir unwritable; the database heartbeat still works
+            return
 
     def _heartbeat(self, state: str) -> None:
         self.db.kv_set("heartbeat", {"ts": time.time(), "cycle": self.cycle_no, "state": state})
+        self._pulse(force=True)
 
     def observe(self) -> Observation:
         now = time.time()
@@ -232,8 +254,11 @@ class Agent:
         obs = self.observe()  # OBSERVE
         self.services["observation"] = obs
         if obs.body.mode == "pause":
-            return self._quiet_cycle("paused", obs, ", ".join(obs.body.reasons))
-        decision = self.policy.decide(obs, self.registry)  # DECIDE
+            if not obs.body.allow or not self.scheduler.claimable(obs.body.allow):
+                return self._quiet_cycle("paused", obs, ", ".join(obs.body.reasons))
+            decision = Decision(kinds=list(obs.body.allow), action="maintenance", reason="paused: maintenance only")
+        else:
+            decision = self.policy.decide(obs, self.registry)  # DECIDE
         job = self.scheduler.claim(decision.kinds)
         if job is None:
             return self._quiet_cycle("idle", obs, decision.reason)

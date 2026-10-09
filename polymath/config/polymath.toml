@@ -40,14 +40,16 @@ max_redirects = 5
 allow_private_networks = false
 wikipedia_lang = "en"
 wikipedia_parts = 1
-wikidata_max_bytes = 2000000000
+wikidata_max_bytes = 0              # 0 = the whole dump
 openalex_files = 2
 pubmed_files = 2
 gutenberg_books = 200
 stackexchange_sites = ["ai", "datascience", "cs"]
 feeds = []
 seeds = []
-crawl_allow_domains = []
+crawl_allow_domains = []           # empty: the seeds' own hosts
+default_feeds = true               # no feeds above → the built-in list of public feeds
+default_seeds = true               # no seeds above → the built-in reference sites
 
 [learning]
 embedding_dim = 128

@@ -59,6 +59,11 @@ class QueueStats:
     ready_by_kind: dict[str, int] = field(default_factory=dict)
 
 
+def local_phase(hour: int, *, now: float | None = None) -> float:
+    """``ensure_recurring`` phase (seconds after UTC midnight) for a daily job at local ``hour``, DST-aware."""
+    return (hour * 3600 - time.localtime(now).tm_gmtoff) % 86400
+
+
 class Scheduler:
     def __init__(
         self,
@@ -223,6 +228,19 @@ class Scheduler:
             st.ready_by_kind[str(row["kind"])] = int(row["n"])
         st.ready = sum(st.ready_by_kind.values())
         return st
+
+    def claimable(self, kinds: Iterable[str]) -> bool:
+        """Is a job of one of ``kinds`` ready right now?"""
+        ks = list(kinds)
+        if not ks:
+            return False
+        return bool(
+            self.db.scalar(
+                f"SELECT 1 FROM jobs WHERE state='queued' AND not_before<=? AND kind IN ({','.join('?' * len(ks))}) "
+                "LIMIT 1",
+                (self.clock(), *ks),
+            )
+        )
 
     def next_wakeup(self) -> float | None:
         value = self.db.scalar("SELECT MIN(not_before) FROM jobs WHERE state='queued'")

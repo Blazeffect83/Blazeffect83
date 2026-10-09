@@ -89,7 +89,7 @@ class SensesConfig:
     allow_private_networks: bool = False  # tests only; never enable in production
     wikipedia_lang: str = "en"
     wikipedia_parts: int = 1  # how many multistream part files to schedule
-    wikidata_max_bytes: int = 2_000_000_000
+    wikidata_max_bytes: int = 0  # 0 = read the whole dump (it resumes across restarts)
     openalex_files: int = 2
     pubmed_files: int = 2
     gutenberg_books: int = 200
@@ -97,6 +97,8 @@ class SensesConfig:
     feeds: list[str] = field(default_factory=list)
     seeds: list[str] = field(default_factory=list)
     crawl_allow_domains: list[str] = field(default_factory=list)
+    default_feeds: bool = True  # with no feeds configured, follow the built-in list of public feeds
+    default_seeds: bool = True  # with no seeds configured, crawl the built-in list of reference sites
 
 
 @dataclass

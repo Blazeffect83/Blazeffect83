@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from polymath.core.jobs import JobContext, JobOutcome
+from polymath.core.scheduler import local_phase
 from polymath.evaluation.quiz import mark_holdout, run_quiz
 from polymath.evaluation.report import write_report
 from polymath.reasoning.link_prediction import LinkPredictor, WordVectors, calibrate
@@ -51,4 +52,4 @@ def planner(agent: Any) -> None:
     s.ensure_recurring("eval.holdout", 1800, priority=3.0)  # before reasoning can see new facts
     s.ensure_recurring("eval.quiz", 6 * 3600, priority=1.0)
     hour = agent.config.body.backup_hour
-    s.ensure_recurring("eval.report", 86400, priority=3.0, phase=((hour + 1) % 24) * 3600 - time.timezone)
+    s.ensure_recurring("eval.report", 86400, priority=3.0, phase=local_phase((hour + 1) % 24))

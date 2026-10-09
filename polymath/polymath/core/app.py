@@ -43,6 +43,7 @@ class Components:
 
 
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
+    from polymath.body import maintenance
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
     from polymath.evaluation import jobs as vjobs
@@ -67,6 +68,10 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     http = client_from_config(config.senses)
     docs = DocumentStore(db)
     sources.register_sources(docs)
+    if not config.senses.feeds and config.senses.default_feeds:
+        config.senses.feeds = list(sources.SAMPLE_FEEDS)
+    if not config.senses.seeds and config.senses.default_seeds:
+        config.senses.seeds = list(sources.SAMPLE_SEEDS)
     allow = list(config.senses.crawl_allow_domains) or sorted(
         {crawler.host_of(u) for u in config.senses.seeds if crawler.host_of(u)}
     )
@@ -122,6 +127,8 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
+    reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
+    reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
@@ -137,6 +144,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (120.0, rjobs.planner),
             (300.0, djobs.planner),
             (300.0, vjobs.planner),
+            (600.0, maintenance.planner),
         ]
         if planners
         else []
@@ -148,6 +156,7 @@ def build_agent(config: Config, *, notifier: Notifier | None = None, planners: b
     check_storage(config)
     db = open_database(config.paths.db_path)
     comps = build_components(config, db, planners=planners and config.loop.planners)
+    from polymath.body.guard import Guard
     from polymath.drive.bandit import BanditPolicy
 
     return Agent(
@@ -155,6 +164,7 @@ def build_agent(config: Config, *, notifier: Notifier | None = None, planners: b
         db,
         comps.registry,
         policy=BanditPolicy(db),
+        body=Guard(config, db),
         notifier=notifier,
         services=comps.services,
         planners=comps.planners,

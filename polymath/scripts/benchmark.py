@@ -37,6 +37,7 @@ def _config(tmp: Path) -> Any:
     f.write_text(
         f'[paths]\ndata_dir = "{tmp / "data"}"\nrequire_separate_mount = false\n'
         "[loop]\nidle_sleep = 0.01\n[body]\nminecraft_check = false\n"
+        "[senses]\ndefault_feeds = false\ndefault_seeds = false\n"
     )
     return load_config(f, env={})
 
@@ -239,10 +240,320 @@ def bench_memory(tmp: Path, scale: str) -> Result:
     return out
 
 
+def bench_perception(tmp: Path, scale: str) -> Result:
+    import random
+
+    from polymath.perception.ahocorasick import TokenAutomaton
+    from polymath.perception.sentences import SentenceSplitter, train_model
+    from polymath.perception.stem import stem
+    from polymath.perception.tokenize import words
+
+    corpus = _zipf_corpus(400 if scale == "small" else 2000)
+    text = " ".join(corpus)
+    t0 = time.perf_counter()
+    toks = [w for d in corpus for w in words(d)]
+    tok_rate = len(text) / (time.perf_counter() - t0)
+    uniq = sorted(set(toks))
+    t0 = time.perf_counter()
+    for w in uniq:
+        stem(w)
+    stem_rate = len(uniq) / (time.perf_counter() - t0)
+    splitter = SentenceSplitter(train_model(corpus[:200]))
+    t0 = time.perf_counter()
+    n_sent = sum(len(splitter.split(d)) for d in corpus)
+    split_rate = len(text) / (time.perf_counter() - t0)
+    rng = random.Random(2)
+    n_pat = 20_000 if scale == "small" else 200_000
+    auto = TokenAutomaton()
+    for _ in range(n_pat):
+        auto.add([rng.choice(uniq) for _ in range(rng.randint(1, 3))])
+    t0 = time.perf_counter()
+    auto.build()
+    build_s = time.perf_counter() - t0
+    stream = toks[:200_000]
+    t0 = time.perf_counter()
+    hits = sum(1 for _ in auto.finditer(stream))
+    scan_rate = len(stream) / (time.perf_counter() - t0)
+    return {
+        "tokenize_chars_per_s": round(tok_rate),
+        "porter_words_per_s": round(stem_rate),
+        "sentences": n_sent,
+        "sentence_split_chars_per_s": round(split_rate),
+        "automaton_patterns": n_pat,
+        "automaton_build_s": round(build_s, 2),
+        "automaton_tokens_per_s": round(scan_rate),
+        "automaton_hits": hits,
+    }
+
+
+def bench_embeddings(tmp: Path, scale: str) -> Result:
+    import numpy as np
+
+    from polymath.memory.vector_index import IVFIndex
+    from polymath.perception.embeddings import SGNS, Vocab
+    from polymath.perception.tokenize import words
+
+    corpus = _zipf_corpus(500 if scale == "small" else 3000)
+    sents = [[w.lower() for w in words(d)] for d in corpus]
+    counts: dict[str, int] = {}
+    for s_ in sents:
+        for w in s_:
+            counts[w] = counts.get(w, 0) + 1
+    vocab_words = sorted(counts, key=lambda w: -counts[w])
+    model = SGNS(Vocab(vocab_words, np.array([counts[w] for w in vocab_words])), dim=128, seed=1)
+    c, o = model.pairs([model.encode(s_) for s_ in sents], 5)
+    t0 = time.perf_counter()
+    model.train_pairs(c, o, lr=0.025, batch=4096)
+    sgns_rate = c.size / (time.perf_counter() - t0)
+    n = 100_000 if scale == "small" else 1_000_000
+    dim = 128
+    rng = np.random.default_rng(4)
+    centres = rng.normal(size=(1000, dim)).astype(np.float32)
+    labels = rng.integers(0, 1000, n)
+    x = centres[labels] + 0.35 * rng.normal(size=(n, dim)).astype(np.float32)
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    idx = IVFIndex(tmp / "ivf", dim)
+    t0 = time.perf_counter()
+    for a in range(0, n, 100_000):
+        idx.add(np.arange(a, min(n, a + 100_000), dtype=np.int64), x[a : a + 100_000])
+    info = idx.rebuild()
+    build_s = time.perf_counter() - t0
+    queries = rng.integers(0, n, 200)
+    lat, recall = [], []
+    for qi in queries:
+        q = x[qi] + 0.05 * rng.normal(size=dim).astype(np.float32)
+        t0 = time.perf_counter()
+        got = idx.search(q, 10, nprobe=32)
+        lat.append(time.perf_counter() - t0)
+        qn = q / np.linalg.norm(q)
+        exact = set(np.argpartition(-(x @ qn), 10)[:10].tolist())
+        recall.append(len(exact & {i for i, _s in got}) / 10)
+    return {
+        "sgns_pairs": int(c.size),
+        "sgns_pairs_per_s": round(sgns_rate),
+        "ivf_vectors": n,
+        "ivf_lists": info.get("nlist"),
+        "ivf_build_s": round(build_s, 1),
+        "ivf_top10": _percentiles(lat),
+        "ivf_recall_at_10": round(float(np.mean(recall)), 3),
+    }
+
+
+def bench_reasoning(tmp: Path, scale: str) -> Result:
+    import random
+
+    from polymath.memory.graph import KnowledgeGraph
+    from polymath.reasoning.contradictions import functional_predicates_all
+    from polymath.reasoning.inference import forward_chain, learn_rules
+    from polymath.reasoning.reliability import truth_discovery
+
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    g = KnowledgeGraph(db)
+    n = 5000 if scale == "small" else 50000
+    rng = random.Random(5)
+    with db.transaction():
+        part = g.predicate("P361", "part of")
+        p31 = g.predicate("P31", "instance of")
+        trans = g.upsert_entity("Q18647515", "transitive property")
+        prop = g.upsert_entity("P361", "part of", kind="property")
+        g.add_triple(prop, p31, o=trans, kind="wikidata", source="wikidata")
+        ents = [g.upsert_entity(f"Q{100 + i}", f"Place {i}") for i in range(n)]
+        for i in range(1, n):  # a forest of part-of chains (depth ~ log n)
+            g.add_triple(ents[i], part, o=ents[rng.randrange(max(0, i - 50), i)], kind="wikidata", source="wikidata")
+    t0 = time.perf_counter()
+    with db.transaction():
+        rules = learn_rules(db)
+    rules_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    with db.transaction():
+        fc = forward_chain(db, max_new=20 * n)
+    fc_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    with db.transaction():
+        td = truth_discovery(db, functional=functional_predicates_all(db))
+    td_s = time.perf_counter() - t0
+    out = {
+        "facts": n - 1,
+        "rules": rules,
+        "learn_rules_s": round(rules_s, 2),
+        "inferred": fc.get("new"),
+        "forward_chain_s": round(fc_s, 2),
+        "inferred_per_s": round(fc.get("new", 0) / max(fc_s, 1e-9)),
+        "truth_discovery_s": round(td_s, 2),
+        "truth_discovery": {k: v for k, v in td.items() if isinstance(v, int | float)} if isinstance(td, dict) else td,
+    }
+    db.close()
+    return out
+
+
+def bench_drive(tmp: Path, scale: str) -> Result:
+    import random
+
+    import numpy as np
+
+    from polymath.core.jobs import JobRegistry, noop_handler
+    from polymath.core.loop import BodyState, Observation
+    from polymath.drive.bandit import BanditPolicy
+    from polymath.drive.pagerank import sparse_pagerank
+
+    n = 200_000 if scale == "small" else 2_000_000
+    rng = np.random.default_rng(6)
+    src = (rng.pareto(1.1, 5 * n) * 3).astype(np.int64) % n
+    dst = rng.integers(0, n, 5 * n)
+    t0 = time.perf_counter()
+    pr = sparse_pagerank(src, dst, n)
+    pr_s = time.perf_counter() - t0
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    reg = JobRegistry()
+    for i, action in enumerate(["read", "learn", "reason", "crawl", "plan", "evaluate"]):
+        reg.register(f"k{i}", noop_handler, "", action=action)
+    s = Scheduler(db)
+    for i in range(6):
+        s.enqueue(f"k{i}", {}, key=f"k{i}")
+    pol = BanditPolicy(db, rng=random.Random(1))
+    lat = []
+    for _ in range(300):
+        obs = Observation(time.time(), BodyState(), s.stats(), 1)
+        t0 = time.perf_counter()
+        pol.decide(obs, reg)
+        lat.append(time.perf_counter() - t0)
+    db.close()
+    return {
+        "pagerank_nodes": n,
+        "pagerank_edges": int(src.size),
+        "pagerank_s": round(pr_s, 2),
+        "pagerank_sum": round(float(pr.sum()), 6),
+        "bandit_decide": _percentiles(lat),
+    }
+
+
+def bench_evaluation(tmp: Path, scale: str) -> Result:
+    from polymath.evaluation.quiz import mark_holdout, run_quiz
+    from polymath.reasoning.link_prediction import LinkPredictor, calibrate
+    from tests.fixtures.kb import build
+
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    with db.transaction():
+        build(db, n=60 if scale == "small" else 200)
+        mark_holdout(db, 0.3)
+    pred = LinkPredictor(db)
+    t0 = time.perf_counter()
+    with db.transaction():
+        fit = calibrate(db, pred, size=40, seed=1)
+    cal_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    with db.transaction():
+        res = run_quiz(db, pred, size=40, seed=2)
+    quiz_s = time.perf_counter() - t0
+    db.close()
+    return {
+        "calibration_questions": fit["n"],
+        "calibration_s_per_question": round(cal_s / max(1, fit["n"]), 4),
+        "quiz_questions": res["n"],
+        "quiz_s_per_question": round(quiz_s / max(1, res["n"]), 4),
+        "fixture_quiz_accuracy": res.get("accuracy"),
+    }
+
+
+def bench_dashboard(tmp: Path, scale: str) -> Result:
+    import http.client
+    import threading
+
+    from polymath.interface.dashboard import make_server
+    from tests.fixtures.kb import build
+
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    with db.transaction():
+        build(db, n=200)
+        db.kv_set("heartbeat", {"ts": time.time() + 3600, "state": "running", "cycle": 1})
+    db.close()
+    server = make_server(cfg, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    out: Result = {}
+    try:
+        for path in ("/", "/health", "/api/overview", "/api/timeseries", "/api/topics", "/api/knowledge?q=Country07"):
+            lat = []
+            for _ in range(30):
+                c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                t0 = time.perf_counter()
+                c.request("GET", path)
+                c.getresponse().read()
+                lat.append(time.perf_counter() - t0)
+                c.close()
+            out[path] = _percentiles(lat)
+        lat = []
+        for i in range(15):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+            body = json.dumps({"question": f"What is the capital of Country{i:02d}?"})
+            t0 = time.perf_counter()
+            c.request("POST", "/api/ask", body, {"Content-Type": "application/json"})
+            c.getresponse().read()
+            lat.append(time.perf_counter() - t0)
+            c.close()
+        out["POST /api/ask"] = _percentiles(lat)
+    finally:
+        server.shutdown()
+        server.server_close()
+    return out
+
+
+def bench_body(tmp: Path, scale: str) -> Result:
+    import os
+    import threading
+
+    from polymath.body.guard import Guard
+    from polymath.body.maintenance import backup_job
+    from polymath.core.jobs import JobContext
+    from polymath.core.scheduler import Job
+
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    g = Guard(cfg, db)
+    lat = []
+    for _ in range(200):
+        t0 = time.perf_counter()
+        g.observe()
+        lat.append(time.perf_counter() - t0)
+    mb = 50 if scale == "small" else 500
+    with db.transaction():
+        db.execute("CREATE TABLE filler(x BLOB)")
+        db.executemany("INSERT INTO filler VALUES(?)", [(os.urandom(512) * 8,) for _ in range(mb * 256)])
+    s = Scheduler(db)
+    jid, _ = s.enqueue("body.backup", {}, key="b")
+    ctx = JobContext(
+        cfg, db, s, Job(jid, "body.backup", "b", {}, None, 0, 0, 0, 5, 0), time.monotonic() + 600, threading.Event(), {}
+    )
+    size = cfg.paths.db_path.stat().st_size
+    t0 = time.perf_counter()
+    with db.transaction():
+        res = backup_job(ctx).result
+    dt = time.perf_counter() - t0
+    db.close()
+    return {
+        "guard_observe": _percentiles(lat),
+        "backup_db_mb": round(size / 1e6, 1),
+        "backup_s": round(dt, 2),
+        "backup_mb_per_s": round(size / 1e6 / dt, 1),
+        "backup_ratio": round(res["bytes"] / size, 3) if res.get("ok") else None,
+    }
+
+
 BENCHES: dict[str, Callable[[Path, str], Result]] = {
     "core": bench_core,
     "senses": bench_senses,
     "memory": bench_memory,
+    "perception": bench_perception,
+    "embeddings": bench_embeddings,
+    "reasoning": bench_reasoning,
+    "drive": bench_drive,
+    "evaluation": bench_evaluation,
+    "dashboard": bench_dashboard,
+    "body": bench_body,
 }
 
 

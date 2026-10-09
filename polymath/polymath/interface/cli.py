@@ -392,6 +392,54 @@ def cmd_dashboard(config: Config, args: argparse.Namespace) -> int:
     return serve(config)
 
 
+def cmd_backup(config: Config, args: argparse.Namespace) -> int:
+    """Take a verified backup now (or list the existing ones)."""
+    from polymath.body import maintenance
+
+    if args.list:
+        for b in maintenance.backups(config.paths.backup_dir):
+            print(json.dumps({"path": str(b), "bytes": b.stat().st_size}))
+        return 0
+    if agent_running(config):
+        path = inbox.submit(
+            config.paths.data_dir,
+            {
+                "type": "enqueue",
+                "kind": "body.backup",
+                "payload": {},
+                "key": f"cli-backup:{int(time.time())}",
+                "priority": 3.0,
+            },
+        )
+        print(json.dumps({"queued_via": "inbox", "file": path.name}))
+        return 0
+    agent = build_agent(config, planners=False)
+    agent.start()
+    agent.scheduler.enqueue("body.backup", {}, key=f"cli-backup:{int(time.time())}", priority=9.0)
+    rec = agent.cycle()
+    agent.shutdown()
+    agent.db.close()
+    print(json.dumps({"status": rec.status, "error": rec.error}))
+    return 0 if rec.status == "done" else 1
+
+
+def cmd_restore(config: Config, args: argparse.Namespace) -> int:
+    """Replace the database with a backup. Refuses while the agent runs."""
+    from pathlib import Path
+
+    from polymath.body import maintenance
+
+    if agent_running(config):
+        print("the agent is running: stop it first (sudo systemctl stop polymath)", file=sys.stderr)
+        return 5
+    backup = Path(args.backup)
+    if not backup.is_file():
+        backup = config.paths.backup_dir / args.backup
+    old = maintenance.restore(backup, config.paths.db_path)
+    print(json.dumps({"restored": str(backup), "previous_database": str(old)}))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="polymath", description="Polymath autonomous learning agent")
     p.add_argument("--config", help="path to polymath.toml (default /etc/polymath/polymath.toml)")
@@ -433,6 +481,14 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--json", action="store_true")
     rp.add_argument("--write", action="store_true", help="write the nightly report files now")
     rp.set_defaults(func=cmd_report)
+
+    bk = sub.add_parser("backup", help="take a verified, compressed database backup now")
+    bk.add_argument("--list", action="store_true", help="list existing backups")
+    bk.set_defaults(func=cmd_backup)
+
+    rs = sub.add_parser("restore", help="replace the database with a backup (agent stopped)")
+    rs.add_argument("backup", help="backup file (path, or name inside the backup directory)")
+    rs.set_defaults(func=cmd_restore)
 
     d = sub.add_parser("dashboard", help="serve the dashboard (what polymath-dashboard.service starts)")
     d.add_argument("--host", default=None)

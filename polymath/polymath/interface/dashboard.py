@@ -23,6 +23,7 @@ from polymath import __version__
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
+from polymath.core.loop import heartbeat_path
 
 log = get_logger("dashboard")
 MAX_BODY = 4096
@@ -66,6 +67,11 @@ class DashboardData:
         except Exception as exc:
             return False, {"ok": False, "error": f"database unavailable: {type(exc).__name__}"}
         age = time.time() - float(hb.get("ts", 0)) if hb else None
+        if hb and hb.get("state") not in {"stopped", None}:
+            try:  # a long job slice cannot commit its heartbeat; the agent's pulse file shows it is alive
+                age = min(age or 1e18, time.time() - heartbeat_path(self.config).stat().st_mtime)
+            except OSError:
+                pass
         ok = age is not None and age < self.config.loop.heartbeat_stale and hb.get("state") != "stopped"
         return ok, {
             "ok": ok,

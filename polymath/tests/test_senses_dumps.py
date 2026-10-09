@@ -738,8 +738,12 @@ def test_cli_sample_and_sources_commands(tmp_path, web, monkeypatch, capsys):
     make_config(tmp_path)
     cfg = tmp_path / "polymath.toml"
     cfg.write_text(
-        cfg.read_text() + f'\n[senses]\nallow_private_networks = true\nfeeds = ["{web.base}/rss"]\n'
-        f'seeds = ["{web.base}/"]\ncrawl_allow_domains = ["127.0.0.1"]\nstackexchange_sites = ["ai"]\n'
+        cfg.read_text().replace(
+            "[senses]\n",
+            f'[senses]\nallow_private_networks = true\nfeeds = ["{web.base}/rss"]\n'
+            f'seeds = ["{web.base}/"]\ncrawl_allow_domains = ["127.0.0.1"]\nstackexchange_sites = ["ai"]\n',
+            1,
+        )
     )
     rc = cli.main(
         [

@@ -143,7 +143,10 @@ class Answer:
 
 def render_value(db: Database, o: int, value: str) -> str:
     if o:
-        return str(db.scalar("SELECT label FROM entities WHERE id=?", (o,), default=f"#{o}"))
+        label = str(db.scalar("SELECT label FROM entities WHERE id=?", (o,), default=f"#{o}"))
+        if re.fullmatch(r"[QP]\d+", label):
+            return f"{label} (an entity whose name I have not read yet)"
+        return label
     v = json.loads(value)
     if isinstance(v, dict):
         if "time" in v:
@@ -308,17 +311,27 @@ class Answerer:
                     )
         return out
 
+    def _names(self, entity: Entity) -> list[str]:
+        """Normalised names a sentence must use to be about ``entity`` (label and learned aliases)."""
+        names = {norm_alias(entity.label)}
+        for r in self.db.query("SELECT alias FROM aliases WHERE entity_id=? LIMIT 30", (entity.id,)):
+            if len(str(r["alias"])) >= 3:
+                names.add(str(r["alias"]))
+        return sorted(n for n in names if n)
+
     def passages(
         self, query: str, entity: Entity | None, k: int = 3, *, must: set[str] | None = None
     ) -> list[Statement]:
-        """Best supporting sentences. A sentence must contain a *specific* query word (and one of ``must``)."""
+        """Best supporting sentences: a specific query word, one of ``must``, and — when the question is about
+        a known entity — the entity's own name (stemming alone would let "francs" stand in for "France")."""
         q = f"{entity.label} {query}" if entity else query
         content = self.text.content_terms(q)
         if not content or (must is not None and not must):
             return []
+        names = self._names(entity) if entity is not None else None
         out = []
         for h in self.text.search(q, limit=k * 3):
-            sent = self._best_sentence(h.text, content, must)
+            sent = self._best_sentence(h.text, content, must, names)
             if not sent:
                 continue
             out.append(
@@ -331,10 +344,15 @@ class Answerer:
         return out
 
     @staticmethod
-    def _best_sentence(text: str, content: set[str], must: set[str] | None = None) -> str:
+    def _best_sentence(
+        text: str, content: set[str], must: set[str] | None = None, names: list[str] | None = None
+    ) -> str:
         best, best_score = "", 0
         for s in re.split(r"(?<=[.!?])\s+", text):
-            words = {stem(w) for w in norm_alias(s).split()}
+            norm = f" {norm_alias(s)} "
+            if names is not None and not any(f" {n} " in norm for n in names):
+                continue
+            words = {stem(w) for w in norm.split()}
             if must and not words & must:
                 continue
             score = len(content & words)
@@ -365,7 +383,10 @@ class Answerer:
                 rel_terms = self.text.content_terms(rel or "")
                 statements = self.passages(question, entity, must=rel_terms) if rel_terms else []
                 if not statements:
-                    note = f"I know about {entity.label} but have not learned its {rel or 'answer to that'} yet."
+                    asked = {"when": "when that happened", "where": "where it is"}.get(kind, f"its {rel}")
+                    if kind == "rel" and rel:
+                        asked = f"its {rel}"
+                    note = f"I know about {entity.label} but have not learned {asked} yet."
         else:
             # an unknown subject must itself appear in a passage, or the passage is about something else
             must = self.text.content_terms(subj) if subj else None

@@ -26,6 +26,10 @@ idle_sleep = 0.05
 planners = false
 retry_base = 0.01
 
+[senses]
+default_feeds = false
+default_seeds = false
+
 [body]
 thermal_zone = "{tmp_path / "thermal"}"
 minecraft_check = false

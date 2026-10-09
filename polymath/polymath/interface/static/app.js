@@ -78,7 +78,13 @@ function barChart(canvas, items) {
 }
 
 function legend(el, names) {
-  el.innerHTML = names.map((n, i) => `<span style="--c: var(${SERIES[i % SERIES.length]})">${esc(n)}</span>`).join("");
+  // CSSOM, not style="" attributes: the dashboard's CSP forbids inline styles
+  el.replaceChildren(...names.map((n, i) => {
+    const span = document.createElement("span");
+    span.textContent = n;
+    span.style.setProperty("--c", `var(${SERIES[i % SERIES.length]})`);
+    return span;
+  }));
 }
 
 function table(el, head, rows) {
