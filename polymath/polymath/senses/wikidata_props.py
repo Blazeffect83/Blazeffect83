@@ -165,6 +165,16 @@ def properties_job(ctx: JobContext) -> JobOutcome:
         streams += 1
         ctx.tick()
     left = len(due_streams(ctx.db, 1))
+    if stored and not left:
+        # new property metadata (inverse / transitive / symmetric declarations) → relearn rules soon, after
+        # memory.graph has turned the records into facts, instead of waiting for the daily refresh
+        ctx.scheduler.enqueue(
+            "reason.rules",
+            {},
+            key=f"rules-after-properties:{int(time.time() // 3600)}",
+            priority=1.5,
+            not_before=time.time() + 600,
+        )
     return JobOutcome(
         done=left == 0, value=0.05 * stored, result={"streams": streams, "stored": stored, "more": bool(left)}
     )

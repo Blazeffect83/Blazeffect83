@@ -124,6 +124,7 @@ def test_index_then_read_properties_end_to_end(config, db, wd_web):
     reads = [(path, h.get("range")) for _t, _m, path, h in web.log if path.startswith("/wd/d")]
     assert len(reads) == len(set(reads)) == 6 and all(r for _p, r in reads)  # one range request per stream
     assert wp.properties_job(ctx_for(config, db, "wikidata.properties")).result["streams"] == 0
+    assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind='reason.rules'") == 1  # rules refresh after the last read
 
     mj.build_graph(ctx_for(config, db, "memory.graph"))
     assert db.scalar("SELECT label FROM predicates WHERE key='P36'") == "capital"
