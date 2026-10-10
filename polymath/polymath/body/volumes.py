@@ -15,6 +15,22 @@ Safety rules, in order:
 3. Never touch files outside ``polymath-brain/``. On a drive that already holds files, Polymath uses a share
    of the free space (``storage.shared_drive_share``) and always leaves ``storage.reserve_fraction`` free.
 4. Mount with ``nodev,nosuid,noexec``; FAT/exFAT/NTFS drives are mounted for the ``polymath`` user.
+
+**Moving the brain off the SD card.** When the data directory is on the SD card and a *dedicated* Linux-formatted
+drive with room arrives (``storage.move_home``), the helper moves the whole brain onto it, so the SD card only
+boots the Pi:
+
+1. it stops the agent and the dashboard (each commits and exits cleanly);
+2. it copies the data directory to ``polymath-brain/home`` on the drive, and checks the copy: the same files and
+   bytes, and SQLite's ``quick_check`` on the database;
+3. it moves the SD card's copy aside (``/srv/polymath-sd-copy``, kept as a safety net), leaves a
+   ``MOVED-TO-DRIVE.json`` marker in the empty directory, and bind-mounts the drive's copy over it;
+4. it starts everything again, now writing to the drive.
+
+At every boot (or replug) the bind mount is made again. While the drive is away, the agent sees the marker and
+waits instead of starting on the old SD copy. Anything that fails before step 3 leaves the brain on the SD card
+and starts the agent again. An empty drive formatted for Windows or macOS (exFAT, NTFS, FAT) is never
+reformatted on its own: ``sudo polymath storage format <id> --yes`` does that, and only when it holds no files.
 """
 
 from __future__ import annotations
@@ -33,7 +49,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from polymath.core.config import Config
+from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.logging import get_logger
 from polymath.memory.pool import BRAIN, MANIFEST, ignored_ids, read_manifest
 
@@ -44,6 +60,23 @@ INTERNAL = ("loop", "ram", "zram", "dm-", "md", "sr", "mmcblk", "nbd")
 MIN_BUDGET = 1_000_000_000  # below 1 GB a drive is not worth adopting
 EDGE = 1 << 20
 LOCK = Path("/run/polymath-storage.lock")
+HOME = "home"  # polymath-brain/home on a drive: the whole data directory, when the brain lives there
+SERVICES = ("polymath.service", "polymath-dashboard.service")
+# what an "empty" drive may hold and still be reformatted on request (OS housekeeping, never user files)
+JUNK = {"lost+found", "System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100", ".fseventsd",
+        ".TemporaryItems", "Thumbs.db", ".DS_Store", "desktop.ini", "autorun.inf", "IndexerVolumeGuid"}  # fmt: skip
+
+
+def tree_stats(root: Path) -> tuple[int, int]:
+    """(files, bytes) under a directory, symlinks not followed."""
+    files = total = 0
+    for base, _dirs, names in os.walk(root):
+        for name in names:
+            with contextlib.suppress(OSError):
+                total += os.lstat(os.path.join(base, name)).st_size
+                files += 1
+    return files, total
+
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -193,7 +226,7 @@ class Helper:
             return Outcome("skipped", f"{dev} has no filesystem UUID")
         mnt = self.config.storage.mount_root / vol
         if str(mnt) in inf["mountpoints"]:
-            return Outcome("already", f"{dev} is already part of the brain", vol)
+            return self._home(Outcome("already", f"{dev} is already part of the brain", vol), mnt)
         mnt.mkdir(parents=True, exist_ok=True)
         if inf["mountpoints"]:
             if fstype not in POSIX_FS:
@@ -208,7 +241,7 @@ class Helper:
         if r.returncode != 0:
             self._cleanup(mnt, mounted=False)
             return Outcome("skipped", f"mounting {dev} failed: {r.stderr.strip()}", vol)
-        return self._adopt(dev, mnt, vol, pr, inf, formatted)
+        return self._home(self._adopt(dev, mnt, vol, pr, inf, formatted), mnt)
 
     def _partition(self, disk: str) -> str:
         """One GPT partition across a blank disk; returns the partition's device path."""
@@ -295,6 +328,183 @@ class Helper:
             vol,
         )
 
+    # ------------------------------------------------------------------ the brain's home drive
+    def data_on_system_disk(self) -> bool:
+        def disk(path: str) -> str:
+            r = self.run(["findmnt", "-n", "-o", "SOURCE", "--target", path])
+            src = r.stdout.strip().split("[")[0]
+            if r.returncode != 0 or not src.startswith("/dev/"):
+                return ""
+            try:
+                return self.disk_of(src)
+            except (FileNotFoundError, ValueError):
+                return ""
+
+        root = disk("/")
+        return bool(root) and disk(str(self.config.paths.data_dir)) == root
+
+    def _home(self, out: Outcome, mnt: Path) -> Outcome:
+        """After a drive is attached: make it the brain's home again (boot, replug), or move the brain onto it."""
+        if out.action not in {"attached", "already"}:
+            return out
+        brain = mnt / BRAIN
+        manifest = read_manifest(brain) or {}
+        if manifest.get("home"):
+            return self.mount_home(brain, manifest, out)
+        if self.should_move(brain, manifest):
+            return self.move_home(brain, manifest, out)
+        return out
+
+    def should_move(self, brain: Path, manifest: dict[str, Any]) -> bool:
+        st, data = self.config.storage, self.config.paths.data_dir
+        if not st.move_home or not manifest.get("dedicated") or manifest.get("fstype") not in POSIX_FS:
+            return False
+        if (data / MOVED_FILE).exists() or (data / HOME_FILE).exists() or not self.data_on_system_disk():
+            return False  # the brain already lives on a drive (this one or another), or not on the SD card
+        need = max(st.home_min_gb * 1e9, 3 * tree_stats(data)[1])
+        return shutil.disk_usage(brain).free >= need
+
+    def _services(self, verb: str) -> None:
+        if verb == "start":
+            self.run(["systemctl", "reset-failed", *SERVICES])
+        self.run(["systemctl", verb, *SERVICES])
+
+    def _chown_tree(self, root: Path) -> None:
+        uid, gid = self.owner()
+        for base, dirs, names in os.walk(root):
+            for name in [*dirs, *names]:
+                with contextlib.suppress(OSError):
+                    os.lchown(os.path.join(base, name), uid, gid)
+        with contextlib.suppress(OSError):
+            os.chown(root, uid, gid)
+
+    def move_home(self, brain: Path, manifest: dict[str, Any], out: Outcome) -> Outcome:
+        """Copy the data directory onto the drive, verify it, and switch the brain over (agent stopped meanwhile)."""
+        import sqlite3
+
+        data, home = self.config.paths.data_dir, brain / HOME
+        name = manifest.get("label") or manifest.get("model") or manifest.get("id", "")[:8]
+        self._services("stop")
+        try:
+            if home.exists():
+                shutil.rmtree(home)  # a copy left over from an interrupted attempt (only ever ours)
+            shutil.copytree(data, home, symlinks=True)
+            src_stats, dst_stats = tree_stats(data), tree_stats(home)
+            if src_stats != dst_stats:
+                raise OSError(f"copy differs: {src_stats} files/bytes on the SD card, {dst_stats} on the drive")
+            db = home / self.config.paths.db_path.relative_to(data)
+            if db.exists():
+                conn = sqlite3.connect(str(db))
+                try:
+                    check = conn.execute("PRAGMA quick_check").fetchone()[0]
+                    if check != "ok":
+                        raise OSError(f"database check failed on the copy: {check}")
+                    with contextlib.suppress(sqlite3.Error):  # tell the feed (the table exists once migrated)
+                        conn.execute(
+                            "INSERT INTO events(at, kind, text, detail) VALUES(?, 'home', ?, ?)",
+                            (self.clock(), f"moved the brain onto {name}: {src_stats[1] / 1e9:.1f} GB copied and "
+                             "checked; the SD card now only boots the Pi", json.dumps({"status": "moved"})),
+                        )  # fmt: skip
+                        conn.commit()
+                finally:
+                    conn.close()
+            usage = shutil.disk_usage(brain)
+            budget_gb = round(usage.total * (1 - self.config.storage.reserve_fraction) / 1e9, 1)
+            (home / HOME_FILE).write_text(
+                json.dumps({"id": manifest.get("id"), "name": name, "budget_gb": budget_gb, "moved_at": self.clock(),
+                            "from": str(data)}, indent=2), encoding="utf-8")  # fmt: skip
+            self._chown_tree(home)
+        except (OSError, shutil.Error, sqlite3.Error) as exc:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(home)
+            self._services("start")
+            log.warning("moving the brain failed", extra={"error": str(exc)})
+            return Outcome(out.action, f"{out.detail}; moving the brain onto it failed ({exc}): it stays on the "
+                           "SD card", out.volume)  # fmt: skip
+        # switch over: the SD card's copy is moved aside (not deleted) and the drive's copy mounted in its place
+        aside = data.with_name(f"{data.name}-sd-copy")
+        if aside.exists():
+            aside = data.with_name(f"{data.name}-sd-copy-{int(self.clock())}")
+        aside.mkdir()
+        for entry in list(data.iterdir()):
+            entry.rename(aside / entry.name)
+        (data / MOVED_FILE).write_text(
+            json.dumps({"id": manifest.get("id"), "name": name, "moved_at": self.clock(), "sd_copy": str(aside)},
+                       indent=2), encoding="utf-8")  # fmt: skip
+        manifest |= {"home": True, "budget_bytes": 0}  # the drive is the main disk now: nothing spills to it
+        self._write_manifest(brain, manifest)
+        r = self.run(["mount", "--bind", str(home), str(data)])
+        self._services("start")
+        if r.returncode != 0:
+            return Outcome("moved", f"the brain was copied to {name}, but mounting it failed ({r.stderr.strip()}); "
+                           "replug the drive", out.volume)  # fmt: skip
+        return Outcome(
+            "moved",
+            f"the brain moved onto {name} ({tree_stats(home)[1] / 1e9:.1f} GB, {budget_gb:.0f} GB of room); the SD "
+            f"card only boots the Pi now. Its old copy is kept at {aside}",
+            out.volume,
+        )
+
+    def mount_home(self, brain: Path, manifest: dict[str, Any], out: Outcome) -> Outcome:
+        """The home drive is back (boot or replug): mount it over the data directory and start the agent."""
+        data, home = self.config.paths.data_dir, brain / HOME
+        if not (home / HOME_FILE).exists():
+            return Outcome(out.action, f"{out.detail}; it should hold the brain, but {home} is missing", out.volume)
+        if any(mp == str(data) for mp, _src in self.mounts_at(data)):
+            return Outcome(out.action, f"{out.detail}; it holds the brain (already mounted)", out.volume)
+        r = self.run(["mount", "--bind", str(home), str(data)])
+        if r.returncode != 0:
+            return Outcome(out.action, f"{out.detail}; mounting the brain failed: {r.stderr.strip()}", out.volume)
+        self._services("start")
+        return Outcome("home", f"{out.detail}; the brain is back on this drive and the agent is starting", out.volume)
+
+    def _write_manifest(self, brain: Path, manifest: dict[str, Any]) -> None:
+        tmp = brain / (MANIFEST + ".tmp")
+        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        with contextlib.suppress(OSError):
+            os.chown(tmp, *self.owner())
+        tmp.replace(brain / MANIFEST)
+
+    def format_empty(self, vol: str) -> Outcome:
+        """Reformat an adopted drive that holds no files (only on request): Linux ext4, so the brain can move there."""
+        with self._locked():
+            mp = str(self.config.storage.mount_root / vol)
+            src = next((s for m, s in self.mounts_of() if m == mp), "")
+            if not src:
+                return Outcome("skipped", f"no plugged-in drive {vol}", vol)
+            brain = Path(mp) / BRAIN
+            manifest = read_manifest(brain) or {}
+            if manifest.get("home"):
+                return Outcome("skipped", "this drive holds the brain; it is never reformatted", vol)
+            files = [e for e in os.listdir(mp) if e not in JUNK and e != BRAIN]
+            inside = [e for e in os.listdir(brain) if e not in {MANIFEST, MANIFEST + ".tmp"}] if brain.exists() else []
+            if files or inside:
+                shown = ", ".join(sorted(files + [f"{BRAIN}/{e}" for e in inside])[:5])
+                return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted", vol)
+            self.run(["umount", mp])
+            if any(m == mp for m, _s in self.mounts_of()):
+                return Outcome("skipped", f"{mp} is busy; nothing was changed", vol)
+            with contextlib.suppress(OSError):
+                Path(mp).rmdir()
+            r = self.run(["mkfs.ext4", "-q", "-F", "-L", "POLYMATH", "-m", "0", src])
+            if r.returncode != 0:
+                return Outcome("skipped", f"formatting {src} failed: {r.stderr.strip()}", vol)
+        return self.attach(src)
+
+    def mounts_at(self, path: Path) -> list[tuple[str, str]]:
+        """``(mountpoint, source)`` of mounts exactly at ``path``."""
+        try:
+            lines = self.mountinfo.read_text().splitlines()
+        except OSError:
+            return []
+        out = []
+        for line in lines:
+            left, _, right = line.partition(" - ")
+            fields, rfields = left.split(), right.split()
+            if len(fields) >= 5 and len(rfields) >= 2 and fields[4].replace("\\040", " ") == str(path):
+                out.append((fields[4], rfields[1]))
+        return out
+
     # ------------------------------------------------------------------ detach / eject
     def mounts_of(self, dev: str | None = None) -> list[tuple[str, str]]:
         """``(mountpoint, source)`` of the pool's mounts (optionally only those of ``dev``)."""
@@ -318,6 +528,10 @@ class Helper:
         """Unmount a drive that is being (or has been) unplugged. Lazy, so a vanished device never hangs."""
         with self._locked():
             mps = self.mounts_of(dev)
+            home = [(mp, src) for mp, src in self.mounts_at(self.config.paths.data_dir) if src == dev]
+            if home:  # the brain's drive went away: stop the agent (it waits for the drive) and release it
+                self.run(["systemctl", "stop", *SERVICES])
+                mps = home + mps
             for mp, _src in mps:
                 self.run(["umount", "-l", mp])
                 with contextlib.suppress(OSError):
@@ -329,6 +543,10 @@ class Helper:
     def eject(self, vol: str) -> Outcome:
         """Cleanly unmount a drive so it can be unplugged (stops its unit, which detaches it)."""
         mp = str(self.config.storage.mount_root / vol)
+        home = (read_manifest(Path(mp) / BRAIN) or {}).get("home")
+        if home and self.run(["systemctl", "is-active", "--quiet", SERVICES[0]]).returncode == 0:
+            return Outcome("skipped", "this drive holds the brain: it stays plugged in. To unplug it anyway, "
+                           "`sudo systemctl stop polymath polymath-dashboard` first", vol)  # fmt: skip
         for m, src in self.mounts_of():
             if m == mp:
                 r = self.run(["systemctl", "stop", f"polymath-volume@{Path(src).name}.service"])

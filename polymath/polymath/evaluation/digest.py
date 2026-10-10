@@ -13,6 +13,8 @@ import json
 import time
 from typing import Any
 
+from polymath.body import wear
+from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import JobContext, JobOutcome
 from polymath.evaluation import remedy
@@ -48,7 +50,7 @@ def quiz_trend(db: Database, now: float, days: int = 7) -> dict[str, Any]:
     return {"today": acc(today), "before": acc(before), "days": days}
 
 
-def collect(db: Database, since: float, now: float | None = None) -> dict[str, Any]:
+def collect(db: Database, since: float, now: float | None = None, cfg: Config | None = None) -> dict[str, Any]:
     now = time.time() if now is None else now
     docs = {
         str(r["source"]): int(r["n"])
@@ -158,6 +160,7 @@ def collect(db: Database, since: float, now: float | None = None) -> dict[str, A
         "disputes": {"settled": settled, "disputed": disputed},
         "best_agent": {"name": rewards["name"], "reward": round(float(rewards["total"]), 1)} if rewards else None,
         "curious": curious,
+        "wear": wear.sd_summary(db, cfg, now) if cfg is not None else None,
     }
 
 
@@ -203,6 +206,12 @@ def lines(d: dict[str, Any]) -> list[str]:
         out.append(f"Best agent today: {d['best_agent']['name']} (+{d['best_agent']['reward']} verified reward).")
     if d.get("curious"):
         out.append("Wants to learn next: " + ", ".join(d["curious"]) + ".")
+    w = d.get("wear")
+    if w and w.get("measured_days", 0) >= 0.9:
+        verdict = {"ok": "within budget", "high": "over budget", "critical": "far over budget"}.get(
+            str(w.get("status")), ""
+        )
+        out.append(wear.describe(w) + (f" ({verdict})." if verdict else "."))
     return out
 
 
@@ -210,11 +219,11 @@ def to_markdown(d: dict[str, Any], day: str) -> str:
     return f"# What I learned — {day}\n\n" + "\n".join(f"- {line}" for line in lines(d)) + "\n"
 
 
-def write_digest(db: Database, now: float | None = None) -> dict[str, Any]:
+def write_digest(db: Database, now: float | None = None, cfg: Config | None = None) -> dict[str, Any]:
     now = time.time() if now is None else now
     last = db.scalar("SELECT MAX(created) FROM digests")
     since = float(last) if last else now - 86400
-    data = collect(db, since, now)
+    data = collect(db, since, now, cfg)
     day = time.strftime("%Y-%m-%d", time.localtime(now))
     db.execute(
         "INSERT INTO digests(day, created, data) VALUES(?,?,?) "
@@ -225,7 +234,7 @@ def write_digest(db: Database, now: float | None = None) -> dict[str, Any]:
 
 
 def digest_job(ctx: JobContext) -> JobOutcome:
-    d = write_digest(ctx.db)
+    d = write_digest(ctx.db, cfg=ctx.config)
     return JobOutcome(done=True, value=0.1, result={"day": d["day"], "lines": len(lines(d))})
 
 

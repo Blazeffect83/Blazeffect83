@@ -160,6 +160,14 @@ class Face:
             what, status = event.get("what"), event.get("status")
             if what == "fixed":
                 self.react("proud", now, 8.0, 3)
+            elif what == "home" or (what == "prediction" and status == "confirmed"):
+                self.react("celebrate" if what == "home" else "proud", now, 8.0, 3)
+            elif what == "didyouknow":
+                self.react("aha", now, 4.0, 1)
+            elif what == "wear" and status in {"read-only", "critical"}:
+                self.react("error", now, 6.0, 2)
+            elif what == "recap":
+                self.react("happy", now, 6.0, 2)
             elif what == "site" and status in {"approved", "probation"}:
                 self.react("happy", now, 3.0, 1)
             elif what == "site" and status in {"refused", "dropped"}:

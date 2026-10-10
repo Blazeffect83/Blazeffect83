@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
 from polymath.body.sensors import same_filesystem_as_root
 from polymath.body.systemd_notify import Notifier
-from polymath.core.config import Config
+from polymath.core.config import MOVED_FILE, Config
 from polymath.core.db import Database, open_database
 from polymath.core.jobs import JobRegistry, noop_handler
 from polymath.core.loop import Agent, Planner
@@ -19,6 +20,17 @@ class StorageError(RuntimeError):
 
 def check_storage(config: Config) -> None:
     data_dir = config.paths.data_dir
+    moved = data_dir / MOVED_FILE
+    if moved.exists():  # the brain moved to a drive, and what is mounted here is the SD card's old directory
+        try:
+            info = json.loads(moved.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            info = {}
+        name = info.get("name") or info.get("id") or "a USB drive"
+        raise StorageError(
+            f"the brain lives on the drive {name}, which is not plugged in (or not mounted yet). "
+            "Plug it in: Polymath starts by itself."
+        )
     if config.paths.require_separate_mount and same_filesystem_as_root(data_dir):
         raise StorageError(
             f"{data_dir} is on the root filesystem (SD card). Mount the NVMe drive there, or set "
@@ -178,6 +190,7 @@ def build_agent(config: Config, *, notifier: Notifier | None = None, planners: b
     check_storage(config)
     storage_pool.activate(config)
     db = open_database(config.paths.db_path)
+    db.execute(f"PRAGMA wal_autocheckpoint={int(config.body.wal_autocheckpoint)}")  # fewer write-backs
     comps = build_components(config, db, planners=planners and config.loop.planners)
     from polymath.body.guard import Guard
     from polymath.drive.bandit import BanditPolicy

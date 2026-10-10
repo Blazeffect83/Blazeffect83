@@ -31,6 +31,10 @@ from polymath.core.scheduler import Job, QueueStats, Scheduler
 from polymath.version import read_build
 
 log = get_logger("loop")
+MAX_SLICE = 60.0  # seconds; a slice must end well within the systemd watchdog (WatchdogSec=120)
+PULSE_EVERY = 15.0  # seconds between touches of the pulse file (each is a small disk write)
+QUIET_HEARTBEAT_EVERY = 30.0  # idle cycles write the database heartbeat this often, not every 2 s
+RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
 
 
 @dataclass
@@ -40,6 +44,7 @@ class BodyState:
     reasons: list[str] = field(default_factory=list)
     vitals: Vitals | None = None
     allow: list[str] = field(default_factory=list)  # job kinds that may still run while paused (maintenance)
+    slice_factor: float = 1.0  # > 1 saves disk writes: longer slices, fewer commits (SD card saver)
 
 
 class Body(Protocol):
@@ -146,6 +151,10 @@ class Agent:
         self.started = False
         self.last: CycleRecord | None = None
         self._pulsed = -1e18
+        self._quiet_last: tuple[str, str] = ("", "")
+        self._quiet_at = -1e18
+        self._hb_at = -1e18
+        self._hb_state = ""
         self.build = read_build()  # the code this process runs; the feed compares it with what is installed
 
     # --------------------------------------------------------------- lifecycle
@@ -219,7 +228,7 @@ class Agent:
         """Touch ``<data_dir>/heartbeat``: proof of life that does not wait for the slice's transaction to commit
         (a long backup or quiz holds one), so the dashboard's /health stays truthful during long work."""
         now = time.monotonic()
-        if not force and now - self._pulsed < 5.0:
+        if not force and now - self._pulsed < PULSE_EVERY:
             return
         self._pulsed = now
         path = heartbeat_path(self.config)
@@ -229,6 +238,7 @@ class Agent:
             return
 
     def _heartbeat(self, state: str) -> None:
+        self._hb_at, self._hb_state = time.monotonic(), state
         self.db.kv_set(
             "heartbeat",
             {
@@ -282,7 +292,10 @@ class Agent:
                 self.scheduler.fail(job, f"no handler registered for kind {job.kind!r}", retryable=False)
             rec.error = "unknown kind"
             return self._finish(rec, started, t0, c0)
-        budget = self.config.loop.job_time_budget * max(0.2, obs.body.intensity)
+        budget = min(
+            self.config.loop.job_time_budget * max(0.2, obs.body.intensity) * max(1.0, obs.body.slice_factor),
+            MAX_SLICE,
+        )
         ctx = JobContext(
             config=self.config,
             db=self.db,
@@ -307,7 +320,9 @@ class Agent:
                 rec.cpu = cpu
                 self.policy.learn(decision, job, rec.reward, cpu, outcome.value)  # LEARN
                 self._record(rec, started, t0, json.dumps(outcome.result, default=str)[:4000])
-                self._heartbeat("running")
+                if self._hb_state != "running" or time.monotonic() - self._hb_at >= RUNNING_HEARTBEAT_EVERY:
+                    self._heartbeat("running")  # the cycles row already records every slice
+                self._quiet_last = ("running", "")
         except Interrupted:
             with self.db.transaction():
                 self.scheduler.release(job)
@@ -360,10 +375,19 @@ class Agent:
         )
 
     def _quiet_cycle(self, status: str, obs: Observation, reason: str) -> CycleRecord:
-        with self.db.transaction():
-            self._heartbeat(status)
-            if status == "paused":
-                self.db.kv_set("paused_reason", reason)
+        # Each commit writes at least a page; an idle agent cycling every 2 s would write ~350 MB a day just
+        # for this. The pulse file already proves it is alive, so the row is refreshed only when something
+        # changed or every QUIET_HEARTBEAT_EVERY seconds.
+        now = time.monotonic()
+        key = (status, reason if status == "paused" else "")
+        if key != self._quiet_last or now - self._quiet_at >= QUIET_HEARTBEAT_EVERY:
+            self._quiet_last, self._quiet_at = key, now
+            with self.db.transaction():
+                self._heartbeat(status)
+                if status == "paused":
+                    self.db.kv_set("paused_reason", reason)
+        else:
+            self._pulse()
         self.notifier.watchdog()
         rec = CycleRecord(cycle=self.cycle_no, status=status, action=reason)
         self.last = rec

@@ -15,6 +15,10 @@ for eviction when the data directory outgrows ``disk_budget_gb`` or space runs l
 It watches the storage pool too: drives plugged in or pulled out are recorded, and once
 the main disk passes ``storage.spill_at`` of its budget, document bodies are moved to a
 drive with room (``body.spill``) long before anything has to be evicted.
+
+And it watches wear (:mod:`polymath.body.wear`): on an SD card writing more than its daily budget it
+switches to *saver* (twice-as-long job slices, so fewer commits), and a data disk the kernel turned
+read-only pauses everything with a clear reason.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from polymath.body.sensors import Vitals, read_vitals
+from polymath.body.wear import WearMeter, describe, sd_summary
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
@@ -78,6 +83,9 @@ class Guard:
         self._vitals_at = -1e18
         self._last_mode = "normal"
         self._storage_at = -1e18
+        self.wear = WearMeter(config, db)
+        self.saver = False
+        self._read_only = False
 
     # ----------------------------------------------------------------- sensors
     def data_gb(self) -> float:
@@ -118,6 +126,9 @@ class Guard:
             if rank[m] > rank[mode]:
                 mode = m
 
+        self._watch_wear()
+        if self._read_only:
+            want("pause", "the data disk turned read-only (disk errors: the SD card may be failing)")
         thermal = self._thermal_mode(v.temp_c)
         if thermal == "pause":
             want("pause", f"CPU {v.temp_c:.1f} °C: cooling down below {b.pause_celsius - PAUSE_HYSTERESIS:.0f} °C")
@@ -140,7 +151,44 @@ class Guard:
         self._log_vitals(v, data_gb, mode)
         # a disk-full pause still lets eviction run (it is what ends the pause); a thermal pause stops everything
         allow = ["body.evict"] if mode == "pause" and disk_critical and thermal != "pause" else []
-        return BodyState(mode=mode, intensity=intensity, reasons=reasons, vitals=v, allow=allow)
+        if self.saver and mode in {"normal", "throttle"}:
+            reasons.append("saving SD card writes: longer job slices")
+        return BodyState(
+            mode=mode,
+            intensity=intensity,
+            reasons=reasons,
+            vitals=v,
+            allow=allow,
+            slice_factor=2.0 if self.saver else 1.0,
+        )
+
+    def _watch_wear(self) -> None:
+        """Sample the write counters; decide on saver mode; say so in the feed once a day."""
+        from polymath.senses.openweb import event
+
+        now = self.clock()
+        ro = self.wear.data_read_only()
+        if ro and not self._read_only:
+            event(self.db, "wear", "the data disk turned read-only: the kernel saw disk errors. Back up and "
+                  "replace the SD card, or plug in a drive", status="read-only")  # fmt: skip
+        self._read_only = ro
+        if not self.wear.sample(now):
+            return
+        sd = sd_summary(self.db, self.config, now)
+        on_data = sd is not None and sd["role"] == "data"
+        self.saver = bool(on_data and sd and sd.get("status") in {"high", "critical"})
+        if sd is None or sd.get("status", "ok") == "ok" or sd["measured_days"] < 0.9:
+            return
+        day = time.strftime("%Y-%m-%d", time.localtime(now))
+        if self.db.kv_get("wear_note_day") == day:
+            return
+        self.db.kv_set("wear_note_day", day)
+        advice = (
+            "saving writes; plug in a USB drive and the brain moves onto it"
+            if on_data
+            else "the OS writes this much, not Polymath"
+        )
+        event(self.db, "wear", f"{describe(sd)} — {advice}", status=sd["status"])
 
     def _storage(self, data_gb: float) -> None:
         """Record drives arriving or leaving; ask for a spill when the main disk is filling and a drive has room."""

@@ -201,7 +201,7 @@ class DashboardData:
             for r in db.query("SELECT site, status, citations, reason FROM sites ORDER BY vetted_at DESC LIMIT 12")
         ] if db.scalar("SELECT 1 FROM sqlite_master WHERE name='sites'") else []  # fmt: skip
         if last is None:
-            data = digest.collect(db, time.time() - 86400)
+            data = digest.collect(db, time.time() - 86400, cfg=self.config)
             return {"day": "last 24 hours (no digest written yet)", "lines": digest.lines(data), "sites": sites}
         return {"day": last["day"], "lines": last["lines"], "sites": sites}
 

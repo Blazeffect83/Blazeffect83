@@ -783,7 +783,7 @@ def human_bytes(n: int) -> str:
 
 
 def _tag(name: str, style: str) -> Seg:
-    return (f"{name:<9}", style)
+    return (f"{name:<9}" if len(name) < 9 else name + " ", style)
 
 
 def render_event(e: dict[str, Any]) -> list[Seg]:
@@ -904,9 +904,23 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
             "safety": "bmagenta",
             "relearn": "magenta",
             "fixed": "bgreen",
+            "wear": "red" if status in {"read-only", "critical"} else "yellow",
+            "home": "bgreen",
+            "didyouknow": "bcyan",
+            "prediction": "bgreen" if status == "confirmed" else "yellow",
+            "recap": "bmagenta",
         }.get(str(what), "")
-        tag = {"site": "site", "safety": "safety", "relearn": "relearn", "fixed": "fixed ✓"}.get(str(what), str(what))
-        return [*head, _tag(tag, style), (str(e["text"]), "")]
+        tag = {
+            "site": "site",
+            "safety": "safety",
+            "relearn": "relearn",
+            "fixed": "fixed ✓",
+            "wear": "SD card",
+            "home": "storage",
+            "didyouknow": "fun fact",
+            "prediction": "predicted",
+        }.get(str(what), str(what))
+        return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "digest":
         if e.get("head"):
             return [*head, _tag("digest", "bmagenta"), (str(e["text"]), "bold")]

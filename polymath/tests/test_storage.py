@@ -362,6 +362,7 @@ class FakeSystem:
 def helper(config, tmp_path):
     config.storage.mount_root = tmp_path / "mnt"
     config.storage.reserve_fraction = 0.05
+    config.storage.move_home = False  # moving the brain onto a drive: tests/test_wear.py
     fake = FakeSystem(tmp_path)
     blank = {"/dev/sdb": (b"\0" * 64, b"\0" * 64), "/dev/sdc1": (b"\0" * 64, b"\0" * 64)}
     h = vols.Helper(config, fake, edges=lambda dev: blank.get(dev, (b"data", b"")), owner=(os.getuid(), os.getgid()),

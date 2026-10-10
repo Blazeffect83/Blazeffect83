@@ -421,6 +421,14 @@ def dashboard_url(config: Config) -> str:
     return f"http://{host}:{config.dashboard.port}"
 
 
+def main_disk_name(config: Config) -> str:
+    try:
+        home = json.loads((config.paths.data_dir / "home-drive.json").read_text(encoding="utf-8"))
+        return f"main disk: drive {home.get('name') or home.get('id')} ({config.paths.data_dir})"
+    except (OSError, ValueError, AttributeError):
+        return f"main disk ({config.paths.data_dir})"
+
+
 def storage_rows(config: Config) -> list[dict[str, Any]]:
     """The main disk and every adopted drive (plugged in or not), with budgets and use."""
     from polymath.body.guard import directory_bytes
@@ -430,7 +438,7 @@ def storage_rows(config: Config) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = [
         {
             "id": "main",
-            "name": f"main disk ({config.paths.data_dir})",
+            "name": main_disk_name(config),
             "online": True,
             "budget_gb": round(config.body.disk_budget_gb, 1),
             "used_gb": round(directory_bytes(config.paths.data_dir) / 1e9, 2),
@@ -510,13 +518,43 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         db.close()
         print(json.dumps({"queued_via": "database", "job_id": job_id, **payload}))
         return 0
+    if op == "format" and not args.yes:
+        print("this erases the drive (it must hold no files): add --yes to go ahead", file=sys.stderr)
+        return 2
     if os.geteuid() != 0:
         print(f"`polymath storage {op}` mounts and unmounts drives: run it with sudo", file=sys.stderr)
         return 2
     helper = Helper(config)
-    out = helper.eject(args.target) if op == "eject" else getattr(helper, op)(args.target)
+    if op == "format":
+        out = helper.format_empty(args.volume)
+    else:
+        out = helper.eject(args.target) if op == "eject" else getattr(helper, op)(args.target)
     print(json.dumps(out.to_dict()))
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
+
+
+def cmd_wear(config: Config, args: argparse.Namespace) -> int:
+    """Disk writes per day (data and system disk) and how long an SD card lasts at this rate."""
+    from polymath.body import wear
+
+    db = _db(config, readonly=True)
+    try:
+        rows = wear.report(db, config)
+    finally:
+        db.close()
+    home = config.paths.data_dir / "home-drive.json"
+    if args.json:
+        print(json.dumps({"devices": rows, "brain_on_drive": home.exists()}, indent=2))
+        return 0
+    if not rows:
+        print("no measurements yet: the agent samples disk writes every 15 minutes")
+    for r in rows:
+        print(wear.describe(r) + f"  (Polymath: {wear.gb(r['agent_last_day_bytes'])})" * (r["role"] == "data"))
+        if r.get("status") in {"high", "critical"}:
+            print("  over budget: plug in a USB drive and the brain moves onto it, so the SD card only boots the Pi")
+    if home.exists():
+        print("the brain lives on a drive; the SD card only boots the Pi")
+    return 0
 
 
 def cmd_digest(config: Config, args: argparse.Namespace) -> int:
@@ -527,7 +565,7 @@ def cmd_digest(config: Config, args: argparse.Namespace) -> int:
         db = _db(config)
         try:
             with db.transaction():
-                d = digest.write_digest(db)
+                d = digest.write_digest(db, cfg=config)
             day, data = d["day"], d
         finally:
             db.close()
@@ -536,7 +574,7 @@ def cmd_digest(config: Config, args: argparse.Namespace) -> int:
         try:
             last = None if args.now else digest.latest(db)
             if last is None:
-                day, data = time.strftime("%Y-%m-%d") + " (so far)", digest.collect(db, time.time() - 86400)
+                day, data = time.strftime("%Y-%m-%d") + " (so far)", digest.collect(db, time.time() - 86400, cfg=config)
             else:
                 day, data = last["day"], last["data"]
         finally:
@@ -957,7 +995,14 @@ def build_parser() -> argparse.ArgumentParser:
         ("detach", "release an unplugged device (sudo; systemd runs this)"),
     ):
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
+    stf = stsub.add_parser("format", help="reformat an EMPTY drive for Linux so the brain can move onto it (sudo)")
+    stf.add_argument("volume", help="drive id from `polymath storage list`")
+    stf.add_argument("--yes", action="store_true", help="really erase it (refused if it holds any file)")
     sto.set_defaults(func=cmd_storage)
+
+    we = sub.add_parser("wear", help="disk writes per day and how long the SD card lasts at this rate")
+    we.add_argument("--json", action="store_true")
+    we.set_defaults(func=cmd_wear)
 
     dg = sub.add_parser("digest", help='"what I learned today": the daily digest')
     dg.add_argument("--now", action="store_true", help="compute one for the last 24 h now instead of the last one")

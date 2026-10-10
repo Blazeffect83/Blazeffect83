@@ -10,6 +10,7 @@ so an upgrade never breaks a configuration file written for an older version.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import tomllib
@@ -78,6 +79,13 @@ class BodyConfig:
     disk_min_free_gb: float = 10.0
     backup_keep: int = 7
     backup_hour: int = 3  # local hour for the nightly backup
+    # SD card wear guard (body.wear): an SD card wears out from writes. Its rated life is estimated as
+    # capacity × sd_endurance_cycles full-card writes, divided by sd_write_amplification (the card's own
+    # extra internal writes for small random writes). Writes are budgeted to last sd_target_years.
+    sd_endurance_cycles: float = 1000.0
+    sd_write_amplification: float = 3.0
+    sd_target_years: float = 5.0
+    wal_autocheckpoint: int = 4000  # SQLite pages (4 kB) in the WAL before it is written back to the database
 
 
 @dataclass
@@ -156,6 +164,10 @@ class StorageConfig:
     spill_at: float = 0.75  # move document bodies to drives once the main disk is this full (of its budget)
     ignore: list[str] = field(default_factory=list)  # filesystem UUIDs never to adopt
     allow_virtual: bool = False  # adopt loop devices too (testing only)
+    # Move the whole brain (database, indexes, downloads) from the SD card onto a dedicated drive when one
+    # with room is plugged in, so the SD card only boots the Pi (see body.volumes.Helper.move_home).
+    move_home: bool = True
+    home_min_gb: float = 32.0  # a drive needs at least this much room (and 3× the brain) to become home
 
 
 @dataclass
@@ -199,6 +211,12 @@ class Config:
             raise ConfigError("storage.reserve_fraction must be in [0, 0.5)")
         if not 0.1 <= self.storage.spill_at <= 1:
             raise ConfigError("storage.spill_at must be in [0.1, 1]")
+        if self.body.sd_endurance_cycles <= 0 or self.body.sd_write_amplification < 1:
+            raise ConfigError("body.sd_endurance_cycles must be > 0 and body.sd_write_amplification >= 1")
+        if self.body.sd_target_years <= 0:
+            raise ConfigError("body.sd_target_years must be > 0")
+        if not 100 <= self.body.wal_autocheckpoint <= 100_000:
+            raise ConfigError("body.wal_autocheckpoint must be between 100 and 100000 pages")
         if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ConfigError(f"unknown log_level {self.log_level!r}")
 
@@ -265,8 +283,24 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
     cfg: Config = _build(Config, data, "")
     if env.get("POLYMATH_DATA_DIR"):
         cfg.paths.data_dir = Path(env["POLYMATH_DATA_DIR"])
+    apply_home(cfg)
     cfg.validate()
     return cfg
+
+
+HOME_FILE = "home-drive.json"  # in data_dir when the brain lives on a drive (written by the storage helper)
+MOVED_FILE = "MOVED-TO-DRIVE.json"  # left on the SD card's data directory after the brain moved away
+
+
+def apply_home(cfg: Config) -> None:
+    """When the brain lives on a drive, its budget is the drive's (not the SD card's small one)."""
+    try:
+        data = json.loads((cfg.paths.data_dir / HOME_FILE).read_text(encoding="utf-8"))
+        budget = float(data["budget_gb"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    if budget > cfg.body.disk_budget_gb:
+        cfg.body.disk_budget_gb = budget
 
 
 def to_dict(cfg: Config) -> dict[str, Any]:

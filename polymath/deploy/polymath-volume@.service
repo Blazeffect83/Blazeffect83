@@ -11,5 +11,5 @@ RemainAfterExit=yes
 Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
 ExecStart=/opt/polymath/venv/bin/polymath storage attach /dev/%I
 ExecStop=/opt/polymath/venv/bin/polymath storage detach /dev/%I
-# formatting a large blank drive (ext4, lazy init) takes a minute or two
-TimeoutStartSec=15min
+# formatting a large blank drive takes a minute or two; moving the brain off the SD card (copy + check) longer
+TimeoutStartSec=60min
