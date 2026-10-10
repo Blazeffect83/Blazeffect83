@@ -9,6 +9,9 @@ implemented here and learns only from data the agent downloads itself.
 - **Runtime dependencies:** Python 3.11+ standard library and **numpy**. That is all (a test enforces it).
 - **Data:** Wikipedia, Wikidata, OpenAlex, PubMed, Project Gutenberg, Stack Exchange dumps, RSS/Atom feeds and
   a polite crawler (robots.txt, ≤ 1 request/s per host). See [docs/SOURCES.md](docs/SOURCES.md).
+- **Grows onto any drive you plug in:** a USB SSD, HDD or stick becomes extra brain space automatically. A blank
+  drive is formatted; on a drive with files only free space is used, and the files are never touched. It can
+  start on the SD card (`--allow-sd-card`).
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
   tests itself on and gets rewarded for.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
@@ -20,8 +23,8 @@ implemented here and learns only from data the agent downloads itself.
 
 ## Install (Raspberry Pi OS Bookworm, 64-bit)
 
-You need an NVMe drive mounted at `/srv/polymath` (Polymath refuses to put bulk data on the SD card;
-[docs/OPERATIONS.md](docs/OPERATIONS.md#nvme) shows how to mount it). Then:
+Best with an NVMe drive mounted at `/srv/polymath` ([docs/OPERATIONS.md](docs/OPERATIONS.md#nvme)). No drive
+yet? Use `sudo ./install.sh --allow-sd-card`, then plug drives in later; they are added by themselves. Then:
 
 ```bash
 git clone --branch claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git
@@ -42,6 +45,7 @@ polymath learn "black holes"                     # research a topic as a priorit
 polymath topics --weakest                        # where its knowledge is thinnest
 polymath why "Black holes"                       # why it is (or is not) working on something
 polymath status                                  # health, queue, knowledge counts
+polymath storage list                            # the drives in its brain
 ```
 
 ### Agents with their own directives

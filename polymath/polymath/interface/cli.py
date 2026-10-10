@@ -54,6 +54,21 @@ def status_dict(db: Database) -> dict[str, Any]:
         "jobs": {"ready": st.ready, "queued": st.queued, "running": st.running, "done": st.done, "dead": st.dead},
         "ready_by_kind": st.ready_by_kind,
         "knowledge": _knowledge_summary(db),
+        "storage": _storage_summary(db),
+    }
+
+
+def _storage_summary(db: Database) -> dict[str, Any] | None:
+    if not db.scalar("SELECT 1 FROM sqlite_master WHERE name = 'volumes'"):
+        return None
+    row = db.one(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(budget_bytes), 0) AS b FROM volumes WHERE online = 1 AND retired = 0"
+    )
+    spilled = int(db.scalar("SELECT COUNT(*) FROM documents WHERE codec = 'spilled'", default=0))
+    return {
+        "drives_online": int(row["n"]) if row else 0,
+        "drive_budget_gb": round((row["b"] if row else 0) / 1e9, 1),
+        "documents_on_drives": spilled,
     }
 
 
@@ -402,6 +417,104 @@ def dashboard_url(config: Config) -> str:
     return f"http://{host}:{config.dashboard.port}"
 
 
+def storage_rows(config: Config) -> list[dict[str, Any]]:
+    """The main disk and every adopted drive (plugged in or not), with budgets and use."""
+    from polymath.body.guard import directory_bytes
+    from polymath.memory import pool as storage_pool
+
+    pool = storage_pool.for_config(config) or storage_pool.StoragePool(config)
+    rows: list[dict[str, Any]] = [
+        {
+            "id": "main",
+            "name": f"main disk ({config.paths.data_dir})",
+            "online": True,
+            "budget_gb": round(config.body.disk_budget_gb, 1),
+            "used_gb": round(directory_bytes(config.paths.data_dir) / 1e9, 2),
+            "documents_here": None,
+        }
+    ]
+    spilled: dict[str, int] = {}
+    known: dict[str, Any] = {}
+    if config.paths.db_path.exists():
+        db = Database(config.paths.db_path, readonly=True)
+        try:
+            spilled = {
+                str(r["v"]): int(r["n"])
+                for r in db.query(
+                    "SELECT json_extract(meta, '$.spill.vol') AS v, COUNT(*) AS n FROM documents "
+                    "WHERE codec = 'spilled' GROUP BY v"
+                )
+            }
+            if db.scalar("SELECT 1 FROM sqlite_master WHERE name = 'volumes'"):
+                known = {str(r["id"]): dict(r) for r in db.query("SELECT * FROM volumes WHERE retired = 0")}
+        finally:
+            db.close()
+    online = {v.id: v for v in pool.volumes(fresh=True)}
+    for vid in sorted(set(online) | set(known)):
+        v = online.get(vid)
+        k = known.get(vid, {})
+        rows.append(
+            {
+                "id": vid,
+                "name": v.name if v else (k.get("label") or k.get("model") or vid[:8]),
+                "online": v is not None,
+                "budget_gb": round((v.budget_bytes if v else int(k.get("budget_bytes", 0))) / 1e9, 1),
+                "used_gb": round((pool.used(v) if v else int(k.get("used_bytes", 0))) / 1e9, 2),
+                "documents_here": spilled.get(vid, 0),
+            }
+        )
+    return rows
+
+
+def cmd_storage(config: Config, args: argparse.Namespace) -> int:
+    """The storage pool: list it, retire a drive, and the root-only hooks udev and systemd call."""
+    import os
+
+    from polymath.body.volumes import Helper
+
+    op = args.op
+    if op == "list":
+        rows = storage_rows(config)
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        total = sum(r["budget_gb"] for r in rows if r["online"])
+        print(f"{'id':<38} {'name':<34} {'state':<8} {'brain GB':>9} {'used GB':>8} {'docs':>8}")
+        for r in rows:
+            docs = "" if r["documents_here"] is None else f"{r['documents_here']:,}"
+            state = "online" if r["online"] else "away"
+            print(
+                f"{r['id']:<38} {r['name'][:34]:<34} {state:<8} {r['budget_gb']:>9.1f} {r['used_gb']:>8.2f} {docs:>8}"
+            )
+        print(f"total brain space now: {total:.1f} GB")
+        return 0
+    if op == "retire":
+        payload = {"volume": args.volume, "retire": True}
+        if agent_running(config):
+            path = inbox.submit(
+                config.paths.data_dir,
+                {"type": "enqueue", "kind": "body.recall", "payload": payload,
+                 "key": f"recall:{args.volume}:{time.time_ns()}", "priority": 3.0},
+            )  # fmt: skip
+            print(json.dumps({"queued_via": "inbox", "file": path.name, **payload}))
+            return 0
+        check_storage(config)
+        db = open_database(config.paths.db_path)
+        job_id, _ = Scheduler(db).enqueue(
+            "body.recall", payload, key=f"recall:{args.volume}:{time.time_ns()}", priority=3.0
+        )
+        db.close()
+        print(json.dumps({"queued_via": "database", "job_id": job_id, **payload}))
+        return 0
+    if os.geteuid() != 0:
+        print(f"`polymath storage {op}` mounts and unmounts drives: run it with sudo", file=sys.stderr)
+        return 2
+    helper = Helper(config)
+    out = helper.eject(args.target) if op == "eject" else getattr(helper, op)(args.target)
+    print(json.dumps(out.to_dict()))
+    return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
+
+
 def cmd_feed(config: Config, args: argparse.Namespace) -> int:
     from polymath.core.loop import heartbeat_path
     from polymath.interface import feed
@@ -714,6 +827,20 @@ def build_parser() -> argparse.ArgumentParser:
         asub.add_parser(ctl, help=f"{ctl} an agent").add_argument("name")
     ag.set_defaults(func=cmd_agents)
 
+    sto = sub.add_parser("storage", help="drives in the brain: list, retire, eject (attach/detach run from udev)")
+    stsub = sto.add_subparsers(dest="op", required=True)
+    stl = stsub.add_parser("list", help="the main disk and every drive, with brain space and use")
+    stl.add_argument("--json", action="store_true")
+    str_ = stsub.add_parser("retire", help="bring a drive's documents back, then it can be unplugged for good")
+    str_.add_argument("volume", help="drive id from `polymath storage list`")
+    for name, helptext in (
+        ("eject", "unmount a drive cleanly before unplugging it (sudo)"),
+        ("attach", "add a plugged-in device to the brain (sudo; udev runs this)"),
+        ("detach", "release an unplugged device (sudo; systemd runs this)"),
+    ):
+        stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
+    sto.set_defaults(func=cmd_storage)
+
     fd = sub.add_parser("feed", help="live feed of what it is learning (what the desktop terminal shows)")
     fd.add_argument("--url", default=None, help="dashboard to read from (default: this machine's)")
     fd.add_argument("--direct", action="store_true", help="read the database directly instead of the dashboard")
@@ -755,6 +882,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return 2
     setup_logging(config.log_level)
+    from polymath.memory import pool as storage_pool
+
+    storage_pool.activate(config)  # documents on plugged-in drives read transparently
     try:
         rc: int = args.func(config, args)
     except StorageError as exc:

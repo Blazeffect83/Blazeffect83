@@ -143,8 +143,8 @@ class StoragePool:
         self._scan, self._scan_at = found, now
         return found
 
-    def find(self, vol_id: str) -> Volume | None:
-        return next((v for v in self.volumes() if v.id == vol_id), None)
+    def find(self, vol_id: str, *, fresh: bool = False) -> Volume | None:
+        return next((v for v in self.volumes(fresh=fresh) if v.id == vol_id), None)
 
     def used(self, v: Volume) -> int:
         now = self.clock()
@@ -307,7 +307,7 @@ def sync(db: Database, pool: StoragePool) -> list[dict[str, Any]]:
                  now, now),
             )  # fmt: skip
             event(vid, "added", desc)
-            log.info("storage drive added", extra={"volume": vid, "name": v.name, "budget": v.budget_bytes})
+            log.info("storage drive added", extra={"volume": vid, "drive": v.name, "budget": v.budget_bytes})
         else:
             if not known[vid]["online"]:
                 event(vid, "online", desc)

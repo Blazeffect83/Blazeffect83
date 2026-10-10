@@ -51,7 +51,10 @@ class DashboardData:
     """All queries the dashboard needs (read-only)."""
 
     def __init__(self, config: Config) -> None:
+        from polymath.memory import pool as storage_pool
+
         self.config = config
+        storage_pool.activate(config)  # documents on plugged-in drives read transparently
         self._db: Database | None = None
         self._answerer: Any = None
         self._answerer_at = 0.0

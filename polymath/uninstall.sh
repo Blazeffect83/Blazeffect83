@@ -31,10 +31,13 @@ fi
 [ -n "$DESKTOP_USER" ] || DESKTOP_USER="$(getent passwd 1000 | cut -d: -f1 || true)"
 
 if [ "$SYSTEM" = 1 ]; then
-    say "stopping services"
+    say "stopping services and releasing plugged-in drives (their polymath-brain folders are kept)"
     systemctl disable --now polymath.service polymath-dashboard.service 2>/dev/null || true
+    systemctl stop 'polymath-volume@*.service' 2>/dev/null || true
 fi
-rm -f "$ROOT/etc/systemd/system/polymath.service" "$ROOT/etc/systemd/system/polymath-dashboard.service"
+rm -f "$ROOT/etc/systemd/system/polymath.service" "$ROOT/etc/systemd/system/polymath-dashboard.service" \
+    "$ROOT/etc/systemd/system/polymath-volume@.service" "$ROOT/etc/udev/rules.d/90-polymath-storage.rules"
+[ "$SYSTEM" = 0 ] || udevadm control --reload-rules 2>/dev/null || true
 rm -f "$ROOT/etc/systemd/journald.conf.d/polymath.conf"
 if [ "$SYSTEM" = 1 ]; then
     systemctl daemon-reload

@@ -331,7 +331,7 @@ def recall_job(ctx: JobContext) -> JobOutcome:
     retire = bool(ctx.job.payload.get("retire"))
     cfg = ctx.config
     pool = storage_pool.for_config(cfg)
-    v = pool.find(vol) if pool is not None else None
+    v = pool.find(vol, fresh=True) if pool is not None else None
     if v is None:
         raise PermanentError(f"drive {vol} is not plugged in")
     cp = dict(ctx.job.checkpoint or {"recalled": 0, "evicted": 0})

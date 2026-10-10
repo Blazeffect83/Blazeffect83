@@ -33,7 +33,7 @@ RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 # The database is opened read-only; SQLite's WAL index (-shm) still needs a writable directory.
-ReadOnlyPaths=/srv/polymath
+ReadOnlyPaths=/srv/polymath -/mnt/polymath
 ReadWritePaths=/srv/polymath/db
 
 [Install]

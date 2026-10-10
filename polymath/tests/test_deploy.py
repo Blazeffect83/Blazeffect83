@@ -29,7 +29,7 @@ def test_agent_unit_matches_the_spec():
     assert svc["CPUQuota"] == "200%" and svc["MemoryMax"] == "3G" and svc["Nice"] == "10"
     assert u["Unit"]["RequiresMountsFor"] == "/srv/polymath"
     assert svc["Restart"] == "always" and svc["User"] == "polymath"
-    assert svc["ReadWritePaths"] == "/srv/polymath" and svc["ProtectSystem"] == "strict"
+    assert svc["ReadWritePaths"] == "/srv/polymath -/mnt/polymath" and svc["ProtectSystem"] == "strict"
     env = (ROOT / "deploy" / "polymath.service").read_text()
     assert "OPENBLAS_NUM_THREADS=2" in env and "OMP_NUM_THREADS=2" in env
     assert u["Install"]["WantedBy"] == "multi-user.target"
@@ -39,7 +39,10 @@ def test_agent_unit_matches_the_spec():
 def test_dashboard_unit_and_desktop_entry():
     u = unit("polymath-dashboard.service")
     assert u["Service"]["ExecStart"] == "/opt/polymath/venv/bin/polymath dashboard"
-    assert u["Unit"]["RequiresMountsFor"] == "/srv/polymath" and u["Service"]["ReadOnlyPaths"] == "/srv/polymath"
+    assert (
+        u["Unit"]["RequiresMountsFor"] == "/srv/polymath"
+        and u["Service"]["ReadOnlyPaths"] == "/srv/polymath -/mnt/polymath"
+    )
     d = unit("polymath-dashboard.desktop")["Desktop Entry"]
     assert d["Type"] == "Application" and d["Exec"] == "/opt/polymath/src/scripts/open-dashboard.sh"
     assert "X-GNOME-Autostart-enabled" not in d  # a menu entry now; the live feed is what opens at login
@@ -251,3 +254,45 @@ def test_open_feed_without_a_terminal_and_inside_the_window(tmp_path):
     assert inside.returncode == 0 and "feeding" in inside.stdout
     assert "The live feed stopped (exit status 0). Press Enter to close this window." in inside.stdout
     assert "\033]0;Polymath — live feed\007" in inside.stdout
+
+
+def test_storage_pool_udev_rule_and_volume_unit():
+    rule = (ROOT / "deploy" / "90-polymath-storage.rules").read_text()
+    active = [line for line in rule.splitlines() if line and not line.startswith("#")]
+    assert 'KERNEL!="sd*|nvme*|vd*", GOTO="polymath_storage_end"' in active  # never the SD card, loop or zram
+    assert all('ENV{SYSTEMD_WANTS}+="polymath-volume@%k.service"' in line for line in active if "SYSTEMD_WANTS" in line)
+    assert any('ENV{UDISKS_AUTO}="0"' in line for line in active)  # Polymath mounts it, not the desktop
+    u = unit("polymath-volume@.service")
+    assert u["Unit"]["BindsTo"] == "dev-%i.device"  # pulling the drive out stops the unit → detach
+    assert u["Service"]["ExecStart"] == "/opt/polymath/venv/bin/polymath storage attach /dev/%I"
+    assert u["Service"]["ExecStop"] == "/opt/polymath/venv/bin/polymath storage detach /dev/%I"
+    assert u["Service"]["Type"] == "oneshot" and u["Service"]["RemainAfterExit"] == "yes"
+
+
+def test_sd_card_install_and_storage_pool_files(tmp_path):
+    stage = tmp_path / "stage"
+    out = sh(str(ROOT / "install.sh"), "--root", str(stage), "--user", "tester", "--skip-venv", "--allow-sd-card")
+    conf = stage / "etc/polymath/polymath.toml"
+    text = conf.read_text()
+    assert "SD-card mode" in out.stdout and "require_separate_mount = false" in text
+    budget = float(text.split("\ndisk_budget_gb = ")[1].split()[0])
+    assert 2.0 <= budget <= 15.0  # sized to the card, never the 200 GB NVMe default
+    from polymath.core.config import load_config
+
+    cfg = load_config(conf, env={})
+    assert not cfg.paths.require_separate_mount and cfg.body.disk_budget_gb == budget
+    assert cfg.storage.mount_root == Path("/mnt/polymath") and cfg.storage.adopt
+    for p in (
+        stage / "etc/udev/rules.d/90-polymath-storage.rules",
+        stage / "etc/systemd/system/polymath-volume@.service",
+        stage / "mnt/polymath",
+    ):
+        assert p.exists(), p
+    again = sh(str(ROOT / "install.sh"), "--root", str(stage), "--user", "tester", "--skip-venv", "--allow-sd-card")
+    assert "SD-card mode" not in again.stdout and conf.read_text() == text  # idempotent
+    plain = tmp_path / "plain"
+    sh(str(ROOT / "install.sh"), "--root", str(plain), "--user", "tester", "--skip-venv")
+    assert "require_separate_mount = true" in (plain / "etc/polymath/polymath.toml").read_text()
+    sh(str(ROOT / "uninstall.sh"), "--root", str(stage), "--user", "tester")
+    assert not (stage / "etc/udev/rules.d/90-polymath-storage.rules").exists()
+    assert not (stage / "etc/systemd/system/polymath-volume@.service").exists()

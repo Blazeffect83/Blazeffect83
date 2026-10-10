@@ -53,7 +53,8 @@ RestrictRealtime=yes
 RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
-ReadWritePaths=/srv/polymath
+# Plugged-in drives (the storage pool) are mounted under /mnt/polymath; mounts made later propagate in.
+ReadWritePaths=/srv/polymath -/mnt/polymath
 LogRateLimitIntervalSec=30s
 LogRateLimitBurst=2000
 

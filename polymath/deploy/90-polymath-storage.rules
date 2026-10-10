@@ -1,0 +1,15 @@
+# Polymath storage pool: every drive plugged in (USB SSD/HDD/stick, NVMe) becomes part of the brain.
+# polymath-volume@<device>.service runs `polymath storage attach /dev/<device>` (and `detach` when it is
+# pulled out). The helper never touches the system disk, never formats a device that holds data, and never
+# touches files outside polymath-brain/ — see docs/OPERATIONS.md, "Storage pool".
+SUBSYSTEM!="block", GOTO="polymath_storage_end"
+ACTION!="add", GOTO="polymath_storage_end"
+KERNEL!="sd*|nvme*|vd*", GOTO="polymath_storage_end"
+
+# A filesystem: Polymath mounts it under /mnt/polymath itself, so the desktop does not mount it too.
+ENV{ID_FS_USAGE}=="filesystem", ENV{UDISKS_AUTO}="0", TAG+="systemd", ENV{SYSTEMD_WANTS}+="polymath-volume@%k.service"
+# No filesystem at all: the helper formats it only if it is completely blank, otherwise leaves it alone.
+ENV{DEVTYPE}=="disk", ENV{ID_FS_TYPE}=="", ENV{ID_PART_TABLE_TYPE}=="", TAG+="systemd", ENV{SYSTEMD_WANTS}+="polymath-volume@%k.service"
+ENV{DEVTYPE}=="partition", ENV{ID_FS_TYPE}=="", TAG+="systemd", ENV{SYSTEMD_WANTS}+="polymath-volume@%k.service"
+
+LABEL="polymath_storage_end"

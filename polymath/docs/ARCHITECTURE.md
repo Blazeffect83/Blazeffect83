@@ -58,7 +58,7 @@ Each cycle:
 | package | responsibility |
 |---|---|
 | `core` | config, logging (JSON to journald), database and migrations, scheduler, loop, app assembly |
-| `body` | sensors, systemd notify/watchdog, guard (thermal, disk), backups, eviction |
+| `body` | sensors, systemd notify/watchdog, guard (thermal, disk, storage pool), backups, eviction, drive helper |
 | `senses` | HTTP client (SSRF-safe, resumable ranges), dump readers, bz2 block seeking, 7z, feeds, crawler, robots.txt |
 | `memory` | documents (lzma bodies), passages + FTS5, near-duplicates, knowledge graph with provenance, topic map, IVF vector index |
 | `perception` | tokenizer, Porter stemmer, Punkt sentences, NPMI phrases, Aho–Corasick, entity linker, infoboxes, TextRank, relation patterns, SGNS embeddings |
@@ -108,6 +108,30 @@ ANSI scroll region, and spreads each batch over the interval so it reads as a st
 opens it at login in the first terminal it finds (lxterminal on Raspberry Pi OS). A lock file stops the XDG and
 compositor autostarts from opening two windows.
 
+## The storage pool (`memory/pool.py`, `body/volumes.py`)
+
+The pool has a privileged half and an unprivileged half.
+
+**Privileged: mounting.** udev starts `polymath-volume@<dev>.service` for each drive plugged in. It runs
+`polymath storage attach` as root, which follows strict rules:
+- never the system disk;
+- only completely blank devices are formatted;
+- nothing outside `polymath-brain/` is touched.
+
+The drive is mounted under `/mnt/polymath/<uuid>` with `nodev,nosuid,noexec`, plus a manifest with its budget.
+Removing the drive stops the unit, which unmounts lazily.
+
+**Unprivileged: using.** The agent only discovers mounted manifests. It never mounts anything.
+- `polymath.service` may write there (`ReadWritePaths=-/mnt/polymath`), and new mounts propagate into its
+  namespace.
+- The guard records arrivals and departures (`volumes`, `volume_events`, shown in the feed) and asks for
+  `body.spill` when the main disk passes `storage.spill_at`.
+- Spilled bodies go to append-only pack files: a record is `magic, doc id, length, crc32` plus the blob, fsynced
+  before the database pointer commits. A crash can leave an orphan record, never a dangling pointer.
+- Reads go through `load_body`. A body whose drive is away reads as empty (`meta.unavailable`); an update to it
+  waits until it is back, because a contentless FTS delete needs the old text.
+- `body.recall` brings a drive's bodies home before retiring it.
+
 ## Storage layout (`/srv/polymath`)
 
 ```
@@ -118,6 +142,12 @@ backups/                 polymath-YYYYmmdd-HHMMSS.sqlite3.xz, newest 7 kept
 reports/                 nightly report-YYYY-MM-DD.md / .json
 inbox/                   requests from the CLI and dashboard
 heartbeat                pulse file (mtime) touched by the agent while it works
+storage-ignore.json      drives retired with `polymath storage retire` (never adopted again)
+
+/mnt/polymath/<uuid>/polymath-brain/   one per plugged-in drive
+  .polymath-volume.json  manifest: id, label, size, budget, dedicated or shared
+  bodies/pack-NNNNNN.bin spilled document bodies (append-only, crc-checked)
+  raw/  backups/         downloads and backups placed on the drive
 ```
 
 ## Process boundaries and safety

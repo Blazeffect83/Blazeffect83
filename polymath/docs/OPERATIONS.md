@@ -1,8 +1,14 @@
 # Operations
 
-## <a id="nvme"></a>1. Prepare the NVMe drive (once)
+## <a id="nvme"></a>1. Prepare the NVMe drive (once), or start on the SD card
 
-Polymath refuses to keep bulk data on the SD card. It needs a filesystem mounted at `/srv/polymath`.
+Polymath prefers to keep its data off the SD card: a filesystem mounted at `/srv/polymath`.
+
+**No drive yet?** `sudo ./install.sh --allow-sd-card` keeps the brain on the SD card for now:
+- the budget is sized to the card (at most 15 GB, leaving 10 GB free);
+- any drive you plug in later is added to the brain automatically (§8).
+
+Constant database writes wear SD cards, so add a USB SSD when you can.
 
 > **Warning:** `mkfs` erases the drive. Check the device name with `lsblk` first.
 
@@ -21,6 +27,7 @@ on the NVMe drive also works.
 
 ```bash
 sudo ./install.sh              # first install and every upgrade (idempotent: safe to repeat)
+sudo ./install.sh --allow-sd-card   # no NVMe yet: keep the brain on the SD card, add drives later
 sudo ./install.sh --dry-run    # show what it would do
 sudo ./uninstall.sh            # remove services and code; KEEPS /srv/polymath and /etc/polymath
 sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its user
@@ -29,13 +36,15 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 `install.sh` does the following:
 - checks the mount;
 - creates the `polymath` system user;
-- installs `python3-venv`/`curl` if missing;
+- installs `python3-venv`, `curl`, `fdisk` and `e2fsprogs` if missing;
 - copies the code to `/opt/polymath/src` and builds `/opt/polymath/venv` (numpy only);
 - writes `/etc/polymath/polymath.toml` (never overwritten once it exists);
 - installs `polymath.service`, `polymath-dashboard.service` and a journald size limit;
 - enables desktop autologin (`raspi-config nonint do_boot_behaviour B4`);
 - adds the live feed terminal to the desktop user's autostart (XDG, labwc and wayfire), plus menu entries for the
   live feed and the dashboard. An upgrade replaces the dashboard autostart of earlier versions;
+- installs the storage pool: a udev rule, `polymath-volume@.service` and `/mnt/polymath`, then adopts drives that
+  are already plugged in (§8);
 - comments out the `minecraft_*` settings of earlier versions in an existing configuration (backup:
   `polymath.toml.bak`). Left in place, they would be ignored with a warning;
 - starts everything and waits for `/health`.
@@ -152,7 +161,51 @@ disk_budget_gb = 400
 
 Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 
-## 8. Troubleshooting
+## 8. Storage pool: drives you plug in
+
+Plug a drive in and it becomes part of the brain. No commands are needed:
+
+1. udev starts `polymath-volume@<device>.service`, which runs `polymath storage attach` as root.
+2. The helper checks the drive and mounts it at `/mnt/polymath/<filesystem UUID>`, with a `polymath-brain/`
+   folder and a manifest saying how much of it Polymath may use.
+3. The agent notices within 30 seconds. The live feed shows `storage  new drive …`, and the header shows the
+   total brain space.
+
+| the drive | what happens |
+|---|---|
+| brand new, nothing on it (no partition table, no filesystem, zeros at both ends) | formatted: GPT, one ext4 partition labelled `POLYMATH`; 90 % of it becomes brain space |
+| labelled `POLYMATH*`, or empty | dedicated: 90 % of its free space |
+| already holds your files (ext4, exFAT, FAT, NTFS, btrfs, xfs) | shared: half its free space (`shared_drive_share`), always leaving 10 % free; **your files are never touched** |
+| the system disk, SD card, encrypted/LVM/RAID/swap, unknown data, ignored or retired | left alone |
+
+**What lives on drives.** Document bodies are the bulk of the database:
+- once the main disk passes 75 % of its budget (`storage.spill_at`), the least valuable bodies move to the
+  roomiest drive;
+- eviction only starts when every drive is full;
+- downloads and the nightly backups also go to drives.
+
+The database, indexes and reports stay on the main disk.
+
+**Unplugging.** The agent keeps running. Documents on that drive read as unavailable, and their facts and
+metadata stay. They come back when the drive is plugged in again. For a clean removal:
+
+```bash
+polymath storage list                 # every drive: brain space, use, documents on it
+sudo polymath storage eject <id>      # unmount cleanly, then unplug (for a short while)
+polymath storage retire <id>          # bring its documents back (what no longer fits is evicted), then
+                                      # unplug for good; it is never adopted again
+```
+
+**Settings** (`[storage]` in `/etc/polymath/polymath.toml`):
+- `adopt = false` stops adopting drives;
+- `format_blank_disks = false` never formats anything;
+- `ignore = ["<uuid>"]` skips a drive (UUIDs are in `polymath storage list` and `lsblk -f`);
+- `shared_drive_share` and `reserve_fraction` set how much of a drive is used.
+
+The desktop no longer auto-mounts drives that Polymath adopts. Their files are under
+`/mnt/polymath/<uuid>/` (read them with `sudo`), or `eject` the drive first.
+
+## 9. Troubleshooting
 
 | symptom | check |
 |---|---|
@@ -163,4 +216,5 @@ Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 | too hot | improve cooling, or lower `throttle_celsius` / `pause_celsius` |
 | live feed says "waiting: no answer from http://127.0.0.1:8765" | `systemctl status polymath-dashboard`; it reconnects by itself |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
+| a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |
 | "ignoring retired configuration key(s)" | delete the `minecraft_*` lines from `/etc/polymath/polymath.toml` (or re-run `install.sh`) |

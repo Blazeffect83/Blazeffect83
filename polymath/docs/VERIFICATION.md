@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 308 automated tests pass (`pytest`), including:
+- **Tests:** 336 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -279,11 +279,45 @@ settings and the `vitals.players` column (migration 0012, applied to the real 48
 older configuration still loads, with a warning, and `install.sh` comments those lines out. `yield` remains for
 low disk space. The CPU and memory limits stay, to keep the desktop and the feed responsive.
 
-## 11. Pending — needs the actual Raspberry Pi 5
+## 11. Storage pool and SD-card mode
+
+**Real block devices.** The real helper (`polymath storage attach/detach`) ran against loop devices in the
+development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and `umount`:
+
+| case | result |
+|---|---|
+| brand-new blank 2 GB device | formatted ext4 `POLYMATH`, mounted under the pool, `polymath-brain/` mode 0750, manifest written; dedicated, 1.92 GB of brain space |
+| device with random data and no signature | refused: "holds data Polymath does not recognise; not touching it" |
+| FAT drive holding a user's files | the container kernel has no vfat driver, so the mount failed; reported, and the mount folder removed. To verify on the Pi |
+| blank partition on a partitioned disk | the container cannot create partition device nodes. To verify on the Pi |
+| agent side on the mounted drive | body written to a pack, fsynced, read back identical; downloads and backups placed on the drive |
+| unplug (`detach`) | lazy unmount; the agent sees the drive go away, and reads return "unavailable", not an error |
+
+**Tests.**
+- `tests/test_storage.py` (26 tests) covers:
+  - discovery and pack records: crc, wrong id, missing pack, rollover;
+  - spill: least valuable first, unperceived documents stay; reads straight from a drive; passages and updates
+    while a drive is away; spill stopping when drives are full; eviction spilling first;
+  - retire: bodies back, brain folder removed, never re-adopted; recall without room evicts;
+  - placement of downloads and backups; arrival, departure and return events in the feed; the guard asking for
+    spills; the CLI;
+  - the helper's rules against a fake `blkid`/`lsblk`/`mount`: system disk, internal and virtual devices, swap,
+    LUKS, partitioned disks, missing UUID, ignored and retired drives, foreign-owned mounts, too little room,
+    mount and format failures, eject and detach.
+- `tests/test_deploy.py` covers the udev rule, `polymath-volume@.service`, and a staged `--allow-sd-card`
+  install: an SD-sized budget of 2–15 GB, idempotent, and removed by uninstall.
+
+**Bugs found while building it.**
+- A logging field named `name` collided with Python's LogRecord. It would have crashed the agent the moment a
+  drive was plugged in, with INFO logging on. Renamed, with a regression test.
+- The process-wide pool from one configuration could steer placement for another. Placement now uses only the
+  pool of its own configuration.
+
+## 12. Pending — needs the actual Raspberry Pi
 
 These cannot be done in a container and are **not** claimed:
 
-1. `sudo ./install.sh` on Raspberry Pi OS Bookworm with an NVMe drive.
+1. `sudo ./install.sh` (here: `--allow-sd-card` on a Raspberry Pi 4, Debian 13, SD card only).
 2. Reboot. The agent, the dashboard and the live feed terminal must come up with no manual step.
    Expected: lxterminal opens at login and shows "waiting" until the dashboard answers.
 3. 24 h soak:
@@ -293,3 +327,5 @@ These cannot be done in a container and are **not** claimed:
    - the feed terminal staying responsive.
 4. Pull the power mid-run and check that the restart resumes cleanly on the real SD card and NVMe hardware.
 5. Re-run `scripts/benchmark.py` on the Pi.
+6. Plug in a real USB drive: blank, one with files, and FAT. Check the feed's `storage` line, `polymath storage
+   list`, spilling under pressure, unplug and replug, and `polymath storage retire`.
