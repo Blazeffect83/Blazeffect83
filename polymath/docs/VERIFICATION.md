@@ -186,7 +186,22 @@ Six agents were spawned on the learning copy from plain directives:
 - "become an expert on Italy"
 - "predict administrative regions"
 
-They ran 40 society slices offline. Results: _the final trial is running; numbers follow in the next commit._
+They ran 40 society slices offline. Results after all the fixes below:
+
+| agent | level | XP | verified right / wrong |
+|---|---:|---:|---:|
+| verify-borders | 3 | 15.0 | 15 / 2 |
+| predict-country | 2 | 8.2 | 8 / 2 |
+| predict-administrative-regions | 2 | 6.4 | 6 / 1 |
+| research-computer-science | 2 | 5.1 | 5 / 0 |
+| research-italy | 2 | 5.0 | 5 / 0 |
+| watch-neural-networks | 1 | 0.0 | — (nothing new is read offline) |
+
+- **Accuracy.** Together the agents scored **39 verified-correct against 5 wrong answers on hidden facts
+  (89 %; chance is 25 %)**, with no false penalties.
+- **Learned preferences.** Every agent's arms learned to prefer the action that earned verified rewards.
+  Actions with nothing to do in this offline sample (reading, open predictions, disputes) learned slightly
+  negative values.
 
 **What the trials found and fixed.** Every round was run on real data until it was clean:
 
