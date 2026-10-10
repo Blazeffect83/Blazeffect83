@@ -369,7 +369,7 @@ class Helper:
         vol = manifest.get("id", "")
         if manifest.get("fstype") in FOREIGN_FS:
             fs = manifest.get("fstype")
-            return f"to move the brain onto it (now {fs}): empty it, then sudo polymath storage format {vol} --yes"
+            return f"to move the brain onto it (now {fs}, erased!): sudo polymath storage format {vol} --yes"
         if not manifest.get("dedicated"):
             return "it holds other files: empty it and plug it in again to move the brain onto it"
         return ""
@@ -484,8 +484,9 @@ class Helper:
             os.chown(tmp, *self.owner())
         tmp.replace(brain / MANIFEST)
 
-    def format_empty(self, vol: str) -> Outcome:
-        """Reformat an adopted drive that holds no files (only on request): Linux ext4, so the brain can move there."""
+    def format_empty(self, vol: str, *, erase_files: bool = False) -> Outcome:
+        """Reformat an adopted drive (only on request): Linux ext4, so the brain can move there. A drive holding
+        files is refused unless ``erase_files`` (the user listed them and typed --erase-files)."""
         with self._locked():
             mp = str(self.config.storage.mount_root / vol)
             src = next((s for m, s in self.mounts_of() if m == mp), "")
@@ -497,9 +498,12 @@ class Helper:
                 return Outcome("skipped", "this drive holds the brain; it is never reformatted", vol)
             files = [e for e in os.listdir(mp) if e not in JUNK and e != BRAIN]
             inside = [e for e in os.listdir(brain) if e not in {MANIFEST, MANIFEST + ".tmp"}] if brain.exists() else []
-            if files or inside:
-                shown = ", ".join(sorted(files + [f"{BRAIN}/{e}" for e in inside])[:5])
-                return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted", vol)
+            if inside:  # spilled documents live here: erasing them would lose what it learned
+                return Outcome("skipped", f"{BRAIN}/ holds Polymath's documents; retire the drive first", vol)
+            if files and not erase_files:
+                shown = ", ".join(sorted(files)[:5]) + (" …" if len(files) > 5 else "")
+                return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted. To erase them "
+                               f"too: sudo polymath storage format {vol} --yes --erase-files", vol)  # fmt: skip
             self.run(["umount", mp])
             if any(m == mp for m, _s in self.mounts_of()):
                 return Outcome("skipped", f"{mp} is busy; nothing was changed", vol)

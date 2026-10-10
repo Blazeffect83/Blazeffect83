@@ -426,9 +426,13 @@ def test_format_refuses_drives_with_files_the_home_and_busy_mounts(home_helper, 
     h.attach("/dev/sda1")
     (tmp_path / "mountinfo").write_text(f"36 25 8:1 / {mnt} rw - exfat /dev/sda1 rw\n")
     out = h.format_empty("EX-3")
-    assert out.action == "skipped" and "Holiday.mov" in out.detail and not fake.ran("mkfs.ext4")
+    assert out.action == "skipped" and "Holiday.mov" in out.detail and "--erase-files" in out.detail
+    assert not fake.ran("mkfs.ext4")
+    assert "busy" in h.format_empty("EX-3", erase_files=True).detail  # umount did not release it: nothing changed
     (mnt / "Holiday.mov").unlink()
-    assert "busy" in h.format_empty("EX-3").detail  # umount did not release it: nothing changed
+    (mnt / storage_pool.BRAIN / "packs").mkdir()
+    assert "retire the drive first" in h.format_empty("EX-3", erase_files=True).detail
+    (mnt / storage_pool.BRAIN / "packs").rmdir()
     manifest = storage_pool.read_manifest(mnt / storage_pool.BRAIN)
     assert manifest is not None
     manifest["home"] = True
@@ -502,7 +506,7 @@ def test_cli_wear_and_storage_format(config, db, tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(os, "geteuid", lambda: 1000)
     assert cli.main(["--config", path, "storage", "format", "EX-1", "--yes"]) == 2
     monkeypatch.setattr(os, "geteuid", lambda: 0)
-    monkeypatch.setattr(vols.Helper, "format_empty", lambda self, v: vols.Outcome("skipped", "no drive", v))
+    monkeypatch.setattr(vols.Helper, "format_empty", lambda self, v, erase_files: vols.Outcome("skipped", "x", v))
     assert cli.main(["--config", path, "storage", "format", "EX-1", "--yes"]) == 1
 
 
@@ -540,7 +544,7 @@ def test_a_windows_formatted_ssd_gets_clear_instructions(home_helper, config, db
     config.storage.home_min_gb = 0.000001
     fake.add("/dev/sda1", disk="sda", probe={"TYPE": "exfat", "UUID": "AB12-CD34", "LABEL": "T7"})
     out = h.attach("/dev/sda1")
-    assert "sudo polymath storage format AB12-CD34 --yes" in out.detail
+    assert "erased!): sudo polymath storage format AB12-CD34 --yes" in out.detail
     brain = config.storage.mount_root / "AB12-CD34" / storage_pool.BRAIN
     assert "storage format AB12-CD34" in storage_pool.read_manifest(brain)["home_hint"]  # type: ignore[index]
     pool = storage_pool.StoragePool(config, ismount=lambda p: True)

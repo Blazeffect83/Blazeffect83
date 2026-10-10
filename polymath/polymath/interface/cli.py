@@ -526,7 +526,7 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         return 2
     helper = Helper(config)
     if op == "format":
-        out = helper.format_empty(args.volume)
+        out = helper.format_empty(args.volume, erase_files=args.erase_files)
     else:
         out = helper.eject(args.target) if op == "eject" else getattr(helper, op)(args.target)
     print(json.dumps(out.to_dict()))
@@ -997,7 +997,8 @@ def build_parser() -> argparse.ArgumentParser:
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
     stf = stsub.add_parser("format", help="reformat an EMPTY drive for Linux so the brain can move onto it (sudo)")
     stf.add_argument("volume", help="drive id from `polymath storage list`")
-    stf.add_argument("--yes", action="store_true", help="really erase it (refused if it holds any file)")
+    stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")
+    stf.add_argument("--erase-files", action="store_true", help="also when it holds files: they are erased")
     sto.set_defaults(func=cmd_storage)
 
     we = sub.add_parser("wear", help="disk writes per day and how long the SD card lasts at this rate")
