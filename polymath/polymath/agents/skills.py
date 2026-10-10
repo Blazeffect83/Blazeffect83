@@ -142,61 +142,84 @@ def _relations(rt: Runtime) -> list[int]:
 
 TYPICAL_SHARE = 0.3  # predict a relation only for subjects whose type usually has it
 TYPICAL_MIN_CLASS = 5
+REFLEXIVE_SHARE = 0.5  # "the country of a country is itself": learned per type
 
 
-def typical(db: Database, s: int, p: int, cache: dict[int, float]) -> bool:
-    """Does ``s`` belong to a type for which relation ``p`` is usual? (No guessing "the country of ASCII".)"""
+@dataclass
+class ClassStats:
+    share: float  # members of the type that have the relation
+    reflexive: float  # of those, the share whose value is the member itself
+    options: list[int]  # the type's most common values for the relation
+
+
+def class_stats(db: Database, cls: int, p: int, p31: int) -> ClassStats:
+    members = [int(r["s"]) for r in db.query("SELECT s FROM triples WHERE p=? AND o=? LIMIT 5000", (p31, cls))]
+    if len(members) < TYPICAL_MIN_CLASS:
+        return ClassStats(0.0, 0.0, [])
+    q = ",".join("?" * len(members))
+    rows = db.query(
+        f"SELECT t.s, t.o FROM triples t JOIN entities e ON e.id=t.o WHERE t.p=? AND t.o != 0 AND t.holdout=0 "
+        f"AND t.s IN ({q}) AND e.label NOT GLOB 'Q[0-9]*'",
+        (p, *members),
+    )
+    having = {int(r["s"]) for r in rows}
+    reflexive = sum(1 for r in rows if int(r["s"]) == int(r["o"]))
+    counts: dict[int, int] = {}
+    for r in rows:
+        if int(r["s"]) != int(r["o"]):
+            counts[int(r["o"])] = counts.get(int(r["o"]), 0) + 1
+    options = sorted(counts, key=lambda o: (-counts[o], o))[:4]
+    return ClassStats(len(having) / len(members), reflexive / max(1, len(having)), options)
+
+
+def typical(db: Database, s: int, p: int, cache: dict[int, ClassStats]) -> ClassStats | None:
+    """The statistics of ``s``'s most typical type for relation ``p``, or None when no type of ``s`` usually has
+    it (no guessing "the country of ASCII")."""
     p31 = db.scalar("SELECT id FROM predicates WHERE key='P31'")
     if p31 is None:
-        return False
+        return None
+    best: ClassStats | None = None
     for r in db.query("SELECT o FROM triples WHERE s=? AND p=? AND o != 0", (s, p31)):
         cls = int(r["o"])
         if cls not in cache:
-            row = db.one(
-                "SELECT COUNT(*) AS n, SUM(EXISTS(SELECT 1 FROM triples h WHERE h.s=c.s AND h.p=? AND h.holdout=0)) "
-                "AS has FROM triples c WHERE c.p=? AND c.o=?",
-                (p, p31, cls),
-            )
-            n = int(row["n"]) if row else 0
-            cache[cls] = (int(row["has"] or 0) / n) if row and n >= TYPICAL_MIN_CLASS else 0.0
-        if cache[cls] >= TYPICAL_SHARE:
-            return True
-    return False
+            cache[cls] = class_stats(db, cls, p, int(p31))
+        st = cache[cls]
+        if st.share >= TYPICAL_SHARE and (best is None or st.share > best.share):
+            best = st
+    return best
 
 
 def predict(rt: Runtime) -> StepResult:
+    from polymath.reasoning.link_prediction import Prediction
+
     res = StepResult("predict")
     a = rt.agent
     min_conf = float(a.params["min_conf"])
     abstained = atypical = 0
-    cache: dict[int, float] = {}
+    cache: dict[int, ClassStats] = {}
     for p in _relations(rt):
-        options = [
-            int(r["o"])
-            for r in rt.db.query(
-                "SELECT t.o, COUNT(*) AS n FROM triples t JOIN agent_scope s ON s.entity_id=t.s AND s.agent_id=? "
-                "JOIN entities e ON e.id=t.o WHERE t.p=? AND t.o != 0 AND t.holdout=0 AND e.label NOT GLOB 'Q[0-9]*' "
-                "GROUP BY t.o ORDER BY n DESC LIMIT 4",
-                (a.id, p),
-            )
-        ]
-        if len(options) < 2:
-            continue
+        cache.clear()
         subjects = rt.db.query(
             "SELECT s.entity_id AS e FROM agent_scope s JOIN entities x ON x.id=s.entity_id WHERE s.agent_id=? AND "
             "x.kind='item' AND x.label NOT GLOB 'Q[0-9]*' AND NOT EXISTS (SELECT 1 FROM triples t "
-            "WHERE t.s=s.entity_id "
-            "AND t.p=?) AND NOT EXISTS (SELECT 1 FROM agent_tasks k WHERE k.agent_id=? AND k.kind='predict' AND "
-            "k.target='predict:' || s.entity_id || ':' || ?) ORDER BY s.weight DESC LIMIT ?",
-            (a.id, p, a.id, p, int(a.params["batch"]) * 3),
+            "WHERE t.s=s.entity_id AND t.p=?) AND NOT EXISTS (SELECT 1 FROM agent_tasks k WHERE k.agent_id=? AND "
+            "k.kind='predict' AND k.target='predict:' || s.entity_id || ':' || ?) ORDER BY s.weight DESC LIMIT 600",
+            (a.id, p, a.id, p),
         )
-        cache.clear()
         for r in subjects:
             s = int(r["e"])
-            if not typical(rt.db, s, p, cache):
+            st = typical(rt.db, s, p, cache)
+            if st is None:
                 atypical += 1
                 continue
-            pred = rt.predictor().predict(s, p, options)
+            options = list(st.options)
+            if st.reflexive >= REFLEXIVE_SHARE:
+                pred = Prediction(s, st.reflexive, "pattern")  # learned: this type's value is usually itself
+                options = [s, *options[:3]]
+            elif len(options) >= 2:
+                pred = rt.predictor().predict(s, p, options)
+            else:
+                continue
             if pred.confidence < min_conf or pred.method == "none":
                 abstained += 1
                 continue

@@ -53,6 +53,12 @@ def test_directive_parsing(text, kind, subject, qualifier):
     assert (d.kind, d.subject, d.qualifier) == (kind, subject, qualifier) and d.text == text.strip()
 
 
+def test_singular():
+    words = ["countries", "capitals", "cities", "churches", "boxes", "classes", "bus", "series", "Alps"]
+    assert [directives.singular(w) for w in words] == [
+        "country", "capital", "city", "church", "box", "class", "bus", "series", "Alp"]  # fmt: skip
+
+
 def test_describe_every_kind():
     assert directives.describe("predict", "capital", "countries") == "predict the capital of countries"
     assert {directives.describe(k, "x").split()[0] for k in directives.KINDS} == {
@@ -543,7 +549,22 @@ def test_predictions_only_for_subjects_whose_type_has_the_relation(db):
     kb = build(db)
     missing = [kb.countries[1]]
     cont, _europe, _asia = _continents(db, kb, missing)
-    cache: dict[int, float] = {}
-    assert skills.typical(db, kb.countries[1], cont, cache)  # countries usually have a continent
-    assert not skills.typical(db, kb.cities[1], cont, cache)  # cities in this graph never do
-    assert not skills.typical(db, kb.people[0], cont, cache)  # no type known: no guess
+    cache: dict = {}
+    st = skills.typical(db, kb.countries[1], cont, cache)  # countries usually have a continent
+    assert st is not None and st.share > 0.8 and set(st.options) == {_europe, _asia} and st.reflexive == 0
+    assert skills.typical(db, kb.cities[1], cont, cache) is None  # cities in this graph never do
+    assert skills.typical(db, kb.people[0], cont, cache) is None  # no type known: no guess
+
+
+def test_reflexive_regularities_are_learned(config, db):
+    kb = build(db)
+    g = kb.graph
+    country = kb.preds["country"]
+    for c in kb.countries[:30]:  # the "country" of a country is itself
+        g.add_triple(c, country, o=c, kind="wikidata", source="wikidata")
+    a = society.spawn(db, "predict the country of countries")
+    res = skills.predict(runtime(config, db, a))
+    made = {json.loads(t["payload"])["s"]: json.loads(t["payload"]) for t in db.query(
+        "SELECT payload FROM agent_tasks WHERE kind='predict'")}  # fmt: skip
+    assert res.tasks > 0 and all(p["choice"] == s and p["evidence"] == "pattern" for s, p in made.items())
+    assert set(made) <= set(kb.countries[30:])

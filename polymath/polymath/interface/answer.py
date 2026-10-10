@@ -204,6 +204,13 @@ class Answerer:
             links = self.linker.link(phrase)
             if links:
                 return self.graph.entity(max(links, key=lambda lk: lk.end - lk.start).entity_id)
+        exact = self.db.one(  # an entity known by its label alone (no alias recorded yet)
+            "SELECT id FROM entities WHERE label = ? COLLATE NOCASE AND kind != 'stub' ORDER BY doc_id IS NULL, id "
+            "LIMIT 1",
+            (phrase.strip(),),
+        )
+        if exact is not None:
+            return self.graph.entity(int(exact["id"]))
         words = phrase.split()
         for n in range(min(len(words), 6), 0, -1):  # longest n-gram that names something
             for i in range(len(words) - n + 1):

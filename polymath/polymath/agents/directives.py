@@ -89,6 +89,21 @@ def parse(text: str) -> Directive:
     return Directive("research", t.strip(" '\""), raw)
 
 
+def singular(word: str) -> str:
+    """English plural → singular for directive nouns ("countries" → "country", "capitals" → "capital")."""
+    w = word.strip()
+    low = w.lower()
+    if low in {"series", "species", "news", "physics", "mathematics", "politics", "economics", "chess"}:
+        return w
+    if len(low) <= 3 or not low.endswith("s") or low.endswith("ss"):
+        return w
+    if low.endswith("ies") and len(low) > 4:
+        return w[:-3] + "y"
+    if low.endswith(("ches", "shes", "xes", "sses", "zes")):
+        return w[:-2]
+    return w[:-1]
+
+
 def resolve_scope(db: Database, d: Directive) -> dict[str, Any]:
     """Ground a directive in what the agent already knows: entities, topics, relations, keywords."""
     from polymath.interface.answer import Answerer
@@ -98,15 +113,13 @@ def resolve_scope(db: Database, d: Directive) -> dict[str, Any]:
     text = TextIndex(db)
     scope: dict[str, Any] = {"query": d.subject, "entities": [], "topics": [], "predicates": [], "keywords": []}
     if d.kind == "predict":
-        rel = d.subject[:-1] if d.subject.endswith("s") and len(d.subject) > 4 else d.subject
-        scope["predicates"] = (a.predicates_for(d.subject) or a.predicates_for(rel))[:3]
+        scope["predicates"] = (a.predicates_for(d.subject) or a.predicates_for(singular(d.subject)))[:3]
         if d.qualifier:
-            cls = a.find_entity(d.qualifier[:-1] if d.qualifier.endswith("s") else d.qualifier)
+            cls = a.find_entity(singular(d.qualifier)) or a.find_entity(d.qualifier)
             scope["class"] = cls.id if cls is not None else None
         return scope
     if d.kind == "verify":
-        rel = d.subject[:-1] if d.subject.endswith("s") and len(d.subject) > 4 else d.subject
-        scope["predicates"] = (a.predicates_for(d.subject) or a.predicates_for(rel))[:3]
+        scope["predicates"] = (a.predicates_for(d.subject) or a.predicates_for(singular(d.subject)))[:3]
     entity = a.find_entity(d.subject)
     if entity is not None:
         scope["entities"] = [entity.id]
