@@ -64,6 +64,25 @@ def compatible(a: tuple[int, str], b: tuple[int, str]) -> bool:
     return bool(x == y)
 
 
+def _one_record_lists_several(db: Database, clusters: list[list[Any]]) -> bool:
+    """True when one record (a Wikidata entity, one article's infobox, one document) asserts two different values.
+
+    A functional relation is learned statistically ("most subjects have one value"), but when the source we trust
+    most lists several values for *this* subject — English is spoken in many countries; a war had many
+    locations — they are deliberate, not a contradiction. Disputes need two sources that disagree."""
+    seen: dict[tuple[str, int], int] = {}
+    for i, cl in enumerate(clusters):
+        ids = [int(r["id"]) for r in cl]
+        q = ",".join("?" * len(ids))
+        for r in db.query(f"SELECT DISTINCT source, doc_id FROM provenance WHERE triple_id IN ({q})", ids):
+            key = (str(r["source"]), int(r["doc_id"] or 0))
+            if key[0] == "wikidata":
+                key = ("wikidata", 0)  # one entity record per subject
+            if seen.setdefault(key, i) != i:
+                return True
+    return False
+
+
 def detect(db: Database, functional: set[int], *, limit_groups: int = 200_000) -> dict[str, Any]:
     stats = {"groups_checked": 0, "conflicts": 0, "disputed": 0, "settled": 0}
     if not functional:
@@ -89,6 +108,8 @@ def detect(db: Database, functional: set[int], *, limit_groups: int = 200_000) -
                     break
             else:
                 clusters.append([r])
+        if len(clusters) >= 2 and _one_record_lists_several(db, clusters):
+            clusters = [[r for cl in clusters for r in cl]]  # multi-valued for this subject: nothing to dispute
         if len(clusters) < 2:
             for r in rows:  # a previously disputed value that no longer conflicts is settled
                 if r["status"] == "disputed":

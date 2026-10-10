@@ -73,6 +73,24 @@ def test_functional_learning_and_contradictions(db):
     assert detect(db, set()) == {"groups_checked": 0, "conflicts": 0, "disputed": 0, "settled": 0}
 
 
+def test_one_record_listing_several_values_is_not_a_dispute(db):
+    g, _cap, countries, _cities = countries_graph(db)
+    country = g.predicate("P17", "country")
+    langs = [g.upsert_entity(f"Q{500 + i}", f"Lang{i}") for i in range(25)]
+    for i, lang in enumerate(langs):  # learned single-valued: almost every language has one country …
+        g.add_triple(lang, country, o=countries[i], kind="wikidata", source="wikidata")
+    assert country in functional_predicates_all(db)
+    for c in countries[1:6]:  # … but Wikidata itself lists five countries for this one
+        g.add_triple(langs[0], country, o=c, kind="wikidata", source="wikidata")
+    g.add_triple(langs[1], country, o=countries[9], kind="infobox", source="wikipedia", doc_id=7)  # a real conflict
+    res = detect(db, functional_predicates_all(db))
+    status = {(int(r["s"]), int(r["o"])): r["status"] for r in db.query("SELECT s, o, status FROM triples")}
+    assert all(status[(langs[0], c)] == "sourced" for c in countries[:6])
+    assert status[(langs[1], countries[9])] == "disputed" and res["conflicts"] == 1
+    db.execute("UPDATE triples SET status='disputed' WHERE s=?", (langs[0],))  # a stale dispute is settled
+    assert detect(db, functional_predicates_all(db))["settled"] >= 6
+
+
 def test_literal_conflicts(db):
     g = KnowledgeGraph(db)
     born = g.predicate("P569", "date of birth")
