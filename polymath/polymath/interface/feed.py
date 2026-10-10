@@ -128,6 +128,7 @@ ACTIVITY: dict[str, str] = {
     "web.trust": "checking the facts of sites on probation",
     "eval.digest": "writing today's digest",
     "eval.remedy": "going back over its mistakes",
+    "eval.surprise": "looking for surprising facts",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
