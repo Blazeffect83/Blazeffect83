@@ -176,7 +176,43 @@ Real data and real browsers found bugs the fixtures did not:
 - **An answer passage matched "francs" for "France".** A passage must now use the entity's own name.
 - **Production defaults would read only 2 GB of Wikidata and have no feeds or seeds.** Fixed.
 
-## 9. Pending — needs the actual Raspberry Pi 5
+## 9. Agent society on real data
+
+Six agents were spawned on the learning copy from plain directives:
+- "research computer science"
+- "predict the country of cities"
+- "fact-check borders"
+- "watch neural networks"
+- "become an expert on Italy"
+- "predict administrative regions"
+
+They ran 40 society slices offline. Results: _the final trial is running; numbers follow in the next commit._
+
+**What the trials found and fixed.** Every round was run on real data until it was clean:
+
+- **The fact-checker lost every dispute verdict.**
+  - Cause 1: its verifier compared a choice with *one* hidden copy, but relations such as "shares border
+    with" have several true values.
+  - Cause 2, upstream in Phase 6: contradiction detection had disputed values that Wikidata itself lists
+    together, such as the 23 countries of the English language and the 20 locations of World War II. A
+    dispute now needs two sources that disagree, which settled **1,113 of 1,115 disputes** on the learning
+    copy and restored those correct facts.
+- **Open predictions guessed nonsense** ("the country of ASCII → Germany", "Chicago member of UNASUR").
+  - Agents now predict a relation only for subjects whose type usually has it (≥ 30 % of the type).
+  - Candidate answers come from what that type's members actually have.
+  - Reflexive regularities are learned: the "country" of a country is itself, so China → China and
+    Germany → Germany.
+- **A watch agent reported old documents.** It now reports only what arrives after it is spawned.
+- **"countries" was singularised as "countrie".** Fixed.
+
+**What is not yet measured.**
+- Open predictions pay out only when the dumps later deliver the fact, and no new data arrives in an offline
+  run, so their accuracy is still unknown. The mechanism is covered by tests: confirmed → +2.0,
+  contradicted → −0.8, unsettled after 60 days → expires unrewarded.
+- Evolution needs 30 verified outcomes per agent before it forks or judges, so it did not trigger in a
+  40-slice trial.
+
+## 10. Pending — needs the actual Raspberry Pi 5
 
 These cannot be done in a container and are **not** claimed:
 
