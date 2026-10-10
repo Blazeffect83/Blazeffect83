@@ -57,12 +57,13 @@ def test_answers_cite_their_sources(db):
     where = a.ask("Where is Capitol05?")
     assert where.statements[0].text == "The country of Capitol05 is Country05."
     who = a.ask("Who is Country01?")
-    assert [s.kind for s in who.statements] == ["description", "passage"]
+    assert [s.kind for s in who.statements] == ["story", "passage"]  # a paragraph from its facts (interface.tell)
+    assert who.statements[0].text.startswith("Country01 is a country number 1. Its capital is Capitol01.")
     assert who.statements[1].citations[0].url == "https://en.wikipedia.org/wiki/Country01"
     about = a.ask("Tell me about Person1")
     assert about.statements[0].text.endswith("born long ago.") and ".." not in about.statements[0].text
-    city = a.ask("Who is Capitol09?")  # no article, no description: falls back to its facts
-    assert {s.text for s in city.statements} >= {"Capitol09 — country: Country09."}
+    city = a.ask("Who is Capitol09?")  # no article, no description: told from its facts
+    assert city.statements[0].text == "Capitol09 is a city. It is in Country09. It is the capital of Country09."
     hist = a.ask("What do historians write about kingdoms?")
     assert hist.statements and all(s.kind == "passage" for s in hist.statements)
     assert kb.docs  # (fixture sanity)
