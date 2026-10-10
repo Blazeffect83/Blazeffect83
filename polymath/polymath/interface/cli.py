@@ -533,6 +533,29 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
 
 
+def cmd_recap(config: Config, args: argparse.Namespace) -> int:
+    """The weekly recap: the last one written, or this week so far (``--now``)."""
+    from polymath.evaluation import recap
+
+    db = _db(config, readonly=True)
+    try:
+        last = None if args.now else recap.latest(db)
+        if last is None:
+            data = recap.collect(db, cfg=config)
+            week, body = data["week"] + " (so far)", recap.lines(data)
+        else:
+            week, data, body = last["week"], last["data"], last["lines"]
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps({"week": week, "lines": body, "data": data}, indent=2, default=str))
+        return 0
+    print(f"The week in review — {week}")
+    for line in body:
+        print(f"  · {line}")
+    return 0
+
+
 def cmd_predictions(config: Config, args: argparse.Namespace) -> int:
     """Facts it guessed before reading them: confirmed, wrong, still open."""
     from polymath.reasoning import predictions
@@ -1046,6 +1069,11 @@ def build_parser() -> argparse.ArgumentParser:
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")
     stf.add_argument("--erase-files", action="store_true", help="also when it holds files: they are erased")
     sto.set_defaults(func=cmd_storage)
+
+    rc = sub.add_parser("recap", help="the weekly recap: this week against last week")
+    rc.add_argument("--now", action="store_true", help="this week so far instead of the last recap written")
+    rc.add_argument("--json", action="store_true")
+    rc.set_defaults(func=cmd_recap)
 
     pr = sub.add_parser("predictions", help="facts it guessed before reading them, and how many came true")
     pr.add_argument("--limit", type=int, default=10, help="open guesses to list")

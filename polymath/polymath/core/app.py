@@ -60,7 +60,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
     from polymath.evaluation import jobs as vjobs
-    from polymath.evaluation import surprise
+    from polymath.evaluation import recap, surprise
     from polymath.memory import jobs as memjobs
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
@@ -164,6 +164,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("eval.digest", vjobs.digest_job, "Write the daily 'what I learned today' digest", action="evaluate")
     reg("eval.remedy", vjobs.remedy_job, "Read up on wrong answers and re-test them", action="evaluate")
     reg("eval.surprise", surprise.surprise_job, "Find facts that surprised its model", action="evaluate")
+    reg("eval.recap", recap.recap_job, "Write the weekly recap (this week against last)", action="evaluate")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
@@ -182,6 +183,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, openweb.planner),
             (600.0, predictions.planner),
             (600.0, surprise.planner),
+            (600.0, recap.planner),
             (60.0, society.planner),
         ]
         if planners

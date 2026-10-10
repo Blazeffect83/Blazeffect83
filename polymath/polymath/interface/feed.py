@@ -14,7 +14,9 @@ cursor, read straight from the agent's own tables. There is no event log to keep
 * ``storage``   a drive was plugged in and added to the brain, went away, came back, or was retired;
 * ``site``      a new site passed or failed vetting (open-web learning), ``safety`` a safety list loaded;
 * ``relearn`` / ``fixed``  reading up on a wrong self-test answer, and getting it right on the re-test;
-* ``digest``    the daily "what I learned today" summary, line by line.
+* ``digest``    the daily "what I learned today" summary, line by line; ``recap`` the weekly one;
+* ``fun fact``  a "did you know" fact that surprised its own model; ``predicted`` a guess confirmed or refuted;
+* ``SD card``   disk writes over budget or a read-only disk; ``storage`` the brain moved onto a drive.
 
 Busy streams are capped per poll: the newest few are shown, the rest are counted in a ``more`` event, so a
 Wikidata ingest at thousands of facts per second stays readable. The cursor is opaque to clients.
@@ -69,6 +71,7 @@ STREAMS: dict[str, tuple[str, int]] = {
     "v": ("volume_events", 3),
     "e": ("events", 8),
     "x": ("digests", 1),
+    "w": ("recaps", 1),
 }
 CAPS = {"read": 4, "fact": 5, "inferred": 3, "disputed": 2, "quiz": 4, "agent": 5, "error": 3}
 FACT_SAMPLE = 400  # newest facts examined per poll to find readable ones
@@ -129,6 +132,7 @@ ACTIVITY: dict[str, str] = {
     "eval.digest": "writing today's digest",
     "eval.remedy": "going back over its mistakes",
     "eval.surprise": "looking for surprising facts",
+    "eval.recap": "writing the weekly recap",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -197,6 +201,7 @@ class Feed:
         events += self._storage(lo["v"], heads["v"])
         events += self._events(lo["e"], heads["e"])
         events += self._digests(lo["x"], heads["x"])
+        events += self._recaps(lo["w"], heads["w"])
         events.sort(key=lambda e: float(e.get("at") or 0))
         return {"cursor": format_cursor(heads), "events": events, "status": self.status()}
 
@@ -564,6 +569,21 @@ class Feed:
                     for i, line in enumerate(lines(data), 1)]  # fmt: skip
         return out
 
+    def _recaps(self, lo: int, hi: int) -> list[dict[str, Any]]:
+        from polymath.evaluation.recap import lines
+
+        out: list[dict[str, Any]] = []
+        for r in self.db.query("SELECT week, created, data FROM recaps WHERE id > ? AND id <= ? ORDER BY id", (lo, hi)):
+            try:
+                data = json.loads(r["data"])
+                body = lines(data)
+            except (ValueError, KeyError, TypeError):
+                continue
+            out.append({"kind": "recap", "at": r["created"], "text": f"the week in review — {r['week']}", "head": True})
+            out += [{"kind": "recap", "at": float(r["created"]) + 1e-6 * i, "text": line}
+                    for i, line in enumerate(body, 1)]  # fmt: skip
+        return out
+
     def _failures(self, lo: int, hi: int) -> list[dict[str, Any]]:
         out = []
         for r in self.db.query(
@@ -925,6 +945,10 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
             "prediction": "predicted",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
+    if k == "recap":
+        if e.get("head"):
+            return [*head, _tag("recap", "bmagenta"), (str(e["text"]), "bold")]
+        return [*head, _tag("", ""), ("· " + str(e["text"]), "")]
     if k == "digest":
         if e.get("head"):
             return [*head, _tag("digest", "bmagenta"), (str(e["text"]), "bold")]

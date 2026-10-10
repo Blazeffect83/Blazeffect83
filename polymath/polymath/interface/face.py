@@ -85,6 +85,7 @@ ACTION_MOOD: dict[str, str] = {
     "eval.remedy": "thinking",
     "eval.digest": "writing",
     "eval.report": "writing",
+    "eval.recap": "writing",
     "agents.verify": "quizzing",
     "drive.learn": "agents",
     "body.recall": "reading",
@@ -172,7 +173,7 @@ class Face:
                 self.react("happy", now, 3.0, 1)
             elif what == "site" and status in {"refused", "dropped"}:
                 self.react("doubt", now, 3.0, 1)
-        elif k in {"report", "newagent"} or (k == "digest" and event.get("head")):
+        elif k in {"report", "newagent"} or (k in {"digest", "recap"} and event.get("head")):
             self.react("happy", now, 6.0, 2)
         elif k == "storage" and event.get("event") == "added":
             self.react("celebrate", now, 8.0, 3)

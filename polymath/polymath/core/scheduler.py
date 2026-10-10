@@ -64,6 +64,12 @@ def local_phase(hour: int, *, now: float | None = None) -> float:
     return (hour * 3600 - time.localtime(now).tm_gmtoff) % 86400
 
 
+def local_weekly_phase(weekday: int, hour: int, *, now: float | None = None) -> float:
+    """``ensure_recurring`` phase for a weekly job (interval 7 days) on local ``weekday`` (Monday 0) at ``hour``.
+    The Unix epoch fell on a Thursday (weekday 3)."""
+    return (((weekday - 3) % 7) * 86400 + hour * 3600 - time.localtime(now).tm_gmtoff) % (7 * 86400)
+
+
 class Scheduler:
     def __init__(
         self,
