@@ -28,6 +28,7 @@ from polymath.core.db import Database
 from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
 from polymath.core.logging import get_logger
 from polymath.core.scheduler import Job, QueueStats, Scheduler
+from polymath.version import read_build
 
 log = get_logger("loop")
 
@@ -145,6 +146,7 @@ class Agent:
         self.started = False
         self.last: CycleRecord | None = None
         self._pulsed = -1e18
+        self.build = read_build()  # the code this process runs; the feed compares it with what is installed
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -227,7 +229,16 @@ class Agent:
             return
 
     def _heartbeat(self, state: str) -> None:
-        self.db.kv_set("heartbeat", {"ts": time.time(), "cycle": self.cycle_no, "state": state})
+        self.db.kv_set(
+            "heartbeat",
+            {
+                "ts": time.time(),
+                "cycle": self.cycle_no,
+                "state": state,
+                "version": self.build.label(),
+                "build": self.build.key,
+            },
+        )
         self._pulse(force=True)
 
     def observe(self) -> Observation:

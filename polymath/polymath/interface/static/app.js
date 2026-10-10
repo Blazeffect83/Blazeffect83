@@ -135,7 +135,7 @@ async function refresh() {
     const state = o.health.state || "unknown";
     hl.textContent = o.health.ok ? `running · cycle ${fmt(o.health.cycle)}` : `${state}${o.paused_reason ? ": " + o.paused_reason : ""}`;
     hl.className = "pill " + (o.health.ok ? "ok" : state === "paused" ? "warn" : "bad");
-    $("#meta").textContent = `heartbeat ${o.health.heartbeat_age_s ?? "–"} s · v${o.health.version}`;
+    $("#meta").textContent = `heartbeat ${o.health.heartbeat_age_s ?? "–"} s · ${o.health.build || "v" + o.health.version}`;
     kpis(o);
     const sources = Object.keys(ts.documents_per_day);
     lineChart($("#c-docs"), sources.map((s) => ({points: ts.documents_per_day[s]})));

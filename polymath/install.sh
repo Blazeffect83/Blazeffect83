@@ -109,6 +109,15 @@ if [ "$DRY" = 0 ]; then
         -o -name '*.html' -o -name '*.sh' -o -name '*.toml' \) -exec md5sum {} + 2>/dev/null | sort -k2 | md5sum)"
     [ "$stamp_before" = "$stamp_after" ] || code_changed=1
 fi
+# build stamp (version, commit, commit date): the live feed shows it top right and checks the agent runs it
+BUILD_JSON="$OPT/build.json"
+build_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/pyproject.toml" | head -n 1)"
+build_commit="$(git -c safe.directory='*' -C "$SRC" rev-parse --short=7 HEAD 2>/dev/null || true)"
+build_date="$(git -c safe.directory='*' -C "$SRC" log -1 --format=%cs 2>/dev/null || true)"
+build_new="{\"version\": \"${build_version:-unknown}\", \"commit\": \"$build_commit\", \"date\": \"$build_date\"}"
+if [ "$(cat "$BUILD_JSON" 2>/dev/null || true)" != "$build_new" ]; then
+    code_changed=1  # a new commit restarts the agent so it runs (and reports) the installed build
+fi
 if [ "$VENV" = 1 ]; then
     if [ ! -x "$OPT/venv/bin/python" ]; then
         say "creating the runtime virtual environment (numpy only)"
@@ -119,6 +128,15 @@ if [ "$VENV" = 1 ]; then
         say "installing polymath and numpy into the venv"
         run "$OPT/venv/bin/pip" install --quiet --upgrade pip
         run "$OPT/venv/bin/pip" install --quiet "$OPT/src"
+    fi
+fi
+# written after the code is installed: a feed that sees the new stamp reloads straight into the new code
+if [ "$(cat "$BUILD_JSON" 2>/dev/null || true)" != "$build_new" ]; then
+    say "build: polymath v${build_version:-unknown}${build_commit:+ · $build_commit}${build_date:+ ($build_date)}"
+    if [ "$DRY" = 0 ]; then
+        printf '%s\n' "$build_new" >"$BUILD_JSON.tmp" && chmod 0644 "$BUILD_JSON.tmp" && mv -f "$BUILD_JSON.tmp" "$BUILD_JSON"
+    else
+        run write "$BUILD_JSON"
     fi
 fi
 

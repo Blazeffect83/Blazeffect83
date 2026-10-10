@@ -26,6 +26,7 @@ from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
 from polymath.core.loop import heartbeat_path
+from polymath.version import read_build
 
 log = get_logger("dashboard")
 MAX_BODY = 4096
@@ -85,6 +86,8 @@ class DashboardData:
             "state": hb.get("state"),
             "cycle": hb.get("cycle"),
             "version": __version__,
+            "build": read_build().label(),
+            "agent_build": hb.get("version"),
         }
 
     def overview(self) -> dict[str, Any]:

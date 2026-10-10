@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 360 automated tests pass (`pytest`), including:
+- **Tests:** 394 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -345,6 +345,23 @@ development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and
 - Single-valued relations were judged from all facts, so a lying site's own claims could make a relation look
   multi-valued and dodge the check. They are now judged from Wikidata only.
 - The "offline" end-to-end test started downloading the real safety lists; tests now use local lists only.
+
+## 12b. Feed face and version badge
+
+- Rendered in a real pseudo-terminal (120 columns, emulated with pyte) for every mood. That is the image in
+  OPERATIONS §"The live feed". The badge stays whole on the right while long activity text is shortened.
+- Every face glyph was checked against the cmap of DejaVu Sans Mono, the Raspberry Pi OS terminal font
+  (`tests/test_face.py`). All of them are present and none is double-width.
+- `tests/test_face.py` (34 tests) covers:
+  - reading `build.json` and `.git` (loose, packed, detached and worktree refs);
+  - the heartbeat carrying the build, and `polymath version` / `status` / `--version`;
+  - badge states, header layout, and milestones;
+  - mood per job kind, reaction timing and priority, and the animation (scanning eyes, spinner, thought dots,
+    blink, constant width);
+  - the feed redrawing between polls and reloading into a new installed build (but not for a development
+    checkout);
+  - `install.sh` writing the stamp once.
+- Not yet seen on the Pi itself: the font check used the same DejaVu Sans Mono that Raspberry Pi OS ships.
 
 ## 13. Raspberry Pi 4 on-device results
 

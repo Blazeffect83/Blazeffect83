@@ -38,6 +38,8 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 - creates the `polymath` system user;
 - installs `python3-venv`, `curl`, `fdisk` and `e2fsprogs` if missing;
 - copies the code to `/opt/polymath/src` and builds `/opt/polymath/venv` (numpy only);
+- records the build (version, git commit, commit date) in `/opt/polymath/build.json`. A new commit restarts the
+  agent so that it runs, and reports, the installed build;
 - writes `/etc/polymath/polymath.toml` (never overwritten once it exists);
 - installs `polymath.service`, `polymath-dashboard.service` and a journald size limit;
 - enables desktop autologin (`raspi-config nonint do_boot_behaviour B4`);
@@ -91,6 +93,37 @@ The CLI reads the same configuration as the service (`/etc/polymath/polymath.tom
 Busy streams are capped per refresh (for example 5 facts and 4 documents every 1.5 s), and the rest are counted
 (`+4,312 more facts`), so a Wikidata ingest stays readable. The pinned header shows the state, what it is doing
 now, its knowledge counts, the latest quiz score and the CPU temperature.
+
+**Version, top right.** `v0.2.0 · ab12cd3 · 2026-10-10 ✓` is the installed version, git commit and commit date;
+`✓` means the running agent was started from exactly that build. `↻ agent still on v0.1.0` means an update is
+installed but the agent has not restarted into it yet (`install.sh` restarts it; `sudo systemctl restart
+polymath` does too). After an update the feed window reloads itself into the new code within 30 seconds, with
+the line `updated to v… : reloading the feed`. `polymath version` prints the same check. It compares the Pi with
+itself: it does not contact GitHub to look for newer commits.
+
+**The face, top left.** A small animated character shows what it is doing, so the window is worth a glance:
+
+![The face's moods](img/feed-faces.png)
+
+| face | when |
+|---|---|
+| `[◐‿◐]` ⇄ `[◑‿◑]` | reading (eyes run along the line) |
+| `[◔_◔]...` | reasoning, planning, going over mistakes |
+| `[◕‿◕]◜` | training its models, downloading (spinner) |
+| `[≖_≖]?` | vetting a new site |
+| `[•_•]?` | quizzing itself |
+| `[◕ω◕]···` | agents at work |
+| `[•‿•]✎` | writing the digest or the nightly report |
+| `[-‿-]zZ` | waiting for work (`[˘‿˘]zZ` at night) |
+| `[^‿^]✧` | a right answer, a better quiz score, a site approved, a new agent, the digest |
+| `[◕‿◕]!` | worked out a new fact by reasoning |
+| `[⌐■_■]` | fixed an earlier mistake |
+| `[ᵒ_ᵒ]!` / `[¬_¬]?` / `[×_×]!` | a wrong answer / a contradiction or refused site / a failed job |
+| `[^‿^]★` | a milestone (1, 2, 5 × 10ⁿ facts, documents or rules; also a feed line) or a new drive |
+| `[>_<]` / `[-_-]` / `○[×_×]` | running hot / paused / agent offline |
+
+The spark on its head (`✦`/`✧`) pulses while the agent is alive and it blinks every few seconds. There is no
+language model and no randomness: the face is a function of the agent's state, the last few events and the clock.
 
 The feed reads from the dashboard service (`/api/feed`, localhost), so the desktop user needs no access to
 `/srv/polymath`. Options: `--plain` (no pinned header, for logs or `ssh`), `--no-color`, `--once`,

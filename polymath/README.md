@@ -18,7 +18,9 @@ implemented here and learns only from data the agent downloads itself.
 - **Learns from its mistakes:** every wrong self-test answer is read up on and re-tested.
 - **Tells you what it learned:** a daily digest in the feed, the dashboard, and `polymath digest`.
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
-  tests itself on and gets rewarded for.
+  tests itself on and gets rewarded for. A little animated face at the top shows its mood (reading, thinking,
+  proud of a fixed mistake, dozing when idle), and the top right shows the exact version it runs, with ✓ when
+  the agent runs the installed update.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
   at 75 °C and pauses at 82 °C.
 - **Survives power loss:** every step commits atomically (SQLite WAL); jobs resume where they stopped.
@@ -50,6 +52,7 @@ polymath learn "black holes"                     # research a topic as a priorit
 polymath topics --weakest                        # where its knowledge is thinnest
 polymath why "Black holes"                       # why it is (or is not) working on something
 polymath status                                  # health, queue, knowledge counts
+polymath version                                 # installed version and commit; is the agent running it?
 polymath storage list                            # the drives in its brain
 polymath digest                                  # what it learned today
 polymath sites                                   # new sites it vetted, refused or dropped, and why

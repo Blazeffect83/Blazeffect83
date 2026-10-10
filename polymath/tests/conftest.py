@@ -63,3 +63,9 @@ def _no_storage_pool_leaks() -> Iterator[None]:
 
     yield
     pool.deactivate()
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_build(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never see a real installed build.json (on the Pi, /opt/polymath/build.json): each starts without one."""
+    monkeypatch.setenv("POLYMATH_BUILD_FILE", str(tmp_path_factory.mktemp("build") / "build.json"))

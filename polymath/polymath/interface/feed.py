@@ -23,6 +23,11 @@ Client side — :func:`run` polls the dashboard's ``/api/feed`` (the dashboard r
 so the desktop user needs no access to the database) or the database directly, and prints the events.
 On a terminal it pins a status header (state, current activity, knowledge counts, temperature) above
 the scrolling feed. Piped output gets plain lines, plus a status line every minute.
+
+The header also shows Polymath's face (:mod:`polymath.interface.face`), an animated character whose expression
+follows what it is doing, and, top right, the installed version and commit with ``✓`` when the agent runs exactly
+that build (``↻`` while an update waits for the agent to restart). When an update is installed, the feed reloads
+itself into the new code.
 """
 
 from __future__ import annotations
@@ -44,6 +49,8 @@ from typing import Any, TextIO
 
 from polymath.core.db import Database
 from polymath.interface.answer import render_value
+from polymath.interface.face import FRAME_S, Face
+from polymath.version import Build, read_build
 
 # --------------------------------------------------------------------------------------------- streams
 # cursor letter → (table, events shown on first connect)
@@ -619,10 +626,11 @@ class Feed:
                 pass
         state = str(hb.get("state") or "not started")
         online = age is not None and age < self.stale and state != "stopped"
-        activity = ""
+        activity = action = ""
         for r in self.db.query("SELECT action, status FROM cycles ORDER BY id DESC LIMIT 30"):
             if r["status"] in {"done", "continue", "interrupted", "failed"} and r["action"]:
-                activity = ACTIVITY.get(str(r["action"]), str(r["action"]))
+                action = str(r["action"])
+                activity = ACTIVITY.get(action, action)
                 break
             if r["status"] == "idle":
                 activity = "waiting for work"
@@ -641,6 +649,9 @@ class Feed:
             "cycle": hb.get("cycle"),
             "heartbeat_age_s": None if age is None else round(age, 1),
             "activity": activity,
+            "action": action,
+            "version": hb.get("version"),
+            "build": hb.get("build"),
             "temp_c": None if vit is None or vit["temp_c"] is None else round(float(vit["temp_c"]), 1),
             "mode": str(vit["mode"]) if vit else "normal",
             "paused_reason": self.db.kv_get("paused_reason") if state == "paused" else None,
@@ -726,6 +737,33 @@ ASCII_FALLBACK = {
     "°": "",
     "“": '"',
     "”": '"',
+    # the face (polymath.interface.face)
+    "✦": "*",
+    "✧": "+",
+    "◐": "o",
+    "◑": "o",
+    "◔": "o",
+    "◕": "o",
+    "‿": "_",
+    "≖": "=",
+    "¬": "-",
+    "•": "o",
+    "ω": "w",
+    "ᵔ": "^",
+    "˘": "-",
+    "ᵒ": "o",
+    "⌐": "",
+    "■": "#",
+    "×": "x",
+    "★": "*",
+    "☆": "+",
+    "✎": "/",
+    "≈": "~",
+    "◜": "-",
+    "◝": "\\",
+    "◞": "|",
+    "◟": "/",
+    "↻": "~",
 }
 
 
@@ -900,6 +938,8 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
         return [*head, _tag("body", str(e.get("style", "yellow"))), (str(e["text"]), "")]
     if k == "curious":
         return [*head, _tag("curious", "magenta"), ("most curious about: ", ""), (", ".join(e["topics"]), "bold")]
+    if k == "milestone":
+        return [*head, _tag("milestone", "bmagenta"), (str(e["text"]), "bold"), (" ★", "byellow")]
     if k == "link":
         return [*head, _tag("feed", str(e.get("style", "dim"))), (str(e["text"]), str(e.get("style", "dim")))]
     return [*head, _tag(str(k), ""), (json.dumps(e, default=str)[:200], "dim")]
@@ -951,6 +991,30 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[S
     return [line1, line2]
 
 
+def badge(installed: Build, st: dict[str, Any] | None) -> list[Seg]:
+    """Top right of the header: the installed version and commit, and whether the agent runs exactly that build."""
+    online = bool(st and st.get("online"))
+    if not online or (st or {}).get("build") == installed.key:
+        text = installed.label() + (f" · {installed.date}" if installed.date else "")
+        return [(text, "dim"), (" ✓", "bgreen")] if online else [(text, "dim")]
+    # an update is installed but the agent has not restarted into it yet: say which build it still runs
+    running = str((st or {}).get("version") or "").split(" · ")
+    old = running[0] if running[0] and running[0] != f"v{installed.version}" else running[-1] or "the previous build"
+    return [(installed.label(), "dim"), (f" ↻ agent still on {old}", "byellow")]
+
+
+def milestone_after(before: int, after: int) -> int | None:
+    """The largest round count (1, 2 or 5 × 10^k, from 1,000) passed when a count went from ``before`` to ``after``."""
+    best = None
+    k = 1_000
+    while k <= after:
+        for m in (k, 2 * k, 5 * k):
+            if before < m <= after:
+                best = m
+        k *= 10
+    return best
+
+
 @dataclass
 class _Seen:
     """What the client already announced, to turn status changes into feed lines."""
@@ -958,6 +1022,7 @@ class _Seen:
     mode: str | None = None
     online: bool | None = None
     curious: list[str] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
 
 
 def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
@@ -983,6 +1048,14 @@ def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
     if curious and curious != seen.curious:
         out.append({"kind": "curious", "at": now, "topics": curious})
     seen.curious = curious
+    counts = st.get("counts") or {}
+    for key, what in (("facts", "facts known"), ("documents", "documents read"), ("rules", "rules learned")):
+        n = int(counts.get(key) or 0)
+        if key in seen.counts:
+            m = milestone_after(seen.counts[key], n)
+            if m is not None:
+                out.append({"kind": "milestone", "at": now, "text": f"milestone: {compact(m)} {what}"})
+        seen.counts[key] = n
     return out
 
 
@@ -1011,9 +1084,12 @@ class Screen:
         size = shutil.get_terminal_size((100, 30))
         self.cols, self.rows = max(40, size.columns), max(self.HEADER + 4, size.lines)
 
-    def paint(self, segs: list[Seg]) -> str:
-        """Render segments, truncated to the terminal width (plain mode: no truncation)."""
-        width = self.cols if self.fancy else 10_000
+    def _width(self, segs: list[Seg] | None) -> int:
+        return min(sum(len(t) for t, _ in segs or []), self.cols // 2)
+
+    def paint(self, segs: list[Seg], *, width: int | None = None) -> str:
+        """Render segments, truncated to ``width`` (default: the terminal width; plain mode: no truncation)."""
+        width = (self.cols if width is None else max(0, width)) if self.fancy else 10_000
         out, used = [], 0
         for text, style in segs:
             if not self.unicode:
@@ -1047,7 +1123,8 @@ class Screen:
         self.out.write(f"\033[{self.HEADER + 1};{self.rows}r\033[{self.rows};1H")
         self.out.flush()
 
-    def header(self, lines: list[list[Seg]], *, force_plain: bool = False) -> None:
+    def header(self, lines: list[list[Seg]], *, right: list[Seg] | None = None, force_plain: bool = False) -> None:
+        """Draw the pinned header; ``right`` is right-aligned on its first line (it wins when space is short)."""
         self._last_header = lines
         if self._resized:
             self._resized = False
@@ -1056,8 +1133,13 @@ class Screen:
         if self.fancy:
             rule: list[Seg] = [("─" * self.cols, "dim")]
             buf = ["\0337"]
+            rw = self._width(right)
             for i, segs in enumerate([*lines, rule][: self.HEADER]):
-                buf.append(f"\033[{i + 1};1H\033[2K{self.paint(segs)}")
+                if i == 0 and rw:
+                    left, col = self.paint(segs, width=self.cols - rw - 2), self.cols - rw + 1
+                    buf.append(f"\033[1;1H\033[2K{left}\033[1;{col}H{self.paint(right or [], width=rw)}")
+                else:
+                    buf.append(f"\033[{i + 1};1H\033[2K{self.paint(segs)}")
             buf.append("\0338")
             self.out.write("".join(buf))
             self.out.flush()
@@ -1069,6 +1151,8 @@ class Screen:
             for i, segs in enumerate(lines):
                 joined += [(" ·", "dim")] if i else []
                 joined += segs
+            if right:
+                joined += [(" · ", "dim"), *right]
             self.out.write(self.paint(joined) + "\n")
             self.out.flush()
 
@@ -1088,6 +1172,9 @@ def wants_color(out: TextIO, env: dict[str, str] | None = None) -> bool:
     return bool(getattr(out, "isatty", lambda: False)()) and "NO_COLOR" not in env and env.get("TERM") != "dumb"
 
 
+BUILD_CHECK_S = 30.0  # how often the feed re-reads the installed build
+
+
 def run(
     source: Callable[[str | None], dict[str, Any]],
     *,
@@ -1100,44 +1187,83 @@ def run(
     where: str = "",
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    build: Callable[[], Build] = read_build,
+    on_update: Callable[[Build], None] | None = None,
 ) -> int:
-    """Poll ``source`` forever (until Ctrl+C) and print what the agent learns."""
+    """Poll ``source`` forever (until Ctrl+C) and print what the agent learns.
+
+    ``build`` reads the installed build (re-read every ``BUILD_CHECK_S``); when an installer-written build differs
+    from the one this process started with, ``on_update`` is called (the CLI re-executes the feed in the new code).
+    """
     out = out or sys.stdout
     color = wants_color(out) if color is None else color
     fancy = color if fancy is None else fancy
     screen = Screen(out, color=color, fancy=fancy, clock=clock)
     seen = _Seen()
+    face = Face()
+    mine = installed = build()
+    checked_at = clock()
     cursor: str | None = None
     polls, waiting, backoff = 0, "", interval
+    last: dict[str, Any] | None = None
+
+    def draw(*, force_plain: bool = False) -> None:
+        lines = status_lines(last, offline=f"waiting: {waiting}" if waiting else "")
+        lines[0] = [*face.segments(time.time()), *lines[0]]
+        screen.header(lines, right=badge(installed, None if waiting else last), force_plain=force_plain)
+
+    def pause(seconds: float) -> None:
+        """Sleep, redrawing the header every animation frame so the face keeps moving."""
+        if not fancy:
+            sleep(max(0.0, seconds))
+            return
+        steps = max(1, round(seconds / FRAME_S))
+        for _ in range(steps):
+            sleep(max(0.0, seconds / steps))
+            draw()
+
     screen.start()
     try:
         if fancy:
-            screen.header(status_lines(None))
+            draw()
         hello = f"live feed from {where}" if where else "live feed"
         screen.line(render_event({"kind": "link", "text": f"{hello} · Ctrl+C to stop"}))
         while True:
             t0 = clock()
+            if t0 - checked_at >= BUILD_CHECK_S:
+                checked_at, installed = t0, build()
+                if on_update is not None and installed.installed and installed.key != mine.key:
+                    screen.line(render_event({"kind": "link", "text": f"updated to {installed.label()}: "
+                                              "reloading the feed", "style": "green"}))  # fmt: skip
+                    screen.stop()
+                    on_update(installed)
+                    mine = installed  # on_update returned instead of replacing the process: carry on
+                    screen.start()
             try:
                 data = source(cursor)
             except FeedUnavailable as exc:
                 if str(exc) != waiting:
                     waiting = str(exc)
                     screen.line(render_event({"kind": "link", "text": f"waiting: {waiting}", "style": "yellow"}))
+                face.update(None, offline=waiting)
                 if fancy:
-                    screen.header(status_lines(None, offline=f"waiting: {waiting}"))
+                    draw()
                 polls += 1
                 if once or (max_polls is not None and polls >= max_polls):
                     return 1
-                sleep(backoff)
+                pause(backoff)
                 backoff = min(backoff * 2, 10.0)
                 continue
             if waiting:
                 screen.line(render_event({"kind": "link", "text": "connected", "style": "green"}))
                 waiting, backoff = "", interval
             cursor = str(data.get("cursor") or "") or None
-            st = data.get("status") or {}
-            screen.header(status_lines(st), force_plain=polls == 0)
-            events = transitions(seen, st) + list(data.get("events") or [])
+            last = data.get("status") or {}
+            face.update(last)
+            events = transitions(seen, last) + list(data.get("events") or [])
+            for ev in events:
+                face.see(ev)
+            draw(force_plain=polls == 0)
             # spread a batch over the interval so it reads like a live feed rather than a burst
             gap = min(0.25, interval / max(1, len(events))) if fancy else 0.0
             for i, ev in enumerate(events):
@@ -1147,7 +1273,7 @@ def run(
             polls += 1
             if once or (max_polls is not None and polls >= max_polls):
                 return 0
-            sleep(max(0.0, interval - (clock() - t0)))
+            pause(interval - (clock() - t0))
     except KeyboardInterrupt:
         return 0
     finally:

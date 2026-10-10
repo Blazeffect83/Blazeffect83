@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections.abc import Sequence
@@ -16,6 +17,7 @@ from polymath.core.config import Config, ConfigError, load_config
 from polymath.core.db import Database, open_database
 from polymath.core.logging import setup_logging
 from polymath.core.scheduler import Scheduler
+from polymath.version import Build, read_build
 
 
 def _db(config: Config, *, readonly: bool = False) -> Database:
@@ -48,6 +50,8 @@ def status_dict(db: Database) -> dict[str, Any]:
     hb = db.kv_get("heartbeat") or {}
     return {
         "version": __version__,
+        "build": read_build().label(),
+        "agent_build": hb.get("version"),
         "heartbeat_age_s": round(time.time() - float(hb.get("ts", 0)), 1) if hb else None,
         "agent_state": hb.get("state"),
         "cycle": hb.get("cycle"),
@@ -586,6 +590,44 @@ def cmd_sites(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_version(config: Config, args: argparse.Namespace) -> int:
+    """The installed build, and the build the running agent was started with."""
+    installed = read_build()
+    agent: dict[str, Any] = {}
+    try:
+        db = Database(config.paths.db_path, readonly=True)
+        try:
+            agent = db.kv_get("heartbeat") or {}
+        finally:
+            db.close()
+    except Exception:  # no database yet, or not readable by this user: report what is installed
+        agent = {}
+    current = agent.get("build") == installed.key if agent.get("build") else None
+    info = {
+        "version": installed.version,
+        "commit": installed.commit,
+        "date": installed.date,
+        "installed": installed.installed,
+        "agent": agent.get("version"),
+        "agent_current": current,
+    }
+    if args.json:
+        print(json.dumps(info))
+        return 0
+    print(f"installed: polymath {installed.label()}" + (f" ({installed.date})" if installed.date else ""))
+    if agent.get("version"):
+        mark = "✓ running the installed build" if current else "↻ restart the agent to run the installed build"
+        print(f"agent:     polymath {agent['version']}  {mark}")
+    else:
+        print("agent:     not running, or started before builds were recorded")
+    return 0
+
+
+def _reexec_feed(build: Build) -> None:  # pragma: no cover - replaces the process
+    """Restart this feed process in the newly installed code (same arguments)."""
+    os.execv(sys.executable, [sys.executable, *sys.orig_argv[1:]])
+
+
 def cmd_feed(config: Config, args: argparse.Namespace) -> int:
     from polymath.core.loop import heartbeat_path
     from polymath.interface import feed
@@ -603,6 +645,7 @@ def cmd_feed(config: Config, args: argparse.Namespace) -> int:
         fancy=False if args.plain else None,
         once=args.once,
         where=where,
+        on_update=None if args.once else _reexec_feed,
     )
 
 
@@ -830,7 +873,7 @@ def cmd_agents(config: Config, args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="polymath", description="Polymath autonomous learning agent")
     p.add_argument("--config", help="path to polymath.toml (default /etc/polymath/polymath.toml)")
-    p.add_argument("--version", action="version", version=f"polymath {__version__}")
+    p.add_argument("--version", action="version", version=f"polymath {read_build().label()}")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="create the data directory and database").set_defaults(func=cmd_init)
@@ -841,6 +884,10 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_run)
 
     sub.add_parser("status", help="agent health and queue summary").set_defaults(func=cmd_status)
+
+    vr = sub.add_parser("version", help="installed version and commit, and whether the agent runs it")
+    vr.add_argument("--json", action="store_true")
+    vr.set_defaults(func=cmd_version)
 
     a = sub.add_parser("ask", help="ask what the agent knows (offline, with citations)")
     a.add_argument("question", nargs="+")

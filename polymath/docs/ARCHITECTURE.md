@@ -108,6 +108,15 @@ ANSI scroll region, and spreads each batch over the interval so it reads as a st
 opens it at login in the first terminal it finds (lxterminal on Raspberry Pi OS). A lock file stops the XDG and
 compositor autostarts from opening two windows.
 
+**Face and version.** `interface/face.py` picks an expression from the job being run (its kind, or the prefix
+before the dot), the body mode, and reactions to events (each with a duration and a priority, so a fixed mistake
+is not overwritten by a routine inference). The clock animates it in 0.5 s frames: the client redraws only the
+header between polls. Every glyph is single-width and in DejaVu Sans Mono, which a test checks against the
+font's cmap. `polymath/version.py` reads `build.json`, which `install.sh` writes after the code is installed;
+in a development checkout it reads the commit from `.git` with no subprocess. The agent puts its build in the
+heartbeat. The feed compares it with the installed build for the `✓`/`↻` badge, and `os.execv`s itself into new
+code when the installed build changes.
+
 ## Open-web learning, the digest, learning from mistakes
 
 - **Open-web learning** (`senses/openweb.py`):
