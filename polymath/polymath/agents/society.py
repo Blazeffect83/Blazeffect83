@@ -193,12 +193,23 @@ def _verify_predict(db: Any, t: Any, p: dict[str, Any]) -> bool | None:
 
 
 def _verify_dispute(db: Any, t: Any, p: dict[str, Any]) -> bool | None:
-    hidden = db.one("SELECT o, value FROM triples WHERE s=? AND p=? AND holdout=1 LIMIT 1", (p["s"], p["p"]))
+    """A hidden copy decides only what it can: matching *any* hidden value is right, and missing all of them is
+    wrong only for a single-valued (functional) relation. Otherwise wait for the evidence to settle."""
+    from polymath.reasoning.contradictions import functional_predicates_all
+
     chosen = db.one("SELECT o, value FROM triples WHERE id=?", (p["choice"],))
     if chosen is None:
         return False  # the chosen claim was retracted
-    if hidden is not None:
-        return (int(hidden["o"]), str(hidden["value"])) == (int(chosen["o"]), str(chosen["value"]))
+    hidden = {(int(h["o"]), str(h["value"])) for h in db.query(
+        "SELECT o, value FROM triples WHERE s=? AND p=? AND holdout=1", (p["s"], p["p"]))}  # fmt: skip
+    if (int(chosen["o"]), str(chosen["value"])) in hidden:
+        return True
+    functional = int(p["p"]) in functional_predicates_all(db)
+    if hidden and functional:
+        return False
+    if not functional:  # several values can be true: right if the chosen claim survives as accepted
+        status = db.scalar("SELECT status FROM triples WHERE id=?", (p["choice"],))
+        return None if status == "disputed" else status in {"sourced", "inferred"}
     group = db.query(
         "SELECT id, status, confidence FROM triples WHERE s=? AND p=? AND holdout=0 AND "
         "status IN ('sourced','disputed')",

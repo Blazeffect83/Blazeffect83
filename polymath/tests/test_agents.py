@@ -506,3 +506,34 @@ def test_dashboard_agents_api(config, db):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_dispute_verdicts_respect_multi_valued_relations(config, db):
+    kb = build(db)
+    g = kb.graph
+    border = g.predicate("P47", "shares border with")
+    for i in range(30):  # a multi-valued relation: every country borders two others
+        for j in (1, 2):
+            g.add_triple(kb.countries[i], border, o=kb.countries[(i + j) % 40], kind="wikidata", source="wikidata")
+    s = kb.countries[0]
+    claim, _ = g.add_triple(s, border, o=kb.countries[5], kind="pattern", source="text", doc_id=kb.docs["Country00"])
+    hidden = int(db.scalar("SELECT id FROM triples WHERE s=? AND p=? AND o=?", (s, border, kb.countries[1])))
+    db.execute("UPDATE triples SET holdout=1 WHERE id=?", (hidden,))
+    a = society.spawn(db, "fact-check borders")
+    t = store.open_task(db, store.get(db, a.id), kind="dispute", action="dispute", target="d1",
+                        payload={"s": s, "p": border, "choice": claim}, verify_after=0)  # fmt: skip
+    row = db.one("SELECT * FROM agent_tasks WHERE id=?", (t,))
+    # the hidden copy is a *different* border: that does not make the chosen border wrong
+    db.execute("UPDATE triples SET status='disputed' WHERE id=?", (claim,))
+    assert society._verify_dispute(db, row, json.loads(row["payload"])) is None  # still open
+    db.execute("UPDATE triples SET status='sourced' WHERE id=?", (claim,))
+    assert society._verify_dispute(db, row, json.loads(row["payload"])) is True  # accepted
+    db.execute("DELETE FROM triples WHERE id=?", (claim,))
+    assert society._verify_dispute(db, row, json.loads(row["payload"])) is False  # retracted
+    match = int(db.scalar("SELECT id FROM triples WHERE s=? AND p=? AND o=?", (s, border, kb.countries[2])))
+    assert society._verify_dispute(db, row, {"s": s, "p": border, "choice": match}) is True  # still sourced, settled
+    cap = kb.preds["capital"]  # single-valued: a hidden capital that differs means the choice was wrong
+    db.execute("UPDATE triples SET holdout=1 WHERE s=? AND p=?", (kb.countries[3], cap))
+    wrong, _ = g.add_triple(kb.countries[3], cap, o=kb.cities[9], kind="pattern", source="text",
+                            doc_id=kb.docs["Country09"])  # fmt: skip
+    assert society._verify_dispute(db, row, {"s": kb.countries[3], "p": cap, "choice": wrong}) is False
