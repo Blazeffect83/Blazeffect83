@@ -6,6 +6,7 @@ import json
 import random
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,7 @@ from polymath.evaluation.quiz import mark_holdout
 from polymath.memory.documents import Document, DocumentStore
 from polymath.memory.text_index import TextIndex
 from tests.fixtures.kb import build
+from tests.fixtures.typing import some
 
 
 def ctx_for(config, db, kind="agents.step", payload=None):
@@ -29,7 +31,7 @@ def ctx_for(config, db, kind="agents.step", payload=None):
 
 
 def runtime(config, db, agent, seed=1):
-    return skills.Runtime(db, Scheduler(db), config, {}, store.get(db, agent.id), random.Random(seed))
+    return skills.Runtime(db, Scheduler(db), config, {}, some(store.get(db, agent.id)), random.Random(seed))
 
 
 # ------------------------------------------------------------------ directives
@@ -90,7 +92,7 @@ def test_quiz_rewards_once_and_penalises_wrong_answers(config, db, monkeypatch):
     a = society.spawn(db, "research geography")
     res = skills.quiz(runtime(config, db, a))
     assert res.tasks == store.DEFAULT_PARAMS["batch"] and res.reward == res.tasks * REWARDS["quiz_correct"]
-    a = store.get(db, a.id)
+    a = some(store.get(db, a.id))
     assert a.tasks_correct == res.tasks and a.level >= 2 and store.arm(db, a.id, "", "quiz").n == res.tasks
     asked = {r["target"] for r in db.query("SELECT target FROM agent_tasks WHERE agent_id=?", (a.id,))}
     res2 = skills.quiz(runtime(config, db, a))
@@ -109,7 +111,7 @@ def test_quiz_rewards_once_and_penalises_wrong_answers(config, db, monkeypatch):
     bad = skills.quiz(rt)
     if bad.tasks:
         assert bad.reward == pytest.approx(bad.tasks * REWARDS["quiz_wrong"])
-        assert store.get(db, a.id).tasks_wrong == bad.tasks
+        assert some(store.get(db, a.id)).tasks_wrong == bad.tasks
     while skills.quiz(runtime(config, db, a)).tasks:
         pass
     final = skills.quiz(runtime(config, db, a))
@@ -154,7 +156,7 @@ def test_open_predictions_are_judged_when_facts_arrive(config, db):
     kb.graph.add_triple(missing[3], cont, o=europe, kind="wikidata", source="wikidata")  # the dump disagrees
     out = society.verify_job(ctx_for(config, db, "agents.verify")).result
     assert out["correct"] == 1 and out["wrong"] == 1
-    a = store.get(db, a.id)
+    a = some(store.get(db, a.id))
     assert a.reward_total == pytest.approx(REWARDS["predict_correct"] + REWARDS["predict_wrong"])
     assert {r["state"] for r in db.query("SELECT state FROM agent_tasks WHERE id IN (?, ?)",
                                          (made[missing[0]][0], made[missing[3]][0]))} == {"correct", "wrong"}  # fmt: skip
@@ -210,7 +212,9 @@ def test_disputes_judged_against_hidden_truth_and_settled_evidence(config, db):
     db.execute("DELETE FROM triples WHERE id IN (?, ?)", (fake, fake2))
     db.execute("UPDATE agent_tasks SET verify_after=0")
     out = society.verify_job(ctx_for(config, db, "agents.verify")).result
-    assert out["correct"] == 2 and store.get(db, a.id).reward_total == pytest.approx(2 * REWARDS["dispute_correct"])
+    assert out["correct"] == 2 and some(store.get(db, a.id)).reward_total == pytest.approx(
+        2 * REWARDS["dispute_correct"]
+    )
     assert skills.dispute(runtime(config, db, a)).notes == ["no open disputes in scope"]
 
 
@@ -232,7 +236,7 @@ def test_read_requests_rewarded_when_articles_arrive(config, db):
                             "CC BY-SA 4.0"))  # fmt: skip
     db.execute("UPDATE agent_tasks SET verify_after=0")
     assert society.verify_job(ctx_for(config, db, "agents.verify")).result["read_rewards"] == 1
-    assert store.get(db, a.id).reward_total == pytest.approx(3 * REWARDS["read_doc"])
+    assert some(store.get(db, a.id)).reward_total == pytest.approx(3 * REWARDS["read_doc"])
     assert kb.cities
 
 
@@ -246,14 +250,14 @@ def test_watch_digest_verified_by_entity_links(config, db):
     keyword, _ = st.add(Document("feed", "n2", "Country05 mention", "A note about Country05 trade talks. " * 5, "pub"))
     other, _ = st.add(Document("feed", "n3", "Weather", "Rain everywhere else this week. " * 5, "pub"))
     for d, title in ((linked, "Capitol05 news"), (keyword, "Country05 mention"), (other, "Weather")):
-        ti.index(d, title, st.get(d).text)
+        ti.index(d, title, some(st.get(d)).text)
     db.execute("UPDATE documents SET state='perceived' WHERE id IN (?,?,?)", (linked, keyword, other))
     db.execute("INSERT INTO doc_entities(doc_id, entity_id, count, score) VALUES(?,?,3,5)", (linked, kb.cities[5]))
     res = skills.scan(runtime(config, db, a))
     digest = {json.loads(r["payload"])["doc_id"]: r["state"]
               for r in db.query("SELECT payload, state FROM agent_tasks WHERE kind='digest'")}  # fmt: skip
     assert digest == {linked: "correct", keyword: "done"}  # keyword-only waits for your verdict
-    assert res.reward == REWARDS["digest_doc"] and store.get(db, a.id).params["cursor"] >= other
+    assert res.reward == REWARDS["digest_doc"] and some(store.get(db, a.id)).params["cursor"] >= other
     assert skills.scan(runtime(config, db, a)).notes == ["nothing new has been read yet"]
 
 
@@ -267,7 +271,7 @@ def test_calibrate_learns_scope_weights(config, db):
     p = json.loads(t["payload"])
     assert p["samples"] >= 10 and p["after"] >= p["before"] and t["state"] == "done"
     if p["after"] - p["before"] > 0.005:
-        assert store.get(db, a.id).params["weights"]
+        assert some(store.get(db, a.id)).params["weights"]
     assert skills.calibrate(runtime(config, db, a)).tasks == 0  # once per hour
     lone = society.spawn(db, "watch nothingatall")
     assert "visible facts in scope" in skills.calibrate(runtime(config, db, lone)).notes[0]
@@ -286,7 +290,7 @@ def test_user_tasks_answers_and_feedback_rewards(config, db):
                                                               "state": "correct"}  # fmt: skip
     assert society.feedback(db, t1, "wrong")["unchanged"] is True  # a settled task stays settled
     society.feedback(db, t2, "wrong")
-    a = store.get(db, a.id)
+    a = some(store.get(db, a.id))
     assert a.reward_total == REWARDS["user_correct"] + REWARDS["user_wrong"] and a.xp == REWARDS["user_correct"]
     assert (a.tasks_correct, a.tasks_wrong) == (1, 1)
     reasons = [r["reason"] for r in db.query("SELECT reason FROM agent_rewards ORDER BY id")]
@@ -305,10 +309,10 @@ def test_allocation_favours_productive_agents_and_your_questions(config, db):
     db.execute("UPDATE agents SET reward_total=40, steps=40, level=3 WHERE id=?", (good.id,))
     db.execute("UPDATE agents SET reward_total=-10, steps=40 WHERE id=?", (poor.id,))
     rng = random.Random(3)
-    picks = [society.choose_agent(db, store.active(db), rng).name for _ in range(200)]
+    picks = [some(society.choose_agent(db, store.active(db), rng)).name for _ in range(200)]
     assert picks.count("good") > 190
     society.give_task(db, "poor", "What is the capital of Country01?")
-    assert society.choose_agent(db, store.active(db), rng).name == "poor"  # your question jumps the queue
+    assert some(society.choose_agent(db, store.active(db), rng)).name == "poor"  # your question jumps the queue
     assert society.choose_agent(db, [], rng) is None
 
 
@@ -321,7 +325,7 @@ def test_agents_learn_which_actions_pay(config, db):
         store.learn(db, a.id, "", "predict", 0.1)
         store.learn(db, a.id, "", "calibrate", 0.0)
     rng = random.Random(1)
-    picks = [society.choose_action(db, store.get(db, a.id), rng) for _ in range(200)]
+    picks = [society.choose_action(db, some(store.get(db, a.id)), rng) for _ in range(200)]
     assert picks.count("quiz") > 180
 
 
@@ -332,7 +336,7 @@ def test_step_job_gives_each_agent_a_turn(config, db):
     out = society.step_job(ctx_for(config, db))
     turns = out.result["turns"]
     assert {t["agent"] for t in turns} == names and len(turns) == 3
-    assert all(store.get(db, n).params is not None for n in names)
+    assert all(some(store.get(db, n)).params is not None for n in names)
     assert db.scalar("SELECT SUM(steps) FROM agents") == 3 and out.value >= 0
     db.execute("UPDATE agents SET scope_at=0")
     society.step_job(ctx_for(config, db))  # stale scopes are refreshed on the next turn
@@ -347,7 +351,7 @@ def test_evolution_forks_judges_and_adopts(config, db):
     db.execute("UPDATE agents SET reward_total=20, steps=20, tasks_correct=15, tasks_wrong=3 WHERE id=?", (parent.id,))
     out = society.evolve_job(ctx_for(config, db, "agents.evolve")).result
     assert out["forked"] == ["geo-g1"]
-    child = store.get(db, "geo-g1")
+    child = some(store.get(db, "geo-g1"))
     assert child.parent == parent.id and child.origin == "evolved" and child.generation == 1
     lo_hi = society.MUTATIONS
     for key, (lo, hi, _s, _h) in lo_hi.items():
@@ -356,14 +360,14 @@ def test_evolution_forks_judges_and_adopts(config, db):
     # the child does better: the user's agent adopts its genes and keeps its name
     db.execute("UPDATE agents SET reward_total=200, steps=60, tasks_correct=50, tasks_wrong=2 WHERE id=?", (child.id,))
     out = society.evolve_job(ctx_for(config, db, "agents.evolve")).result
-    assert out["adopted"] == ["geo←geo-g1"] and store.get(db, "geo-g1").status == "retired"
-    assert store.get(db, "geo").params["min_conf"] == child.params["min_conf"]
+    assert out["adopted"] == ["geo←geo-g1"] and some(store.get(db, "geo-g1")).status == "retired"
+    assert some(store.get(db, "geo")).params["min_conf"] == child.params["min_conf"]
     # the improved parent immediately forks again; this time the child does worse and retires
     assert len(out["forked"]) == 1
-    kid = store.get(db, out["forked"][0])
+    kid = some(store.get(db, out["forked"][0]))
     db.execute("UPDATE agents SET reward_total=-30, steps=60, tasks_correct=5, tasks_wrong=40 WHERE id=?", (kid.id,))
     out = society.evolve_job(ctx_for(config, db, "agents.evolve")).result
-    assert kid.name in out["retired"] and store.get(db, "geo").status == "active"  # yours is never auto-retired
+    assert kid.name in out["retired"] and some(store.get(db, "geo")).status == "active"  # yours is never auto-retired
 
 
 def test_evolution_respects_the_population_cap_and_flags_struggling(config, db):
@@ -401,15 +405,11 @@ def test_command_job_and_planner(config, db):
     assert fb.result["state"] == "correct"
     for op, status in (("pause", "paused"), ("resume", "active"), ("retire", "retired")):
         society.command_job(ctx_for(config, db, "agents.command", {"op": op, "agent": "verify-capitals"}))
-        assert store.get(db, "verify-capitals").status == status
+        assert some(store.get(db, "verify-capitals")).status == status
     assert "error" in society.command_job(ctx_for(config, db, "agents.command", {"op": "pause", "agent": "x"})).result
     assert "error" in society.command_job(ctx_for(config, db, "agents.command", {"op": "dance"})).result
 
-    class A:
-        pass
-
-    agent = A()
-    agent.db, agent.scheduler, agent.config = db, Scheduler(db), config
+    agent = SimpleNamespace(db=db, scheduler=Scheduler(db), config=config)
     society.planner(agent)
     assert not db.scalar("SELECT 1 FROM jobs WHERE kind='agents.step'")  # nobody active
     society.spawn(db, "research geography")
@@ -526,7 +526,7 @@ def test_dispute_verdicts_respect_multi_valued_relations(config, db):
     hidden = int(db.scalar("SELECT id FROM triples WHERE s=? AND p=? AND o=?", (s, border, kb.countries[1])))
     db.execute("UPDATE triples SET holdout=1 WHERE id=?", (hidden,))
     a = society.spawn(db, "fact-check borders")
-    t = store.open_task(db, store.get(db, a.id), kind="dispute", action="dispute", target="d1",
+    t = store.open_task(db, some(store.get(db, a.id)), kind="dispute", action="dispute", target="d1",
                         payload={"s": s, "p": border, "choice": claim}, verify_after=0)  # fmt: skip
     row = db.one("SELECT * FROM agent_tasks WHERE id=?", (t,))
     # the hidden copy is a *different* border: that does not make the chosen border wrong

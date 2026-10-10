@@ -11,6 +11,7 @@ import struct
 import threading
 import time
 from collections import namedtuple
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,7 @@ from polymath.core.scheduler import Job, Scheduler, local_phase
 from polymath.memory.documents import Document, DocumentStore
 from polymath.memory.graph import KnowledgeGraph
 from polymath.memory.text_index import TextIndex
+from tests.fixtures.typing import some
 
 
 # ------------------------------------------------------------------ Minecraft
@@ -229,16 +231,22 @@ def test_data_bytes_excludes_free_pages(config, db):
     assert grown > before + 1.5e6 and data_bytes(db, config.paths.data_dir) < grown - 1.5e6
 
 
-def test_paused_agent_runs_only_maintenance(config):
+def test_paused_agent_runs_only_maintenance(config, monkeypatch):
     agent = build_agent(config, planners=False)
     agent.start()
     hits = []
-    agent.registry.register("body.test", lambda ctx: (hits.append(1), noop_handler(ctx))[1], "t")
+
+    def counted(ctx):
+        hits.append(1)
+        return noop_handler(ctx)
+
+    agent.registry.register("body.test", counted, "t")
     agent.scheduler.enqueue("t.other", {}, key="o", priority=9)
     agent.scheduler.enqueue("body.test", {}, key="b")
     from polymath.core.loop import BodyState
 
-    agent.body.observe = lambda: BodyState(mode="pause", intensity=0, reasons=["disk"], allow=["body.test"])
+    paused = BodyState(mode="pause", intensity=0, reasons=["disk"], allow=["body.test"])
+    monkeypatch.setattr(agent.body, "observe", lambda: paused)
     assert agent.cycle().status == "done" and hits == [1]
     assert agent.cycle().status == "paused"  # only the unrelated job is left
     assert agent.db.kv_get("paused_reason") == "disk"
@@ -302,7 +310,7 @@ def test_backup_verify_rotate_and_restore(config, db):
 
 def test_backup_skipped_without_room(config, db, monkeypatch):
     usage = namedtuple("usage", "total used free")
-    monkeypatch.setattr(mt.shutil, "disk_usage", lambda _p: usage(100, 99, 1))
+    monkeypatch.setattr("shutil.disk_usage", lambda _p: usage(100, 99, 1))
     ctx, _ = ctx_for(config, db, "body.backup")
     out = mt.backup_job(ctx)
     assert out.result["ok"] is False and "skipped" in out.result["detail"]
@@ -310,11 +318,7 @@ def test_backup_skipped_without_room(config, db, monkeypatch):
 
 
 def test_backup_planner(config, db):
-    class A:
-        pass
-
-    agent = A()
-    agent.config, agent.scheduler = config, Scheduler(db)
+    agent = SimpleNamespace(config=config, scheduler=Scheduler(db))
     mt.planner(agent)
     assert db.one("SELECT kind, priority FROM jobs")["kind"] == "body.backup"
 
@@ -337,9 +341,9 @@ def test_eviction_frees_least_valuable_first(config, db):
     e = g.upsert_entity("Q1", "X")
     f = g.upsert_entity("Q2", "Y")
     g.add_triple(e, g.predicate("P1"), o=f, kind="pattern", source="text", doc_id=ids["zebra"])  # evidence
-    exact, _ = store.add(Document("web", "dup", "Copy", store.get(ids["yak"]).text, "CC"))
+    exact, _ = store.add(Document("web", "dup", "Copy", some(store.get(ids["yak"])).text, "CC"))
     assert db.one("SELECT state, codec FROM documents WHERE id=?", (exact,))["codec"] == "evicted"  # never stored
-    near, _ = store.add(Document("web", "near", "Near copy", store.get(ids["yak"]).text + " (mirror)", "CC"))
+    near, _ = store.add(Document("web", "near", "Near copy", some(store.get(ids["yak"])).text + " (mirror)", "CC"))
     db.execute("UPDATE documents SET state='duplicate' WHERE id=?", (near,))  # what MinHash dedup decides later
     raw = config.paths.raw_dir / "old" / "dump.bz2"
     raw.parent.mkdir(parents=True)
@@ -363,7 +367,7 @@ def test_eviction_frees_least_valuable_first(config, db):
     assert not text.search("walrus") and text.search("zebra")
     meta = json.loads(db.scalar("SELECT meta FROM documents WHERE id=?", (ids["walrus"],)))
     assert "evicted" in meta and db.scalar("SELECT license FROM documents WHERE id=?", (ids["walrus"],)) == "CC"
-    assert store.get(ids["walrus"]).text == ""
+    assert some(store.get(ids["walrus"])).text == ""
     config.body.disk_budget_gb = 1e6
     ctx, _ = ctx_for(config, db, "body.evict")
     assert mt.evict_job(ctx).result["need_mb"] == 0

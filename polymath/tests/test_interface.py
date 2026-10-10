@@ -17,6 +17,7 @@ from polymath.interface.answer import Answer, Answerer, Citation, Statement, ren
 from polymath.interface.dashboard import ASK_PER_MINUTE, MAX_BODY, RateLimiter, make_server
 from tests.conftest import make_config
 from tests.fixtures.kb import build
+from tests.fixtures.typing import some
 
 
 # ------------------------------------------------------------------ answering
@@ -107,7 +108,7 @@ def test_disputed_and_inferred_facts_are_labelled(db):
     ans = Answerer(db).ask("What is the capital of Country02?")
     assert {s.kind for s in ans.statements} == {"disputed"} and "(disputed)" in ans.render()
     assert any(c.title == "Country02" for s in ans.statements for c in s.citations)  # text evidence cites its doc
-    inferred = Answerer(db).facts(Answerer(db).find_entity("Country02"), [kb.preds["country"]])
+    inferred = Answerer(db).facts(some(Answerer(db).find_entity("Country02")), [kb.preds["country"]])
     assert inferred[0].kind == "inferred" and inferred[0].citations[0].source == "rule"
     assert rule > 0
 
@@ -202,7 +203,7 @@ def test_cli_learn_direct_or_via_inbox(kb_config, capsys):
     res = json.loads(out)
     assert rc == 0 and res["queued_via"] == "database" and res["created"]
     db = Database(cfg.paths.db_path)
-    assert json.loads(db.one("SELECT payload FROM jobs WHERE kind='drive.learn'")["payload"]) == {
+    assert json.loads(some(db.one("SELECT payload FROM jobs WHERE kind='drive.learn'"))["payload"]) == {
         "query": "black holes"
     }
     db.kv_set("heartbeat", {"ts": time.time(), "state": "running", "cycle": 9})

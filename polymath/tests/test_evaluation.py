@@ -7,6 +7,7 @@ import random
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from polymath.core.jobs import JobContext
 from polymath.core.scheduler import Job, Scheduler
@@ -16,6 +17,7 @@ from polymath.evaluation.report import collect, to_markdown, write_report
 from polymath.interface.answer import Answerer
 from polymath.reasoning.link_prediction import LinkPredictor
 from tests.fixtures.kb import build
+from tests.fixtures.typing import some
 
 
 def ctx_for(config, db, kind, payload=None, services=None):
@@ -88,7 +90,7 @@ def test_held_out_facts_are_invisible_but_recoverable(db):
     kb = build(db)
     db.execute("UPDATE triples SET holdout=1 WHERE s=? AND p=?", (kb.countries[5], kb.preds["capital"]))
     a = Answerer(db)
-    assert "Capitol05" not in " ".join(s.text for s in a.facts(a.find_entity("Country05"), [kb.preds["capital"]]))
+    assert "Capitol05" not in " ".join(s.text for s in a.facts(some(a.find_entity("Country05")), [kb.preds["capital"]]))
     options = [kb.cities[1], kb.cities[5], kb.cities[7], kb.cities[9]]
     pred = LinkPredictor(db).predict(kb.countries[5], kb.preds["capital"], options)
     assert "graph" not in pred.by_method  # the hidden fact itself is not evidence
@@ -153,11 +155,7 @@ def test_evaluation_jobs_and_planner(config, db):
     rep = ej.report_job(ctx_for(config, db, "eval.report"))
     assert rep.result["path"].endswith(".md")
 
-    class A:
-        pass
-
-    agent = A()
-    agent.db, agent.scheduler, agent.config = db, Scheduler(db), config
+    agent = SimpleNamespace(db=db, scheduler=Scheduler(db), config=config)
     ej.planner(agent)
     kinds = {r["kind"] for r in db.query("SELECT kind FROM jobs WHERE state='queued'")}
     assert {"eval.holdout", "eval.quiz", "eval.report"} <= kinds

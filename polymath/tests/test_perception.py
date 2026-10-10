@@ -340,7 +340,7 @@ def test_infobox_values_and_alignment(db):
             other,
             1,
             [{"name": "Infobox country", "params": {"capital": f"[[K{i}]]"}}],
-            lambda t: g.by_wiki_title(t).id if g.by_wiki_title(t) else None,
+            lambda t: e.id if (e := g.by_wiki_title(t)) else None,
         )
     n = extract_infobox_triples(
         db,

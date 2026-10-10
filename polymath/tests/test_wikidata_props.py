@@ -6,6 +6,7 @@ import bz2
 import json
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,7 @@ from polymath.reasoning.inference import learn_rules
 from polymath.senses import wikidata_props as wp
 from polymath.senses.wikipedia import iter_pages
 from tests.fixtures import builders as B
+from tests.fixtures.typing import some
 from tests.webserver import FakeWeb, client
 
 
@@ -128,12 +130,12 @@ def test_index_then_read_properties_end_to_end(config, db, wd_web):
 
     mj.build_graph(ctx_for(config, db, "memory.graph"))
     assert db.scalar("SELECT label FROM predicates WHERE key='P36'") == "capital"
-    cap = g.by_key("P36")
+    cap = some(g.by_key("P36"))
     assert cap.kind == "property" and {c[1] for c in g.candidates("capital city")} == {"capital"}
     # the property's own metadata became facts, which the rule learner trusts
-    p40 = g.by_key("P40")
+    p40 = some(g.by_key("P40"))
     inv = int(db.scalar("SELECT id FROM predicates WHERE key='P1696'"))
-    assert db.scalar("SELECT o FROM triples WHERE s=? AND p=?", (p40.id, inv)) == g.by_key("P22").id
+    assert db.scalar("SELECT o FROM triples WHERE s=? AND p=?", (p40.id, inv)) == some(g.by_key("P22")).id
     sub = g.predicate("P279")
     a, b = g.upsert_entity("Q900", "cat"), g.upsert_entity("Q901", "mammal")
     g.add_triple(a, sub, o=b, kind="wikidata", source="wikidata")  # one fact is enough for a declared rule
@@ -146,11 +148,7 @@ def test_index_then_read_properties_end_to_end(config, db, wd_web):
 
 
 def test_planner_schedules_index_and_reading(config, db):
-    class A:
-        pass
-
-    agent = A()
-    agent.db, agent.scheduler = db, Scheduler(db)
+    agent = SimpleNamespace(db=db, scheduler=Scheduler(db))
     wp.planner(agent)
     assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind='wikidata.propindex'") == 1
     wp.planner(agent)  # idempotent within the month

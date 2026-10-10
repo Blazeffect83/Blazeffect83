@@ -6,6 +6,7 @@ import json
 import random
 import threading
 import time
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -22,6 +23,7 @@ from polymath.drive.priority import compute_priorities, explain_topic, top_topic
 from polymath.memory.documents import DocumentStore
 from polymath.senses.crawler import Crawler
 from tests.fixtures.kb import build
+from tests.fixtures.typing import some
 from tests.webserver import client
 
 
@@ -87,12 +89,12 @@ def test_priorities_gap_importance_novelty_effort_and_boost(db):
     entity_pagerank(db)
     res = compute_priorities(db)
     assert res["topics"] == 2
-    geo = explain_topic(db, kb.topics["Geography"])
+    geo = some(explain_topic(db, kb.topics["Geography"]))
     # every linked capital is unread → structural gap (40 + 1) / (40 + 2)
     assert geo["evidence"]["gap"] == {"source": "unread_share", "linked": 40, "unread": 40}
     assert abs(geo["gap"] - 41 / 42) < 1e-9 and geo["importance"] == 1.0 and geo["novelty"] == 1.0
     assert geo["formula"].startswith("priority ") and "× importance 1.000" in geo["formula"]
-    hist = explain_topic(db, kb.topics["History"])
+    hist = some(explain_topic(db, kb.topics["History"]))
     assert hist["importance"] == 0.0 and hist["priority"] == 0.0  # no linked entities → nothing to gain
     assert top_topics(db, 1)[0]["name"] == "Geography"
     assert weakest_topics(db, 5)[0]["name"] == "Geography"  # History is below the importance floor
@@ -112,7 +114,7 @@ def test_priorities_gap_importance_novelty_effort_and_boost(db):
         "INSERT INTO topic_effort(topic_id, cpu_seconds, at) VALUES(?, 10, ?)", (kb.topics["History"], time.time())
     )
     compute_priorities(db)
-    geo = explain_topic(db, kb.topics["Geography"])
+    geo = some(explain_topic(db, kb.topics["Geography"]))
     assert geo["evidence"]["gap"]["source"] == "quiz" and abs(geo["gap"] - (1 - 4 / 6)) < 1e-9
     assert abs(geo["effort"] - 0.75) < 1e-9 and abs(geo["novelty"] - 0.5) < 1e-3
     expect = geo["gap"] * geo["importance"] * geo["novelty"] * (1 - geo["effort"])
@@ -120,7 +122,7 @@ def test_priorities_gap_importance_novelty_effort_and_boost(db):
     db.kv_set("user_interests", {str(kb.topics["Geography"]): time.time() + 60, "777": time.time() - 1})
     assert interests(db) == {kb.topics["Geography"]: db.kv_get("user_interests")[str(kb.topics["Geography"])]}
     compute_priorities(db)
-    boosted = explain_topic(db, kb.topics["Geography"])
+    boosted = some(explain_topic(db, kb.topics["Geography"]))
     assert abs(boosted["priority"] - INTEREST_BOOST * expect) < 1e-9
     assert boosted["evidence"]["user_interest_boost"] == INTEREST_BOOST
 
@@ -144,11 +146,7 @@ def test_priorities_job_pursues_unread_entities_from_the_dump_index(config, db):
     assert again.result["pursued"] == []  # same hour: idempotent key
     assert dj.pagerank_job(ctx_for(config, db, "drive.pagerank")).result["entities"] > 0
 
-    class A:
-        pass
-
-    agent = A()
-    agent.db, agent.scheduler = db, Scheduler(db)
+    agent = SimpleNamespace(db=db, scheduler=Scheduler(db))
     dj.planner(agent)
     assert {"drive.pagerank", "drive.priorities"} <= {r["kind"] for r in db.query("SELECT kind FROM jobs")}
 
@@ -242,8 +240,8 @@ def test_agent_uses_the_bandit_and_records_why(config):
     agent.scheduler.enqueue("t.noop", {}, key="n1")
     rec = agent.cycle()
     assert rec.status == "done"
-    assert agent.db.one("SELECT chosen FROM decisions")["chosen"] == "test"
-    assert agent.db.one("SELECT n FROM bandit_arms WHERE action='test'")["n"] == 1
+    assert some(agent.db.one("SELECT chosen FROM decisions"))["chosen"] == "test"
+    assert some(agent.db.one("SELECT n FROM bandit_arms WHERE action='test'"))["n"] == 1
     agent.shutdown()
     agent.db.close()
 

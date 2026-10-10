@@ -17,6 +17,7 @@ from polymath.reasoning.link_prediction import (
     named,
 )
 from tests.fixtures.kb import build
+from tests.fixtures.typing import some
 
 
 def test_named():
@@ -70,11 +71,11 @@ def test_association_learns_from_similar_subjects(db):
         g.add_triple(x, cur, o=money, kind="wikidata", source="wikidata")
     new = g.upsert_entity("Q5000", "NewLand")
     g.add_triple(new, cont, o=europe, kind="wikidata", source="wikidata")
-    dist = LinkPredictor(db).association(new, cur, [dollar, yen, euro, peso], None)
-    assert max(dist, key=dist.get) == euro and dist[euro] > 0.9  # … but European subjects use the euro
+    dist = some(LinkPredictor(db).association(new, cur, [dollar, yen, euro, peso], None))
+    assert max(dist, key=dist.__getitem__) == euro and dist[euro] > 0.9  # … but European subjects use the euro
     bare = g.upsert_entity("Q5001", "Featureless")
-    prior = LinkPredictor(db).association(bare, cur, [dollar, yen, euro, peso], None)
-    assert max(prior, key=prior.get) == dollar  # no features: the popularity prior decides
+    prior = some(LinkPredictor(db).association(bare, cur, [dollar, yen, euro, peso], None))
+    assert max(prior, key=prior.__getitem__) == dollar  # no features: the popularity prior decides
     lonely = g.predicate("P9999", "unused")
     assert LinkPredictor(db).association(new, lonely, [dollar, euro], None) is None
 
@@ -83,8 +84,8 @@ def test_text_evidence_uses_same_sentence_cooccurrence(db):
     kb = build(db)
     pred = LinkPredictor(db)
     opts = [kb.cities[6], kb.cities[7], kb.cities[8], kb.cities[9]]
-    dist = pred.text_evidence(kb.countries[7], kb.preds["capital"], opts)
-    assert max(dist, key=dist.get) == kb.cities[7] and dist[kb.cities[7]] == 1.0
+    dist = some(pred.text_evidence(kb.countries[7], kb.preds["capital"], opts))
+    assert max(dist, key=dist.__getitem__) == kb.cities[7] and dist[kb.cities[7]] == 1.0
     stub = kb.graph.stub("Q999999")
     assert pred.text_evidence(stub, kb.preds["capital"], opts) is None  # unnamed subject: nothing to read
     assert pred.text_evidence(kb.countries[7], kb.preds["capital"], [stub, kb.cities[1]]) is None
@@ -97,7 +98,7 @@ def test_embedding_translation(db):
     dim = 16
     r = rng.normal(size=dim)
     words: dict[str, int] = {}
-    vecs = []
+    vecs: list[np.ndarray] = []
     for i in range(12):
         base = rng.normal(size=dim)
         for name, v in ((f"a{i}", base), (f"b{i}", base + r)):
@@ -112,8 +113,8 @@ def test_embedding_translation(db):
         g.add_triple(ids[f"a{i}"], p, o=ids[f"b{i}"], kind="wikidata", source="wikidata")
     pred = LinkPredictor(db, vectors=wv)
     opts = [ids["b5"], ids["b0"], ids["b7"], ids["a3"]]
-    dist = pred.embedding(ids["a0"], p, opts, None)
-    assert max(dist, key=dist.get) == ids["b0"]
+    dist = some(pred.embedding(ids["a0"], p, opts, None))
+    assert max(dist, key=dist.__getitem__) == ids["b0"]
     assert wv.label("A0 unknownword") is not None and wv.label("nothing here") is None
     assert LinkPredictor(db).embedding(ids["a0"], p, opts, None) is None  # no vectors yet
 

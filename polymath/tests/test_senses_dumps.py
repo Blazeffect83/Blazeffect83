@@ -40,6 +40,7 @@ from polymath.senses.streams import (
 )
 from polymath.senses.wikitext import clean_wikitext, normalize_title, parse_template, redirect_target
 from tests.fixtures import builders as B
+from tests.fixtures.typing import some
 from tests.webserver import FakeWeb, client
 
 
@@ -485,12 +486,12 @@ def test_gutenberg_strip_catalog_and_job(config, db, web):
             checkpoint={"position": 1, "stored": 0, "failed": 0},
         )
     )
-    assert not rows_after.done and rows_after.delay == 300.0 and rows_after.checkpoint["position"] == 1
+    assert not rows_after.done and rows_after.delay == 300.0 and some(rows_after.checkpoint)["position"] == 1
     hits = [t for t, _m, p, _h in web.log if p.startswith("/cache/epub/")]
     assert all(b - a >= 0.19 for a, b in itertools.pairwise(hits))  # per-host delay honoured
     n_requests = len(hits)
     again = books_qa.gutenberg_job(ctx_for(config, db, "gutenberg.books", {**payload, "limit": 1}, services))
-    assert again.done and again.checkpoint["stored"] == 1  # already-stored books count, without any request
+    assert again.done and some(again.checkpoint)["stored"] == 1  # already-stored books count, without any request
     assert len([1 for _t, _m, p, _h in web.log if p.startswith("/cache/epub/")]) == n_requests
 
 
