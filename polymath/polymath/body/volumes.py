@@ -9,9 +9,21 @@ Safety rules, in order:
 
 1. Never the system disk (the one holding ``/``, ``/boot`` or the data directory), never internal or
    virtual devices (SD card, loop, zram, device-mapper, RAID), never an ignored or retired drive.
-2. Never format anything that holds data. Only a *completely blank* device — no partition table, no
-   filesystem signature, its first and last MiB all zeros — is formatted (GPT, one ext4 partition labelled
-   POLYMATH), and only with ``storage.format_blank_disks``.
+2. Never format anything that holds data. Two kinds of drive are formatted on their own (ext4, labelled
+   POLYMATH):
+
+   * a *completely blank* device: no partition table, no filesystem signature, its first and last MiB all zeros
+     (with ``storage.format_blank_disks``);
+   * a *fresh* drive as it comes from the shop (with ``storage.format_fresh_drives``). It is formatted for Windows
+     or macOS (exFAT, NTFS, FAT), at least ``storage.home_min_gb`` big, and holds nothing but the maker's
+     installers and manuals (``factory_files``) and system clutter. No folder may be anything but the maker's,
+     the maker's files total under 1 GB, and nothing of Polymath's is stored there.
+
+   **Once per drive, ever.** Before a fresh drive is formatted, its identity (the disk's serial number, or model
+   and size) is written to ``REGISTRY`` on the SD card, outside the brain. A drive in that list is never formatted
+   on its own again: not when it is unplugged and plugged back in, not after a power cut, and not if you later
+   reformat it on a laptop. A drive Polymath formatted is ext4 with a ``polymath-brain/`` folder, so it is
+   recognised by its filesystem whatever the list says.
 3. Never touch files outside ``polymath-brain/``. On a drive that already holds files, Polymath uses a share
    of the free space (``storage.shared_drive_share``) and always leaves ``storage.reserve_fraction`` free.
 4. Mount with ``nodev,nosuid,noexec``; FAT/exFAT/NTFS drives are mounted for the ``polymath`` user.
@@ -29,8 +41,9 @@ boots the Pi:
 
 At every boot (or replug) the bind mount is made again. While the drive is away, the agent sees the marker and
 waits instead of starting on the old SD copy. Anything that fails before step 3 leaves the brain on the SD card
-and starts the agent again. An empty drive formatted for Windows or macOS (exFAT, NTFS, FAT) is never
-reformatted on its own: ``sudo polymath storage format <id> --yes`` does that, and only when it holds no files.
+and starts the agent again. A fresh shop drive (rule 2) is formatted first and then becomes the brain's home. A
+Windows or macOS drive that holds your files is never reformatted on its own: ``sudo polymath storage format
+<id> --yes --erase-files`` does that, on request only.
 """
 
 from __future__ import annotations
@@ -60,6 +73,17 @@ INTERNAL = ("loop", "ram", "zram", "dm-", "md", "sr", "mmcblk", "nbd")
 MIN_BUDGET = 1_000_000_000  # below 1 GB a drive is not worth adopting
 EDGE = 1 << 20
 LOCK = Path("/run/polymath-storage.lock")
+REGISTRY = Path("/var/lib/polymath/formatted-drives.json")  # on the SD card: drives already formatted once
+FACTORY_MAX_BYTES = 1_000_000_000  # the maker's installers and manuals are small; more than this is user data
+# names of drive makers and their bundled apps: a fresh drive's folders must carry one, its files one of these or a
+# FACTORY_WORDS word, and every file must have an installer or manual extension
+MAKERS = ("samsung", "sandisk", "western digital", "wd discovery", "wddiscovery", "wd apps", "seagate", "lacie",
+          "crucial", "kingston", "transcend", "toshiba", "lexar", "adata", "sabrent", "silicon power", "verbatim",
+          "intenso", "teamgroup", "corsair", "portable ssd", "memory zone", "secureaccess", "backup plus",
+          "my passport", "dashboard setup")  # fmt: skip
+FACTORY_WORDS = ("setup", "install", "manual", "user guide", "quick start", "readme", "warranty", "start here")
+FACTORY_EXT = (".exe", ".msi", ".pkg", ".dmg", ".app", ".apk", ".pdf", ".txt", ".rtf", ".htm", ".html", ".url",
+               ".ico", ".inf", ".zip")  # fmt: skip
 HOME = "home"  # polymath-brain/home on a drive: the whole data directory, when the brain lives there
 SERVICES = ("polymath.service", "polymath-dashboard.service")
 # what an "empty" drive may hold and still be reformatted on request (OS housekeeping, never user files)
@@ -79,6 +103,39 @@ def tree_stats(root: Path) -> tuple[int, int]:
 
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
+
+
+def factory_files(root: Path) -> list[str] | None:
+    """What a fresh drive holds besides clutter: the maker's installers and manuals (None if anything else).
+
+    Every top-level file must be an installer or manual (by extension) named after a maker or as one ("Setup",
+    "User Guide"…), every folder must carry a maker's name, and everything together must stay under 1 GB.
+    """
+    found, total = [], 0
+    try:
+        entries = [e for e in os.listdir(root) if e not in JUNK and e != BRAIN and not e.startswith("._")]
+    except OSError:
+        return None
+    for name in entries:
+        path = root / name
+        low = name.lower()
+        maker = any(m in low for m in MAKERS)
+        if path.is_symlink():
+            return None
+        if path.is_dir():
+            if not maker:
+                return None
+            total += tree_stats(path)[1]
+        elif path.is_file():
+            if not low.endswith(FACTORY_EXT) or not (maker or any(w in low for w in FACTORY_WORDS)):
+                return None
+            total += path.stat().st_size
+        else:
+            return None
+        found.append(name)
+        if total > FACTORY_MAX_BYTES:
+            return None
+    return sorted(found)
 
 
 def run_cmd(args: list[str], *, input: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -116,6 +173,7 @@ class Helper:
         mountinfo: Path = Path("/proc/self/mountinfo"),
         lock: Path = LOCK,
         clock: Callable[[], float] = time.time,
+        registry: Path = REGISTRY,
     ) -> None:
         self.config = config
         self.run = run
@@ -124,6 +182,7 @@ class Helper:
         self.mountinfo = mountinfo
         self.lock = lock
         self.clock = clock
+        self.registry = registry
 
     # ------------------------------------------------------------------ facts about devices
     def owner(self) -> tuple[int, int]:
@@ -163,6 +222,37 @@ class Helper:
                 with contextlib.suppress(FileNotFoundError, ValueError):
                     out.add(self.disk_of(src))
         return out
+
+    def identity(self, dev: str) -> str:
+        """Who the physical drive is: its serial number, or its model and size ("" when it reports neither)."""
+        try:
+            d = self.info(self.disk_of(dev))
+        except (FileNotFoundError, ValueError):
+            return ""
+        serial, model = str(d.get("serial") or "").strip(), str(d.get("model") or "").strip()
+        if serial:
+            return f"serial:{serial}"
+        return f"model:{model}|{d.get('size') or ''}" if model else ""
+
+    def formatted_drives(self) -> dict[str, Any]:
+        try:
+            data = json.loads(self.registry.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def remember_formatted(self, ident: str, entry: dict[str, Any]) -> None:
+        """Written *before* formatting, atomically, so a crash or power cut can never lead to a second format."""
+        if not ident:
+            return
+        drives = self.formatted_drives()
+        drives[ident] = {**drives.get(ident, {}), **entry, "at": self.clock()}
+        self.registry.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.registry.with_suffix(".tmp")
+        tmp.write_text(json.dumps(drives, indent=2, sort_keys=True), encoding="utf-8")
+        with open(tmp, "rb+") as f:
+            os.fsync(f.fileno())
+        tmp.replace(self.registry)
 
     def is_blank(self, dev: str) -> bool:
         try:
@@ -241,7 +331,59 @@ class Helper:
         if r.returncode != 0:
             self._cleanup(mnt, mounted=False)
             return Outcome("skipped", f"mounting {dev} failed: {r.stderr.strip()}", vol)
+        if fstype in FOREIGN_FS:
+            fresh = self._format_fresh(dev, mnt, pr)
+            if fresh is not None:
+                return fresh
         return self._home(self._adopt(dev, mnt, vol, pr, inf, formatted), mnt)
+
+    def fresh_reason(self, dev: str, mnt: Path) -> tuple[str, list[str]]:
+        """("", factory files) when a mounted Windows/macOS drive is fresh from the shop, else why it is not."""
+        st = self.config.storage
+        if not st.format_fresh_drives:
+            return "storage.format_fresh_drives is off", []
+        if shutil.disk_usage(mnt).total < st.home_min_gb * 1e9:
+            return f"smaller than {st.home_min_gb:g} GB", []
+        brain = mnt / BRAIN
+        manifest = read_manifest(brain) or {}
+        if manifest.get("retired") or manifest.get("home"):
+            return "retired" if manifest.get("retired") else "it holds the brain", []
+        if brain.exists() and any(e not in {MANIFEST, MANIFEST + ".tmp"} for e in os.listdir(brain)):
+            return f"{BRAIN}/ holds Polymath's documents", []
+        files = factory_files(mnt)
+        if files is None:
+            return "it holds files", []
+        ident = self.identity(dev)
+        if not ident:
+            return "the drive reports no serial number or model, so a second format could not be ruled out", []
+        if ident in self.formatted_drives():
+            return "it was formatted once before (it is in the list of formatted drives)", []
+        return "", files
+
+    def _format_fresh(self, dev: str, mnt: Path, pr: dict[str, str]) -> Outcome | None:
+        """Format a fresh shop drive once (ext4, POLYMATH) and adopt it; None when it is not fresh (left as is)."""
+        why, files = self.fresh_reason(dev, mnt)
+        if why:
+            if why not in {"it holds files", "storage.format_fresh_drives is off"}:
+                log.info("storage fresh drive not formatted", extra={"device": dev, "why": why})
+            return None
+        ident = self.identity(dev)
+        old = pr.get("TYPE", "")
+        self.remember_formatted(ident, {"was": old, "uuid_before": pr.get("UUID", ""), "factory_files": files,
+                                        "device": dev})  # fmt: skip
+        self.run(["umount", str(mnt)])
+        if any(m == str(mnt) for m, _s in self.mounts_of()):
+            return Outcome("skipped", f"{mnt} is busy; the fresh drive was not formatted", pr.get("UUID", ""))
+        self._cleanup(mnt, mounted=False)
+        r = self.run(["mkfs.ext4", "-q", "-F", "-L", "POLYMATH", "-m", "0", dev])
+        if r.returncode != 0:
+            return Outcome("skipped", f"formatting the fresh drive {dev} failed: {r.stderr.strip()}")
+        log.info("storage formatted a fresh drive", extra={"device": dev, "was": old, "identity": ident})
+        out = self._attach(dev)
+        note = f"formatted a fresh {old} drive as ext4 (once; it is never formatted on its own again)"
+        if files:
+            note += f"; the maker's files it held: {', '.join(files[:4])}{' …' if len(files) > 4 else ''}"
+        return Outcome("formatted" if out.action == "attached" else out.action, f"{note}; {out.detail}", out.volume)
 
     def _partition(self, disk: str) -> str:
         """One GPT partition across a blank disk; returns the partition's device path."""
@@ -504,6 +646,8 @@ class Helper:
                 shown = ", ".join(sorted(files)[:5]) + (" …" if len(files) > 5 else "")
                 return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted. To erase them "
                                f"too: sudo polymath storage format {vol} --yes --erase-files", vol)  # fmt: skip
+            self.remember_formatted(self.identity(src), {"was": manifest.get("fstype", ""), "uuid_before": vol,
+                                                         "by": "polymath storage format", "device": src})  # fmt: skip
             self.run(["umount", mp])
             if any(m == mp for m, _s in self.mounts_of()):
                 return Outcome("skipped", f"{mp} is busy; nothing was changed", vol)

@@ -10,8 +10,10 @@ implemented here and learns only from data the agent downloads itself.
 - **Data:** Wikipedia, Wikidata, OpenAlex, PubMed, Project Gutenberg, Stack Exchange dumps, RSS/Atom feeds and
   a polite crawler (robots.txt, ≤ 1 request/s per host). See [docs/SOURCES.md](docs/SOURCES.md).
 - **Grows onto any drive you plug in:** a USB SSD, HDD or stick becomes extra brain space automatically. A blank
-  drive is formatted; on a drive with files only free space is used, and the files are never touched. It can
-  start on the SD card (`--allow-sd-card`).
+  drive, or a new SSD straight from the shop (exFAT/NTFS with only the maker's software on it), is formatted
+  for Linux and the whole brain moves onto it. It is formatted **once per drive, ever**: unplugging, a power
+  cut or a replug never formats it again. On a drive with your files, only free space is used and the files
+  are never touched. It can start on the SD card (`--allow-sd-card`).
 - **Learns from the open web, safely:** new sites come only from links Wikipedia cites, and each is checked
   before its first visit: offline safety lists (adult, malware, phishing, gambling), a valid HTTPS
   certificate, robots.txt. Then it stays on probation until its facts check out.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -260,7 +261,8 @@ def home_helper(config, db, tmp_path):
     fake = FakeSystem(tmp_path)
     blank = {"/dev/sdb": (b"\0" * 64, b"\0" * 64)}
     h = vols.Helper(config, fake, edges=lambda dev: blank.get(dev, (b"data", b"")), owner=(os.getuid(), os.getgid()),
-                    mountinfo=tmp_path / "mountinfo", lock=tmp_path / "lock")  # fmt: skip
+                    mountinfo=tmp_path / "mountinfo", lock=tmp_path / "lock",
+                    registry=tmp_path / "formatted-drives.json")  # fmt: skip
     (config.paths.data_dir / "raw").mkdir(parents=True, exist_ok=True)
     (config.paths.data_dir / "raw" / "dump.bz2").write_bytes(b"x" * 5000)
     db.execute("INSERT INTO events(at, kind, text) VALUES(1, 'site', 'before the move')")
@@ -573,3 +575,163 @@ def test_a_windows_formatted_ssd_gets_clear_instructions(home_helper, config, db
     storage_pool.sync(db, pool2)
     added = [e for e in Feed(db).poll()["events"] if e["kind"] == "storage" and e["event"] == "added"]
     assert any("the whole brain lives on it" in text_of(render_event(e)) for e in added)
+
+
+# ------------------------------------------------------------------ a fresh shop SSD: formatted once, ever
+def shop_ssd(fake, config, uuid: str = "T7-FRESH", files: dict[str, int] | None = None) -> Path:
+    """A new exFAT SSD as it comes from the shop, with the maker's installers on it."""
+    fake.add("/dev/sda")  # the disk itself: it reports a serial number
+    fake.add("/dev/sda1", disk="sda", probe={"TYPE": "exfat", "UUID": uuid, "LABEL": "T7"})
+    mnt: Path = config.storage.mount_root / uuid
+    mnt.mkdir(parents=True, exist_ok=True)
+    default = {"SamsungPortableSSD_Setup_Win.exe": 2000, "SamsungPortableSSD_Setup_Mac.pkg": 3000,
+               "Samsung Portable SSD Software for Android.txt": 50}  # fmt: skip
+    for name, size in (default if files is None else files).items():
+        (mnt / name).write_bytes(b"x" * size)
+    (mnt / "System Volume Information").mkdir(exist_ok=True)
+    return mnt
+
+
+def test_a_fresh_shop_ssd_is_formatted_once_and_becomes_the_home(home_helper, config, tmp_path):
+    h, fake = home_helper
+    shop_ssd(fake, config)
+    out = h.attach("/dev/sda1")
+    assert out.action == "moved", out  # formatted, adopted as dedicated, and the brain moved onto it
+    assert (
+        "formatted a fresh exfat drive as ext4 (once" in out.detail and "SamsungPortableSSD_Setup_Mac.pkg" in out.detail
+    )
+    assert [c[-1] for c in fake.ran("mkfs.ext4")] == ["/dev/sda1"] and fake.ran("umount")
+    reg = json.loads((tmp_path / "formatted-drives.json").read_text())
+    assert reg["serial:S1"]["was"] == "exfat" and reg["serial:S1"]["uuid_before"] == "T7-FRESH"
+    assert (config.paths.data_dir / MOVED_FILE).exists()
+    # unplugged and plugged back in (a loose cable, a power cut): recognised as the brain, never formatted again
+    fake.mounts["/dev/sda1"] = []
+    again = h.attach("/dev/sda1")
+    assert again.action == "home" and len(fake.ran("mkfs.ext4")) == 1, again  # mounted as the brain again
+    # reformatted to exFAT on a laptop and plugged in empty: the same physical drive is not formatted again
+    fake.devices["/dev/sda1"]["probe"] = {"TYPE": "exfat", "UUID": "LAPTOP-1", "LABEL": "T7"}
+    (config.storage.mount_root / "LAPTOP-1").mkdir(parents=True)
+    fake.mounts["/dev/sda1"] = []
+    later = h.attach("/dev/sda1")
+    assert later.action == "attached" and len(fake.ran("mkfs.ext4")) == 1, later
+    why, _files = h.fresh_reason("/dev/sda1", config.storage.mount_root / "LAPTOP-1")
+    assert "formatted once before" in why
+
+
+def test_the_once_only_record_is_written_before_formatting(home_helper, config, tmp_path):
+    """A format that fails (or a power cut during it) still counts: the drive is never formatted on its own again."""
+    h, fake = home_helper
+    shop_ssd(fake, config)
+    real = fake.__call__
+
+    def failing(args, *, input=None):
+        if args[0] == "mkfs.ext4":
+            fake.calls.append(args)
+            return subprocess.CompletedProcess(args, 1, "", "mkfs: power cut")
+        return real(args, input=input)
+
+    h.run = failing
+    out = h.attach("/dev/sda1")
+    assert out.action == "skipped" and "formatting the fresh drive /dev/sda1 failed: mkfs: power cut" in out.detail
+    assert "serial:S1" in h.formatted_drives()
+    h.run = real
+    fake.mounts["/dev/sda1"] = []  # unplugged and plugged back in
+    assert h.attach("/dev/sda1").action == "attached" and len(fake.ran("mkfs.ext4")) == 1  # left as it is
+
+
+@pytest.mark.parametrize(
+    ("files", "dirs", "why"),
+    [
+        ({"Holiday.mov": 10}, [], "it holds files"),  # the user's own file
+        ({"Notes.txt": 10}, [], "it holds files"),  # a text file that is not the maker's
+        ({"Setup.exe": 10}, ["Photos"], "it holds files"),  # any folder that is not the maker's
+        ({"SanDisk_Manual.pdf": 10}, ["polymath-brain/packs"], "holds Polymath's documents"),
+    ],
+)
+def test_a_drive_that_is_not_fresh_is_never_formatted(home_helper, config, files, dirs, why):
+    h, fake = home_helper
+    mnt = shop_ssd(fake, config, files=files)
+    for d in dirs:
+        (mnt / d).mkdir(parents=True)
+    out = h.attach("/dev/sda1")
+    assert out.action == "attached" and not fake.ran("mkfs.ext4"), out
+    assert why in h.fresh_reason("/dev/sda1", mnt)[0]
+    for name in files:
+        assert (mnt / name).exists()  # untouched
+
+
+def test_fresh_formatting_needs_size_the_setting_and_a_known_identity(home_helper, config, monkeypatch):
+    h, fake = home_helper
+    mnt = shop_ssd(fake, config)
+    config.storage.format_fresh_drives = False
+    assert h.fresh_reason("/dev/sda1", mnt)[0] == "storage.format_fresh_drives is off"
+    config.storage.format_fresh_drives = True
+    config.storage.home_min_gb = 10**9
+    assert h.fresh_reason("/dev/sda1", mnt)[0].startswith("smaller than")  # a USB stick stays as it is
+    config.storage.home_min_gb = 0.000001
+    monkeypatch.setattr(vols, "FACTORY_MAX_BYTES", 100)
+    assert h.fresh_reason("/dev/sda1", mnt)[0] == "it holds files"  # more than a maker would ship
+    monkeypatch.setattr(vols, "FACTORY_MAX_BYTES", 10**9)
+    (mnt / storage_pool.BRAIN).mkdir()
+    (mnt / storage_pool.BRAIN / storage_pool.MANIFEST).write_text(json.dumps({"id": "T7-FRESH", "retired": True}))
+    assert h.fresh_reason("/dev/sda1", mnt)[0] == "retired"
+    (mnt / storage_pool.BRAIN / storage_pool.MANIFEST).write_text(json.dumps({"id": "T7-FRESH"}))
+    assert h.fresh_reason("/dev/sda1", mnt) == ("", sorted(p.name for p in mnt.iterdir() if p.is_file()))
+    fake.devices.pop("/dev/sda")  # the drive reports no serial number and no model
+    assert "no serial number or model" in h.fresh_reason("/dev/sda1", mnt)[0]
+    shutil.rmtree(mnt / storage_pool.BRAIN)
+    assert h.attach("/dev/sda1").action == "attached" and not fake.ran("mkfs.ext4")
+
+
+def test_identity_factory_files_and_the_registry(home_helper, config, tmp_path):
+    h, fake = home_helper
+    fake.add("/dev/sdb")
+    assert h.identity("/dev/sdb") == "serial:S1"
+    real = fake.__call__
+
+    def no_serial(args, *, input=None):
+        r = real(args, input=input)
+        if args[0] == "lsblk" and r.returncode == 0:
+            d = json.loads(r.stdout)
+            d["blockdevices"][0].update(serial=None, size=1000)
+            return subprocess.CompletedProcess(args, 0, json.dumps(d), "")
+        return r
+
+    h.run = no_serial
+    assert h.identity("/dev/sdb") == "model:Test SSD|1000"
+    assert h.identity("/dev/none") == ""
+    root = tmp_path / "drive"
+    root.mkdir()
+    assert vols.factory_files(root) == []  # empty
+    (root / "WD Discovery for Windows.exe").write_bytes(b"x")
+    (root / "._WD Discovery for Windows.exe").write_bytes(b"x")  # macOS clutter
+    (root / ".DS_Store").write_bytes(b"x")
+    (root / "SanDisk SecureAccess").mkdir()
+    (root / "SanDisk SecureAccess" / "app.bin").write_bytes(b"x" * 10)
+    (root / "Quick Start Guide.pdf").write_bytes(b"x")
+    assert vols.factory_files(root) == ["Quick Start Guide.pdf", "SanDisk SecureAccess", "WD Discovery for Windows.exe"]
+    (root / "link").symlink_to(root / "Quick Start Guide.pdf")
+    assert vols.factory_files(root) is None
+    assert vols.factory_files(tmp_path / "missing") is None
+    h.registry = tmp_path / "corrupt.json"
+    h.registry.write_text("not json")
+    assert h.formatted_drives() == {}
+    h.registry.write_text("[1, 2]")
+    assert h.formatted_drives() == {}
+    h.remember_formatted("", {"was": "exfat"})  # no identity: nothing to remember
+    h.remember_formatted("serial:X", {"was": "exfat"})
+    h.remember_formatted("serial:X", {"by": "polymath storage format"})
+    assert h.formatted_drives()["serial:X"]["was"] == "exfat" and h.formatted_drives()["serial:X"]["by"]
+
+
+def test_formatting_on_request_is_remembered_too(home_helper, config, tmp_path):
+    h, fake = home_helper
+    fake.add("/dev/sda")
+    fake.add("/dev/sda1", disk="sda", probe={"TYPE": "exfat", "UUID": "EX-9"})
+    mnt = config.storage.mount_root / "EX-9"
+    mnt.mkdir(parents=True)
+    (mnt / "Holiday.mov").write_bytes(b"film")  # not fresh: adopted as shared, not formatted
+    assert h.attach("/dev/sda1").action == "attached" and not fake.ran("mkfs.ext4")
+    (tmp_path / "mountinfo").write_text(f"36 25 8:1 / {mnt} rw - exfat /dev/sda1 rw\n")
+    h.format_empty("EX-9", erase_files=True)
+    assert h.formatted_drives()["serial:S1"]["by"] == "polymath storage format"

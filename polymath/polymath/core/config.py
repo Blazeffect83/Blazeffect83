@@ -159,6 +159,8 @@ class StorageConfig:
     mount_root: Path = Path("/mnt/polymath")  # where plugged-in drives are mounted
     adopt: bool = True  # add every drive that is plugged in (except the system disk and ignored ones)
     format_blank_disks: bool = True  # a drive with nothing at all on it is formatted (ext4, label POLYMATH)
+    # a fresh shop drive (exFAT/NTFS/FAT, ≥ home_min_gb, only the maker's files) is formatted, once per drive ever
+    format_fresh_drives: bool = True
     shared_drive_share: float = 0.5  # on a drive that already holds files: this share of its free space
     reserve_fraction: float = 0.1  # always leave this share of every drive free
     spill_at: float = 0.75  # move document bodies to drives once the main disk is this full (of its budget)

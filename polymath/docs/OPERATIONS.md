@@ -264,6 +264,7 @@ Plug a drive in and it becomes part of the brain. No commands are needed:
 | the drive | what happens |
 |---|---|
 | brand new, nothing on it (no partition table, no filesystem, zeros at both ends) | formatted: GPT, one ext4 partition labelled `POLYMATH`; 90 % of it becomes brain space |
+| brand new from the shop: exFAT/NTFS/FAT, 32 GB or more, only the maker's installers and manuals on it | formatted ext4 `POLYMATH` **once** (see below), then the brain moves onto it |
 | labelled `POLYMATH*`, or empty | dedicated: 90 % of its free space |
 | already holds your files (ext4, exFAT, FAT, NTFS, btrfs, xfs) | shared: half its free space (`shared_drive_share`), always leaving 10 % free; **your files are never touched** |
 | the system disk, SD card, encrypted/LVM/RAID/swap, unknown data, ignored or retired | left alone |
@@ -308,8 +309,27 @@ agent **waits** (`polymath status` / the journal: "the brain lives on the drive 
 does not run on the old SD copy. Plug the drive back in and it starts by itself. `storage eject` refuses
 while the agent runs on it.
 
-**A new SSD formatted for Windows or macOS** (exFAT, NTFS, FAT; most come that way) is used for documents
-only. The feed tells you what to do. Reformat it explicitly:
+**A new SSD straight from the shop** (most come formatted exFAT or NTFS, with the maker's software on them) is
+formatted for Linux automatically and the brain moves onto it. Plug it in and wait a few minutes. It counts as
+fresh only when all of these hold:
+- it is 32 GB or more (`home_min_gb`), so USB sticks stay as they are;
+- it holds nothing but the maker's installers and manuals (for example `SamsungPortableSSD_Setup_Win.exe`,
+  `WD Discovery for Mac.dmg`, `Quick Start Guide.pdf`, under 1 GB in all) and system clutter
+  (`System Volume Information`, `.DS_Store`…). **A single file or folder of yours, and it is not touched**;
+- Polymath has not stored documents on it;
+- it has never been formatted by Polymath before.
+
+**It is formatted once per drive, ever.** Before formatting, Polymath writes the drive's serial number to
+`/var/lib/polymath/formatted-drives.json` on the SD card. Unplugging it, a loose cable or a power cut never
+causes a second format: after the first format the drive is Linux-formatted with Polymath's folder on it, so it
+is recognised as the brain and simply mounted again. That holds even if the power fails during formatting, and
+even if you later reformat it on a laptop and plug it back in. A drive that reports no serial number or model is
+never formatted on its own.
+
+Turn it off with `format_fresh_drives = false` under `[storage]`.
+
+**A Windows or macOS drive with your files on it** is used for documents only. The feed tells you what to do.
+Reformat it explicitly:
 
 ```bash
 polymath storage list                              # find its id
@@ -325,7 +345,8 @@ To turn the move off: `move_home = false` under `[storage]`.
 
 **Settings** (`[storage]` in `/etc/polymath/polymath.toml`):
 - `adopt = false` stops adopting drives;
-- `format_blank_disks = false` never formats anything;
+- `format_blank_disks = false` never formats a blank drive; `format_fresh_drives = false` never formats a fresh shop
+  drive (both off: nothing is ever formatted on its own);
 - `ignore = ["<uuid>"]` skips a drive (UUIDs are in `polymath storage list` and `lsblk -f`);
 - `shared_drive_share` and `reserve_fraction` set how much of a drive is used.
 

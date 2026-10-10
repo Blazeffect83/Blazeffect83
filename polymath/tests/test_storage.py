@@ -366,7 +366,8 @@ def helper(config, tmp_path):
     fake = FakeSystem(tmp_path)
     blank = {"/dev/sdb": (b"\0" * 64, b"\0" * 64), "/dev/sdc1": (b"\0" * 64, b"\0" * 64)}
     h = vols.Helper(config, fake, edges=lambda dev: blank.get(dev, (b"data", b"")), owner=(os.getuid(), os.getgid()),
-                    mountinfo=tmp_path / "mountinfo", lock=tmp_path / "lock")  # fmt: skip
+                    mountinfo=tmp_path / "mountinfo", lock=tmp_path / "lock",
+                    registry=tmp_path / "formatted-drives.json")  # fmt: skip
     return h, fake
 
 
@@ -498,3 +499,25 @@ def test_read_edges_and_run_cmd(tmp_path):
     head, tail = vols.read_edges(str(f))
     assert len(head) == len(tail) == vols.EDGE and not head.strip(b"\0")
     assert vols.run_cmd(["true"]).returncode == 0
+
+
+def test_helper_formats_a_fresh_shop_drive_once_or_leaves_it_when_busy(helper, config, tmp_path):
+    h, fake = helper
+    config.storage.home_min_gb = 0.000001
+    fake.add("/dev/sda")
+    fake.add("/dev/sda1", disk="sda", probe={"TYPE": "ntfs", "UUID": "WD-1", "LABEL": "My Passport"})
+    mnt = config.storage.mount_root / "WD-1"
+    mnt.mkdir(parents=True)
+    for name in ("WD Discovery for Windows.exe", "WD Discovery for Mac.dmg", "Install WD Discovery.pdf",
+                 "WD Apps for Mac", "Warranty.txt"):  # fmt: skip
+        (mnt / name).write_bytes(b"x") if "." in name else (mnt / name).mkdir()
+    (tmp_path / "mountinfo").write_text(f"36 25 8:1 / {mnt} rw - ntfs3 /dev/sda1 rw\n")  # umount did not release it
+    busy = h.attach("/dev/sda1")
+    assert busy.action == "skipped" and "busy; the fresh drive was not formatted" in busy.detail
+    assert not fake.ran("mkfs.ext4") and "serial:S1" in h.formatted_drives()  # counted all the same: never again
+    h.registry.unlink()
+    (tmp_path / "mountinfo").write_text("")
+    fake.mounts["/dev/sda1"] = []
+    out = h.attach("/dev/sda1")  # with the brain move off, the formatted drive is simply added as dedicated
+    assert out.action == "formatted" and "dedicated drive" in out.detail and " …" in out.detail, out
+    assert fake.ran("mkfs.ext4")[0][-1] == "/dev/sda1"

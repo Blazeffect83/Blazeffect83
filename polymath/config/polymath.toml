@@ -84,6 +84,7 @@ min_tasks_to_judge = 30             # verified tasks before an agent can fork or
 mount_root = "/mnt/polymath"
 adopt = true                        # add every drive that is plugged in (never the system disk)
 format_blank_disks = true           # a drive with nothing at all on it is formatted (ext4, label POLYMATH)
+format_fresh_drives = true          # a new shop drive (exFAT/NTFS, only the maker's files) is formatted once, ever
 shared_drive_share = 0.5            # on a drive that already holds files, use this share of its free space
 reserve_fraction = 0.1              # always leave this share of every drive free
 spill_at = 0.75                     # move document bodies to drives once the main disk is this full

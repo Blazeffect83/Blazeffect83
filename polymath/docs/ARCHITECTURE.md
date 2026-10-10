@@ -224,7 +224,12 @@ The pool has a privileged half and an unprivileged half.
 **Privileged: mounting.** udev starts `polymath-volume@<dev>.service` for each drive plugged in. It runs
 `polymath storage attach` as root, which follows strict rules:
 - never the system disk;
-- only completely blank devices are formatted;
+- formatted on its own: a completely blank device, or a fresh shop drive (exFAT/NTFS/FAT, at least
+  `home_min_gb`, holding only the maker's installers and manuals, under 1 GB). A fresh drive is formatted
+  **once per physical drive**: its identity (`lsblk` serial, or model and size) is written to
+  `/var/lib/polymath/formatted-drives.json` on the SD card, fsynced, *before* `mkfs` runs. A replug, a power
+  cut mid-format, or a later laptop reformat cannot trigger a second format. `storage format` (by hand) is
+  recorded there too;
 - nothing outside `polymath-brain/` is touched.
 
 The drive is mounted under `/mnt/polymath/<uuid>` with `nodev,nosuid,noexec`, plus a manifest with its budget.

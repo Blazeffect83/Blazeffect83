@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 476 automated tests pass (`pytest`), including:
+- **Tests:** 486 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -386,6 +386,11 @@ to 4,000 pages changed little (−1.5 %); it is kept at 4,000. A real day's tota
 - shared, small, Windows-formatted, and NVMe-already cases do not move;
 - `storage format` refuses a drive with files unless `--erase-files`, and always refuses one holding spilled
   documents.
+- (v0.4.1) a fresh exFAT shop SSD with the maker's installers on it is formatted and becomes the brain's home;
+  then the same drive is never formatted again: not on replug, not after a failed (power-cut) format, and not
+  after a laptop reformat to an empty exFAT. Every not-fresh case is left alone: a file or folder of yours, a
+  plain text file, Polymath's documents, a retired drive, under 32 GB, more than 1 GB of "maker" files, a drive
+  with no serial or model, or the setting off.
 
 **Not yet done on real hardware.**
 

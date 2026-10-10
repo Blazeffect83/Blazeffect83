@@ -66,7 +66,7 @@ if [ "$PURGE" = 1 ]; then
     say "purging learned data, backups and configuration"
     # the data directory is usually a mount point: empty it, keep the mount
     [ ! -d "$ROOT/srv/polymath" ] || find "$ROOT/srv/polymath" -mindepth 1 -delete
-    rm -rf "$ROOT/etc/polymath"
+    rm -rf "$ROOT/etc/polymath" "$ROOT/var/lib/polymath"
     if [ "$SYSTEM" = 1 ] && id polymath >/dev/null 2>&1; then
         userdel polymath || true
     fi
