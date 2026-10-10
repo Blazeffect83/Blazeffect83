@@ -179,6 +179,7 @@ udev_changed="$(install_file "$SRC/deploy/90-polymath-storage.rules" "$ROOT/etc/
 run mkdir -p "$ROOT$MOUNT_ROOT"
 run chmod 0755 "$ROOT$MOUNT_ROOT"
 run chmod 0755 "$OPT/src/scripts/open-dashboard.sh" "$OPT/src/scripts/open-feed.sh"
+install_file "$SRC/deploy/polymath-cli" "$ROOT/usr/local/bin/polymath" 0755 >/dev/null  # `polymath …` for every user
 
 # ------------------------------------------------------------------ desktop: autologin + live feed on screen
 FEED_LAUNCHER=/opt/polymath/src/scripts/open-feed.sh

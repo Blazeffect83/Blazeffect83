@@ -77,6 +77,7 @@ def test_staged_install_is_idempotent_and_uninstall_keeps_data(tmp_path):
         assert p.exists(), p
     for name in ("open-dashboard.sh", "open-feed.sh"):
         assert (stage / "opt/polymath/src/scripts" / name).stat().st_mode & stat.S_IXUSR
+    assert (stage / "usr/local/bin/polymath").stat().st_mode & stat.S_IXOTH  # `polymath` on everyone's PATH
     assert not (stage / "home/tester/.config/autostart/polymath-dashboard.desktop").exists()
     assert not list((stage / "opt/polymath/src").rglob("__pycache__"))
     conf = etc / "polymath/polymath.toml"
@@ -93,6 +94,7 @@ def test_staged_install_is_idempotent_and_uninstall_keeps_data(tmp_path):
     (stage / "srv/polymath/learned.sqlite3").write_text("knowledge")
     sh(str(ROOT / "uninstall.sh"), "--root", str(stage), "--user", "tester")
     assert not (etc / "systemd/system/polymath.service").exists() and not (stage / "opt/polymath").exists()
+    assert not (stage / "usr/local/bin/polymath").exists()
     assert not (stage / "home/tester/.config/autostart/polymath-feed.desktop").exists()
     assert not list((stage / "home/tester/.local/share/applications").glob("polymath-*"))
     assert "open-feed" not in (stage / "home/tester/.config/labwc/autostart").read_text()
@@ -296,3 +298,30 @@ def test_sd_card_install_and_storage_pool_files(tmp_path):
     sh(str(ROOT / "uninstall.sh"), "--root", str(stage), "--user", "tester")
     assert not (stage / "etc/udev/rules.d/90-polymath-storage.rules").exists()
     assert not (stage / "etc/systemd/system/polymath-volume@.service").exists()
+
+
+def test_polymath_command_runs_as_the_polymath_user(tmp_path):
+    """The /usr/local/bin/polymath wrapper: feed as you, data commands as `polymath`, drive mounting as root."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name in ("sudo", "runuser"):
+        (bindir / name).write_text(f'#!/bin/sh\necho "{name} $*"\n')
+        (bindir / name).chmod(0o755)
+    (bindir / "id").write_text('#!/bin/sh\nif [ "$1" = -u ]; then echo "$FAKE_UID"; else echo "$FAKE_USER"; fi\n')
+    (bindir / "id").chmod(0o755)
+    real = tmp_path / "polymath"
+    real.write_text('#!/bin/sh\necho "polymath $*"\n')
+    real.chmod(0o755)
+
+    def run(*args: str, uid: str = "1000", user: str = "christian") -> str:
+        env = {"PATH": f"{bindir}:/usr/bin:/bin", "FAKE_UID": uid, "FAKE_USER": user, "POLYMATH_BIN": str(real)}
+        out = subprocess.run(["sh", str(ROOT / "deploy" / "polymath-cli"), *args], env=env, capture_output=True,
+                             text=True, timeout=30)  # fmt: skip
+        return out.stdout.strip()
+
+    assert run("feed") == "polymath feed" and run("--help") == "polymath --help"
+    assert run("ask", "x") == f"sudo -u polymath --preserve-env=POLYMATH_CONFIG {real} ask x"
+    assert run("storage", "eject", "v1") == f"sudo {real} storage eject v1"
+    assert run("status", uid="0", user="root") == f"runuser -u polymath -- {real} status"
+    assert run("storage", "attach", "/dev/sda1", uid="0", user="root") == "polymath storage attach /dev/sda1"
+    assert run("report", uid="999", user="polymath") == "polymath report"

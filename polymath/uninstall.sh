@@ -58,6 +58,7 @@ if [ -n "$DESKTOP_USER" ]; then
     [ ! -f "$home/.config/wayfire.ini" ] || sed -i '/^polymath *= /d' "$home/.config/wayfire.ini"
 fi
 
+rm -f "$ROOT/usr/local/bin/polymath"
 say "removing /opt/polymath"
 rm -rf "$ROOT/opt/polymath"
 

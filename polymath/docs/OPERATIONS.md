@@ -60,8 +60,11 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | nightly report | `/srv/polymath/reports/report-YYYY-MM-DD.md` or `polymath report` |
 | research a topic | `polymath learn "topic"` or `polymath learn https://example.org/` |
 
-The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). Run it as a user who can
-read `/srv/polymath`, or prefix it with `sudo -u polymath`.
+The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). `install.sh` puts
+`polymath` on everyone's PATH (`/usr/local/bin/polymath`):
+- most commands run as the `polymath` user, which owns the data, through `sudo`;
+- `polymath feed` runs as you;
+- `storage attach|detach|eject` run as root.
 
 ### The live feed
 
