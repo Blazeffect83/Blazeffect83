@@ -20,7 +20,7 @@ from polymath.drive.bandit import ArmStats
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "batch": 6,  # questions / predictions per step
-    "min_conf": 0.4,  # abstain from open predictions below this confidence (heritable, mutated by evolution)
+    "min_conf": 0.5,  # abstain from open predictions below this confidence (heritable, mutated by evolution)
     "breadth": 1.0,  # scope size multiplier
     "explore": 1.0,  # Thompson sampling width
     "weights": None,  # the agent's own link-prediction weights (None → the society's)

@@ -140,11 +140,36 @@ def _relations(rt: Runtime) -> list[int]:
     return [int(r["p"]) for r in rows if int(r["n"]) >= 5]
 
 
+TYPICAL_SHARE = 0.3  # predict a relation only for subjects whose type usually has it
+TYPICAL_MIN_CLASS = 5
+
+
+def typical(db: Database, s: int, p: int, cache: dict[int, float]) -> bool:
+    """Does ``s`` belong to a type for which relation ``p`` is usual? (No guessing "the country of ASCII".)"""
+    p31 = db.scalar("SELECT id FROM predicates WHERE key='P31'")
+    if p31 is None:
+        return False
+    for r in db.query("SELECT o FROM triples WHERE s=? AND p=? AND o != 0", (s, p31)):
+        cls = int(r["o"])
+        if cls not in cache:
+            row = db.one(
+                "SELECT COUNT(*) AS n, SUM(EXISTS(SELECT 1 FROM triples h WHERE h.s=c.s AND h.p=? AND h.holdout=0)) "
+                "AS has FROM triples c WHERE c.p=? AND c.o=?",
+                (p, p31, cls),
+            )
+            n = int(row["n"]) if row else 0
+            cache[cls] = (int(row["has"] or 0) / n) if row and n >= TYPICAL_MIN_CLASS else 0.0
+        if cache[cls] >= TYPICAL_SHARE:
+            return True
+    return False
+
+
 def predict(rt: Runtime) -> StepResult:
     res = StepResult("predict")
     a = rt.agent
     min_conf = float(a.params["min_conf"])
-    abstained = 0
+    abstained = atypical = 0
+    cache: dict[int, float] = {}
     for p in _relations(rt):
         options = [
             int(r["o"])
@@ -165,8 +190,12 @@ def predict(rt: Runtime) -> StepResult:
             "k.target='predict:' || s.entity_id || ':' || ?) ORDER BY s.weight DESC LIMIT ?",
             (a.id, p, a.id, p, int(a.params["batch"]) * 3),
         )
+        cache.clear()
         for r in subjects:
             s = int(r["e"])
+            if not typical(rt.db, s, p, cache):
+                atypical += 1
+                continue
             pred = rt.predictor().predict(s, p, options)
             if pred.confidence < min_conf or pred.method == "none":
                 abstained += 1
@@ -184,7 +213,9 @@ def predict(rt: Runtime) -> StepResult:
                 break
         if res.tasks >= int(a.params["batch"]):
             break
-    res.notes.append(f"{res.tasks} predictions made, {abstained} abstained (min_conf {min_conf:.2f})")
+    res.notes.append(
+        f"{res.tasks} predictions made, {abstained} abstained (min_conf {min_conf:.2f}), {atypical} not typical"
+    )
     return res
 
 

@@ -139,7 +139,7 @@ def test_open_predictions_are_judged_when_facts_arrive(config, db):
         json.loads(t["payload"])["s"]: (t["id"], json.loads(t["payload"])["choice"])
         for t in db.query("SELECT id, payload FROM agent_tasks WHERE agent_id=? AND kind='predict'", (a.id,))
     }
-    assert set(made) == set(missing)
+    assert set(made) == set(missing)  # cities (a type without continents) are never guessed for
     assert all(made[c][1] == (europe if kb.countries.index(c) < 20 else asia) for c in missing)  # learned from co-facts
     out = society.verify_job(ctx_for(config, db, "agents.verify")).result
     assert out == {"correct": 0, "wrong": 0, "expired": 0, "read_rewards": 0}  # nothing has arrived yet
@@ -537,3 +537,13 @@ def test_dispute_verdicts_respect_multi_valued_relations(config, db):
     wrong, _ = g.add_triple(kb.countries[3], cap, o=kb.cities[9], kind="pattern", source="text",
                             doc_id=kb.docs["Country09"])  # fmt: skip
     assert society._verify_dispute(db, row, {"s": kb.countries[3], "p": cap, "choice": wrong}) is False
+
+
+def test_predictions_only_for_subjects_whose_type_has_the_relation(db):
+    kb = build(db)
+    missing = [kb.countries[1]]
+    cont, _europe, _asia = _continents(db, kb, missing)
+    cache: dict[int, float] = {}
+    assert skills.typical(db, kb.countries[1], cont, cache)  # countries usually have a continent
+    assert not skills.typical(db, kb.cities[1], cont, cache)  # cities in this graph never do
+    assert not skills.typical(db, kb.people[0], cont, cache)  # no type known: no guess
