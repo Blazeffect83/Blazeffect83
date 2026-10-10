@@ -127,6 +127,44 @@ English function-word list used by the HTML boilerplate filter.) Where a constan
 
   **The weights are learned**, by maximum likelihood, from quizzes on *visible* facts. Each asked fact is hidden from every method while it is asked (leave-one-out); this is recalibrated daily.
 
+## Self-improvement
+
+- **Self-tuning** (`drive/selftune.py`).
+  - Paired test: the current value and the candidates answer the *same* 60 hidden-fact questions; the mean
+    paired difference d̄ and its standard error SE are computed per candidate, and the candidate with the best
+    lower bound d̄ − 2·SE is chosen.
+  - Adopted only when d̄ > max(minimum effect, 2·SE).
+  - The link-predictor settings are judged on the log-likelihood of the clue they control (association), not
+    on the combined answer, because the combination can weight a weak clue to zero and hide any change. They
+    hill-climb: each trial tests half and double the current value.
+  - `predict.min_confidence`: one pass collects (confidence, right, had a view) per question; every threshold
+    is scored from it with the predictions reward (+2 right, −0.8 wrong, 0 abstain).
+  - `infer.min_confidence`: from the rule audit's confirmed/refuted counts per 0.05 confidence bucket, the
+    lowest threshold whose kept conclusions are ≥ 80 % precise (Laplace-smoothed, ≥ 20 judged).
+  - **Safety net:** an adopted value is *watching* until 2 self-tests have run; if their mean accuracy is more
+    than 5 points below the mean of the 3 before, the old value is restored.
+- **Rule trust** (`reasoning/rule_audit.py`).
+  - Per rule (inverse rules are one rule both ways), up to 3,000 recent conclusions are judged:
+    *confirmed* when a non-rule source states the same fact; *refuted* when it is disputed, or the relation is
+    strictly single-valued (≥ 50 subjects, ≥ 95 % with exactly one sourced, visible value) and a sourced,
+    visible fact gives another value. Hidden quiz facts never count.
+  - trust = (confirmed + 1) / (judged + 2); refuted conclusions already withdrawn keep counting.
+  - Demoted at trust < 0.5 with ≥ 8 judged; promoted again at ≥ 0.65.
+- **Specialists** (`drive/specialists.py`). Over 14 days of self-test answers, a relation with ≥ 12 answers is
+  weak when its accuracy is < 50 %, or 20 points below overall. Retired when, over ≥ 8 answers since the spawn,
+  accuracy ≥ 70 %, or within 5 points of overall and ≥ 10 points better than before; or after 21 days. A
+  relation is not re-spawned within 7 days of a retirement.
+- **Reading strategy** (`drive/strategy.py`).
+  - Value per source over 7 days = good facts (non-rule evidence, not disputed) + 0.5 × documents linked to at
+    least one known entity; per CPU-minute of its ingest jobs plus its document share of reading.
+  - Weight = √(rate / median of the positive rates), clamped to 0.5–2 (sources with < 30 CPU-seconds or < 20
+    documents keep 1).
+  - Topic factor = √(facts per CPU-second of targeted reading / median), clamped to 0.5–1.5.
+- **Learned phrasing** (`perception/phrasing.py`). From the relation-pattern table (DIPRE/Snowball), per
+  relation, the best subject-first middle with ≥ 3 supporting sentences and confidence ≥ 0.7 that reads as a
+  clause: 1–5 lowercase words, a verb (auxiliary first, a participle, or an -ed word), no pronouns, articles,
+  numbers or archaic forms, not ending in an auxiliary.
+
 ## Drive (curiosity)
 
 - **Importance.** PageRank over the entity graph (sparse power iteration; dangling mass spread uniformly), using fact links and document co-mentions.

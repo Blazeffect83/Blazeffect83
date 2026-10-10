@@ -24,6 +24,7 @@ from polymath.body import wear
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import JobContext, JobOutcome
+from polymath.drive import changelog
 from polymath.evaluation import surprise
 
 WEEK = 7 * 86400.0
@@ -83,6 +84,8 @@ def collect(db: Database, now: float | None = None, cfg: Config | None = None) -
         "didyouknow": surprise.recent(db, now - WEEK, 3),
         "wear": wear.sd_summary(db, cfg, now) if cfg is not None else None,
         "facts_total": int(db.scalar("SELECT COUNT(*) FROM triples", default=0)),
+        "self": changelog.counts(db, now - WEEK),
+        "self_latest": [c["summary"] for c in changelog.recent(db, now - WEEK, 3, include_rejected=False)],
     }
 
 
@@ -121,6 +124,10 @@ def lines(d: dict[str, Any]) -> list[str]:
         out.append(f"Most improved topic: {top['topic']} ({grew}).")
     if a["best_agent"]:
         out.append(f"Agent of the week: {a['best_agent']['name']} (+{a['best_agent']['reward']} verified reward).")
+    head = changelog.describe_counts(d.get("self") or {})
+    if head:
+        out.append(head.replace("Improved itself", "This week it improved itself"))
+        out += [f"Changed: {x}" for x in (d.get("self_latest") or [])[:2]]
     out += list(d.get("didyouknow") or [])[:2]
     w = d.get("wear")
     if w:

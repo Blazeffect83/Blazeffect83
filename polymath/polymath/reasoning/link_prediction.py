@@ -92,8 +92,14 @@ class LinkPredictor:
         text: TextIndex | None = None,
         vectors: WordVectors | None = None,
         weights: dict[str, float] | None = None,
+        subjects: int | None = None,
+        features: int | None = None,
     ) -> None:
         self.db = db
+        from polymath.drive.selftune import tuned
+
+        self.subjects = int(subjects if subjects is not None else tuned(db, "link.subjects", SUBJECTS))
+        self.features = int(features if features is not None else tuned(db, "link.features", FEATURES))
         self.text = text or TextIndex(db)
         self.vectors = vectors
         stored = db.kv_get("link_weights") or {}
@@ -153,14 +159,14 @@ class LinkPredictor:
             for r in self.db.query(
                 "SELECT p, o FROM triples WHERE s=? AND p != ? AND o != 0 AND holdout=0 AND status!='disputed' "
                 "AND id != ? LIMIT ?",
-                (s, p, exclude or -1, FEATURES),
+                (s, p, exclude or -1, self.features),
             )
         ]
         counts = {
             o: int(
                 self.db.scalar(
                     "SELECT COUNT(*) FROM (SELECT 1 FROM triples WHERE o=? AND p=? AND s != ? AND holdout=0 LIMIT ?)",
-                    (o, p, s, SUBJECTS * 10),
+                    (o, p, s, self.subjects * 10),
                     default=0,
                 )
             )
@@ -178,9 +184,9 @@ class LinkPredictor:
                     f"SELECT t.p, t.o, COUNT(DISTINCT t.s) AS c FROM (SELECT s FROM triples WHERE o=? AND p=? AND "
                     f"s != ? AND holdout=0 LIMIT ?) x JOIN triples t ON t.s = x.s WHERE t.holdout=0 AND ({cond}) "
                     "GROUP BY t.p, t.o",
-                    (o, p, s, SUBJECTS, *[v for f in feats for v in f]),
+                    (o, p, s, self.subjects, *[v for f in feats for v in f]),
                 )
-                n = min(counts[o], SUBJECTS)
+                n = min(counts[o], self.subjects)
                 seen = {(int(r["p"]), int(r["o"])): int(r["c"]) for r in rows}
                 for f in feats:
                     score += math.log((seen.get(f, 0) + 0.1) / (n + 0.2))

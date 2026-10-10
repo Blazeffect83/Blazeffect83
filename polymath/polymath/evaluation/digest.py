@@ -17,6 +17,7 @@ from polymath.body import wear
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import JobContext, JobOutcome
+from polymath.drive import changelog
 from polymath.evaluation import remedy, surprise
 from polymath.interface.answer import render_value
 from polymath.reasoning import predictions
@@ -163,6 +164,10 @@ def collect(db: Database, since: float, now: float | None = None, cfg: Config | 
         "curious": curious,
         "wear": wear.sd_summary(db, cfg, now) if cfg is not None else None,
         "didyouknow": surprise.recent(db, since, 2),
+        "self": {
+            "counts": changelog.counts(db, since),
+            "latest": [c["summary"] for c in changelog.recent(db, since, 2, include_rejected=False)],
+        },
         "predictions": predictions.scoreboard(db)
         | {
             "confirmed_today": int(
@@ -219,6 +224,11 @@ def lines(d: dict[str, Any]) -> list[str]:
     if d.get("curious"):
         out.append("Wants to learn next: " + ", ".join(d["curious"]) + ".")
     out += list(d.get("didyouknow") or [])
+    me = d.get("self") or {}
+    head = changelog.describe_counts(me.get("counts") or {})
+    if head:
+        out.append(head)
+        out += [f"Changed: {x}" for x in (me.get("latest") or [])]
     pr = d.get("predictions") or {}
     if pr.get("made"):
         today = f" {pr['confirmed_today']} came true today." if pr.get("confirmed_today") else ""

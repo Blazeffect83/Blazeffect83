@@ -150,6 +150,20 @@ def test_dashboard_endpoints(server):
     assert ins["predictions"]["made"] == 0 and "Predicted 0" in ins["predictions"]["line"]
     assert ins["didyouknow"] == ["Did you know? Odd fact."] and ins["home"] is None
     assert ins["wear"][0]["line"].startswith("SD card (data disk)")
+    assert ins["changes"] == [] and ins["tuned"] == [] and ins["reading_weights"] == {}
+    db = open_database(cfg.paths.db_path)
+    with db.transaction():
+        from polymath.drive import changelog, selftune
+
+        changelog.record(db, "tuning", "link.features", "adopted", "Changed clues from 40 to 20", state="watching")
+        selftune.set_value(db, "link.features", 20)
+        db.kv_set("reading_weights", {"wikipedia": 2.0, "pubmed": 1.04, "feed": 0.5})
+    db.close()
+    ins = get(srv, "/api/insights")
+    assert ins["changes"][0]["watching"] and ins["changes"][0]["summary"] == "Changed clues from 40 to 20"
+    assert ins["tuned"] == [{"name": "link.features", "label": selftune.KNOBS["link.features"].label, "value": 20,
+                             "default": 40}]  # fmt: skip
+    assert ins["reading_weights"] == {"wikipedia": 2.0, "feed": 0.5}  # pubmed ×1.04 is no real change
     (cfg.paths.data_dir / "home-drive.json").write_text(json.dumps({"id": "u1", "name": "T7", "budget_gb": 900}))
     assert get(srv, "/api/insights")["home"]["name"] == "T7"
     m = get(srv, "/api/map")
@@ -168,7 +182,7 @@ def test_dashboard_endpoints(server):
         status, body, _ctype = fetch(srv, page)
         assert status == 200 and marker in body, page
     status, body, _ = fetch(srv, "/")
-    assert b"c-map" in body and b"face.js" in body and b"/live" in body
+    assert b"c-map" in body and b"face.js" in body and b"/live" in body and b'id="changes"' in body
 
 
 def test_dashboard_insights_with_a_written_recap(server):

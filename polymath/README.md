@@ -37,11 +37,20 @@ implemented here and learns only from data the agent downloads itself.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
   at 75 °C and pauses at 82 °C.
 - **Survives power loss:** every step commits atomically (SQLite WAL); jobs resume where they stopped.
+- **Improves itself from what it learns** (never by editing its code):
+  - it tunes its own settings with fair A/B tests and undoes a change if its self-test score drops;
+  - it drops rules whose conclusions sources keep contradicting;
+  - it spawns specialist agents for its weak spots;
+  - it reads more of what teaches it most and learns how to phrase sentences from what it reads.
+
+  Every change is logged with its numbers: `polymath changes`, the dashboard, the feed.
 - **Answers offline**, with citations and confidences, and says "I don't know yet" instead of guessing.
 
 ![Live feed](docs/img/feed.png)
 
 ![Knowledge map](docs/img/knowledge-map.png)
+
+![How it improved itself](docs/img/self-improvement.png)
 
 ## Install (Raspberry Pi OS Bookworm, 64-bit)
 
@@ -75,6 +84,7 @@ polymath tell "Marie Curie"                      # a paragraph written from what
 polymath predictions                             # facts it guessed before reading them, and how many came true
 polymath wear                                    # disk writes per day; how long the SD card lasts at this rate
 polymath sites                                   # new sites it vetted, refused or dropped, and why
+polymath changes                                 # what it changed about itself, and why (--reset NAME to overrule)
 ```
 
 ### Agents with their own directives

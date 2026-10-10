@@ -69,6 +69,26 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | SD card wear | `polymath wear` |
 | on your phone | `http://<pi>:8765/live`: the face and the live feed |
 | knowledge map | on the dashboard: topics clustered by what they share, sized by documents. ▶ plays the time-lapse; click a topic to ask about it |
+| what it changed about itself | `polymath changes` (`--all` adds trials that changed nothing; `--json`), the dashboard panel *How it improved itself*, "improved" lines in the feed |
+| overrule a tuned setting | `polymath changes --reset NAME` (or `all`): back to the default and pinned · `polymath changes --allow NAME` (or `all`) lets it tune again |
+
+### How it improves itself
+
+It never edits its code. What it changes, each change logged with the numbers behind it:
+
+- **Settings**: every 8 hours it tests one setting against half/double (or a grid of) alternatives on the same
+  questions and adopts a clearly better value. A new value is *watching* until two self-tests have run; if
+  accuracy falls by more than 5 points it is undone by itself. Settings: `link.subjects`, `link.features`,
+  `predict.min_confidence`, `infer.min_confidence`.
+- **Rules**: every 6 hours each learned rule is checked against what sources later said. Rules that keep
+  being contradicted are dropped with the facts only they produced; contradicted conclusions are withdrawn and
+  never re-derived.
+- **Specialists**: a relation it keeps getting wrong on the self-test (for example "fix birth place") gets its
+  own *predict* agent (`polymath agents list` shows them, marked auto). They retire when the relation recovers,
+  or after 21 days.
+- **Reading**: daily it reads more of the sources and topics that teach it the most per CPU-minute (weights
+  0.5–2, shown on the dashboard).
+- **Writing**: it learns sentence phrasings from what it reads ("X was born in Y") and `tell` uses them.
 
 The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). `install.sh` puts
 `polymath` on everyone's PATH (`/usr/local/bin/polymath`):

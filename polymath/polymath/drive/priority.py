@@ -58,6 +58,9 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
     from polymath.drive.learn import INTEREST_BOOST, interests
 
     wanted = interests(db)
+    from polymath.drive.strategy import topic_factor
+
+    yields = topic_factor(db)  # facts learned per CPU-second on a topic, against the median (drive.strategy)
     rows = []
     raw_importance: dict[int, float] = {}
     gaps: dict[int, tuple[float, dict[str, Any]]] = {}
@@ -90,13 +93,15 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
         eff = effort.get(tid, 0.0) / effort_total
         gap, gap_ev = gaps[tid]
         boost = INTEREST_BOOST if tid in wanted else 1.0
-        priority = gap * importance * novelty * (1.0 - eff) * boost
+        teaches = yields.get(tid, 1.0)
+        priority = gap * importance * novelty * (1.0 - eff) * boost * teaches
         evidence = {
             "gap": gap_ev,
             "importance_pagerank": round(raw_importance[tid], 3),
             "pursuits_decayed": round(decayed, 3),
             "effort_share_24h": round(eff, 3),
             "user_interest_boost": boost,
+            "yield_factor": teaches,
             "docs": int(t["n_total"]),
         }
         rows.append((tid, gap, importance, novelty, eff, priority, json.dumps(evidence), now))
@@ -139,13 +144,15 @@ def weakest_topics(db: Database, k: int = 10) -> list[dict[str, Any]]:
 
 
 def unread_entities(db: Database, topic_id: int, k: int = 20) -> list[tuple[int, str]]:
-    """Most important entities linked from a topic's documents whose own article has not been read."""
+    """Unread articles a topic's documents point to, basics first: the ones its documents refer to most often,
+    weighted by importance (PageRank), are the concepts everything else in the topic builds on."""
     return [
         (int(r["id"]), str(r["wiki_title"]))
         for r in db.query(
-            "SELECT e.id, e.wiki_title, MAX(e.pagerank) AS pr FROM doc_topics dt JOIN doc_entities de ON "
-            "de.doc_id = dt.doc_id JOIN entities e ON e.id = de.entity_id WHERE dt.topic_id = ? AND e.doc_id IS NULL "
-            "AND e.wiki_title IS NOT NULL GROUP BY e.id ORDER BY pr DESC LIMIT ?",
+            "SELECT e.id, e.wiki_title, MAX(e.pagerank) AS pr, COUNT(DISTINCT de.doc_id) AS refs FROM doc_topics dt "
+            "JOIN doc_entities de ON de.doc_id = dt.doc_id JOIN entities e ON e.id = de.entity_id WHERE "
+            "dt.topic_id = ? AND e.doc_id IS NULL AND e.wiki_title IS NOT NULL GROUP BY e.id "
+            "ORDER BY refs * (pr + 1e-6) DESC, pr DESC LIMIT ?",
             (topic_id, k),
         )
     ]

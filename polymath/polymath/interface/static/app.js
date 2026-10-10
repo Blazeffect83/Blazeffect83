@@ -231,6 +231,15 @@ async function insights() {
     const wearLines = d.wear.map((w) => w.line + (w.status && w.status !== "ok" ? ` — ${w.status === "critical" ? "far " : ""}over budget` : ""));
     if (d.home) wearLines.unshift(`The brain lives on the drive ${d.home.name || d.home.id}; the SD card only boots the Pi.`);
     list($("#wear"), wearLines, "measuring (every 15 minutes)…");
+    const undo = new Set(["rolled_back", "demoted", "retired", "reset"]);
+    $("#changes").innerHTML = d.changes.length ? d.changes.map((c) =>
+      `<li class="${undo.has(c.action) ? "chg-undo" : ""}"><span class="chg-meta">${esc(ago(c.at))} · ${esc(c.area)}` +
+      `${c.watching ? ' · <span class="chg-watch">watching</span>' : ""}</span>${esc(c.summary)}</li>`).join("")
+      : '<li class="muted">nothing yet: it changes itself only when a test shows the change helps</li>';
+    const tuned = (d.tuned || []).map((t) => `${t.label}: ${t.value}` + (t.default !== null ? ` (was ${t.default})` : ""));
+    const reading = Object.entries(d.reading_weights || {}).map(([k, v]) => `${k} ×${v}`);
+    $("#tuned-line").textContent = [tuned.length ? "Settings it tuned — " + tuned.join("; ") : "No settings changed yet.",
+      reading.length ? "Reading more or less of: " + reading.join(", ") : ""].filter(Boolean).join(" · ");
   } catch (e) { /* the main refresh reports database problems */ }
 }
 

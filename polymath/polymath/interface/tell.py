@@ -55,6 +55,7 @@ class Fact:
     confidence: float
     obj: int
     raw: str
+    pid: int = 0  # predicate id
 
     def raw_date(self) -> str:
         """The stored date (YYYY[-MM[-DD]]) behind a rendered time value."""
@@ -178,7 +179,7 @@ class Teller:
     def facts_of(self, entity: Entity) -> list[Fact]:
         out = []
         for r in self.db.query(
-            "SELECT t.id, t.o, t.value, t.status, t.confidence, p.key, p.label FROM triples t "
+            "SELECT t.id, t.o, t.value, t.status, t.confidence, p.key, p.label, t.p FROM triples t "
             "JOIN predicates p ON p.id = t.p WHERE t.s = ? AND t.holdout = 0 "
             "ORDER BY t.status = 'disputed', t.confidence DESC, t.id LIMIT 400",
             (entity.id,),
@@ -187,8 +188,17 @@ class Teller:
             if "not read yet" in value:
                 continue
             out.append(Fact(int(r["id"]), str(r["key"]), str(r["label"]), value, str(r["status"]),
-                            float(r["confidence"]), int(r["o"]), str(r["value"])))  # fmt: skip
+                            float(r["confidence"]), int(r["o"]), str(r["value"]), int(r["p"])))  # fmt: skip
         return out
+
+    def phrasings(self) -> dict[int, str]:
+        """Phrasings learned from reading (perception.phrasing), per predicate id."""
+        try:
+            from polymath.perception.phrasing import phrasings
+
+            return phrasings(self.db)
+        except Exception:  # a database from before v0.4 has no phrasings table
+            return {}
 
     def pointing_at(self, entity: Entity, key: str, limit: int = MAX_LIST) -> list[tuple[int, str]]:
         """(triple id, subject label) of facts ``? —key→ entity``, most important subjects first."""
@@ -295,23 +305,29 @@ class Teller:
         if born_here and not human:
             people = [label for _t, label in born_here[:MAX_LIST]]
             sentences.append(f"People born here include {join(people)}." + self._mark_ids(born_here[:MAX_LIST], cites))
-        # 5. a few more, plainly (several values of one relation in one sentence)
+        # 5. a few more: in a phrasing learned from what it read when it has one, else plainly
         templated = {k for k, _t in SENTENCES}
+        learned = self.phrasings()
         groups: dict[str, list[Fact]] = {}
         for f in facts:
-            if f.triple in used or f.value == entity.label or not plain_ok(f) or f.key in templated:
+            if f.triple in used or f.value == entity.label or f.key in templated:
                 continue
-            groups.setdefault(f.label, []).append(f)
+            if plain_ok(f) or (f.pid in learned and not JUNK.search(f.label)):
+                groups.setdefault(f.label, []).append(f)
         for label, fs in list(groups.items())[:MAX_PLAIN]:
             if len(sentences) >= MAX_SENTENCES:
                 break
             shown = fs[:MAX_LIST]
-            if fs[0].key in DATES or re.fullmatch(r"-?\d{1,6}(-\d\d){0,2}", fs[0].value):
+            is_date = fs[0].key in DATES or bool(re.fullmatch(r"-?\d{1,6}(-\d\d){0,2}", fs[0].value))
+            if is_date:
                 text = format_date(fs[0].value)[1]
                 shown = fs[:1]
             else:
                 text = join([f.value for f in shown], len(fs) - len(shown))
             many = len(shown) > 1
+            if fs[0].pid in learned and not is_date:
+                say(f"{short if human else entity.label} {learned[fs[0].pid]} {text}", shown)
+                continue
             verb = ("were" if many else "was") if past else ("are" if many else "is")
             say(f"Its {label}{'s' if many and not label.endswith('s') else ''} {verb} {text}", shown)
         paragraph = " ".join(sentences)

@@ -134,6 +134,11 @@ ACTIVITY: dict[str, str] = {
     "eval.remedy": "going back over its mistakes",
     "eval.surprise": "looking for surprising facts",
     "eval.recap": "writing the weekly recap",
+    "self.tune": "testing a change to its own settings",
+    "self.specialists": "checking its weak spots",
+    "self.strategy": "working out what teaches it the most",
+    "reason.audit": "checking how its rules held up",
+    "perception.phrasing": "learning how sentences are written",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -793,6 +798,7 @@ ASCII_FALLBACK = {
     "◞": "|",
     "◟": "/",
     "↻": "~",
+    "↑": "^",
     "▶": ">",
 }
 
@@ -939,6 +945,7 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
             "didyouknow": "bcyan",
             "prediction": "bgreen" if status == "confirmed" else "yellow",
             "recap": "bmagenta",
+            "selfchange": "yellow" if status in {"rolled_back", "demoted", "retired", "reset"} else "bgreen",
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -949,6 +956,7 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
             "home": "storage",
             "didyouknow": "fun fact",
             "prediction": "predicted",
+            "selfchange": "improved",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":

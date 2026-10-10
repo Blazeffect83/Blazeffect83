@@ -533,6 +533,49 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
 
 
+def cmd_changes(config: Config, args: argparse.Namespace) -> int:
+    """What it changed about itself: settings tuned, rules dropped, specialists, reading, phrasings."""
+    from polymath.drive import changelog, selftune
+
+    if args.reset or args.allow:
+        db = _db(config)
+        try:
+            with db.transaction():
+                if args.reset:
+                    done = selftune.reset(db, args.reset)
+                    print(f"reset to defaults and pinned: {', '.join(done)}")
+                if args.allow:
+                    freed = selftune.unpin(db, args.allow)
+                    print(f"may tune again: {', '.join(freed) or 'nothing was pinned'}")
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        finally:
+            db.close()
+        return 0
+    db = _db(config, readonly=True)
+    try:
+        rows = changelog.recent(db, 0.0, args.limit, include_rejected=args.all)
+        tuned = db.kv_get("tuned") or {}
+        pins = sorted(selftune.pinned(db))
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps({"changes": rows, "tuned": tuned, "pinned": pins}, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no changes yet: it tests its own settings every 8 hours and its rules every 6")
+    for r in rows:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(r["at"])))
+        watching = "  (watching: kept only if the self-test holds up)" if r["state"] == "watching" else ""
+        print(f"{when}  {r['area']:<11} {r['action']:<11} {r['summary']}{watching}")
+    if tuned:
+        print("current tuned settings: " + ", ".join(f"{k} = {v}" for k, v in sorted(tuned.items())))
+    if pins:
+        print(f"pinned by you (not tuned): {', '.join(pins)}  (polymath changes --allow NAME)")
+    return 0
+
+
 def cmd_recap(config: Config, args: argparse.Namespace) -> int:
     """The weekly recap: the last one written, or this week so far (``--now``)."""
     from polymath.evaluation import recap
@@ -1069,6 +1112,14 @@ def build_parser() -> argparse.ArgumentParser:
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")
     stf.add_argument("--erase-files", action="store_true", help="also when it holds files: they are erased")
     sto.set_defaults(func=cmd_storage)
+
+    ch = sub.add_parser("changes", help="what it changed about itself (self-improvement log)")
+    ch.add_argument("--all", action="store_true", help="include trials that changed nothing")
+    ch.add_argument("--limit", type=int, default=25)
+    ch.add_argument("--json", action="store_true")
+    ch.add_argument("--reset", nargs="+", metavar="NAME", help="put settings back to defaults and pin them (or: all)")
+    ch.add_argument("--allow", nargs="+", metavar="NAME", help="let it tune pinned settings again (or: all)")
+    ch.set_defaults(func=cmd_changes)
 
     rc = sub.add_parser("recap", help="the weekly recap: this week against last week")
     rc.add_argument("--now", action="store_true", help="this week so far instead of the last recap written")

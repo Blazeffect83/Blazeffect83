@@ -241,6 +241,7 @@ class DashboardData:
     def insights(self) -> dict[str, Any]:
         """The weekly recap, predictions, surprises, and the disks (one call for the dashboard's new panels)."""
         from polymath.body import wear
+        from polymath.drive import changelog, selftune
         from polymath.evaluation import recap, surprise
         from polymath.reasoning import predictions
 
@@ -263,6 +264,30 @@ class DashboardData:
             "didyouknow": surprise.recent(db, time.time() - 7 * 86400, 6),
             "wear": [r | {"line": wear.describe(r)} for r in wear.report(db, self.config)],
             "home": home_info,
+            "changes": [
+                {
+                    "at": c["at"],
+                    "area": c["area"],
+                    "action": c["action"],
+                    "summary": c["summary"],
+                    "watching": c["state"] == "watching",
+                }
+                for c in changelog.recent(db, 0.0, 12, include_rejected=False)
+            ],
+            "tuned": [
+                {
+                    "name": k,
+                    "label": selftune.KNOBS[k].label if k in selftune.KNOBS else k,
+                    "value": v,
+                    "default": selftune.KNOBS[k].default if k in selftune.KNOBS else None,
+                }
+                for k, v in sorted((db.kv_get("tuned") or {}).items())
+            ],
+            "reading_weights": {  # only the sources it reads clearly more or less of
+                k: round(float(v), 1)
+                for k, v in (db.kv_get("reading_weights") or {}).items()
+                if abs(float(v) - 1) >= 0.1
+            },
         }
 
     def tell(self, q: str) -> dict[str, Any]:

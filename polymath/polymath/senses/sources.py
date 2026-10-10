@@ -100,6 +100,11 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
     db = ctx.db
     planned: dict[str, Any] = {}
     errors: dict[str, str] = {}
+    from polymath.drive.strategy import weight  # read more of what teaches it the most (drive.strategy)
+
+    w = {
+        name: weight(db, name) for name in ("wikipedia", "wikidata", "openalex", "pubmed", "gutenberg", "stackexchange")
+    }
 
     def attempt(name: str, fn: Any) -> None:
         if ctx.should_stop():
@@ -121,7 +126,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
                     "wikipedia.part",
                     {"dump_url": part.dump_url, "index_url": part.index_url, "size": part.size, "lang": part.lang},
                     key=key,
-                    priority=2.0,
+                    priority=2.0 * w["wikipedia"],
                 )
                 return 1
         return 0
@@ -134,7 +139,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
             "wikidata.dump",
             {"url": url, "size": size, "max_bytes": cfg.wikidata_max_bytes},
             key=f"wikidata.dump:{url}",
-            priority=1.5,
+            priority=1.5 * w["wikidata"],
         )
         return int(created)
 
@@ -152,7 +157,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
                     "then": {"kind": "openalex.ingest", "payload": {"dest": rel}, "key": f"openalex.ingest:{rel}"},
                 },
                 key=f"download:{f['url']}",
-                priority=1.0,
+                priority=1.0 * w["openalex"],
             )
             n += created
         return n
@@ -169,7 +174,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
                     "then": {"kind": "pubmed.ingest", "payload": {"dest": rel}, "key": f"pubmed.ingest:{rel}"},
                 },
                 key=f"download:{url}",
-                priority=1.0,
+                priority=1.0 * w["pubmed"],
             )
             n += created
         return n
@@ -189,7 +194,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
                 },
             },
             key=f"download:gutenberg-catalog:{week}",
-            priority=0.5,
+            priority=0.5 * w["gutenberg"],
         )
         return int(created)
 
@@ -210,7 +215,7 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
                     },
                 },
                 key=f"download:{url}",
-                priority=0.8,
+                priority=0.8 * w["stackexchange"],
             )
             n += created
         return n
@@ -235,14 +240,16 @@ def planner(agent: Any) -> None:
     s: Scheduler = agent.scheduler
     cfg: Config = agent.config
     s.ensure_recurring("sources.plan", 6 * 3600, priority=3.0)
+    from polymath.drive.strategy import weight
+
     if cfg.senses.feeds:
-        s.ensure_recurring("feeds.poll", 3600, priority=1.0)
+        s.ensure_recurring("feeds.poll", 3600, priority=1.0 * weight(agent.db, "feed"))
     crawler: Crawler | None = agent.services.get("crawler")
     if crawler is not None:
         for url in cfg.senses.seeds:
             crawler.frontier.add(url, priority=1.0)
         if crawler.frontier.pending():
-            s.ensure_recurring("crawl.step", 60, priority=0.6)
+            s.ensure_recurring("crawl.step", 60, priority=0.6 * weight(agent.db, "web"))
 
 
 # ---------------------------------------------------------------- sample mode

@@ -63,7 +63,7 @@ Each cycle:
 | `memory` | documents (lzma bodies), passages + FTS5, near-duplicates, knowledge graph with provenance, topic map, IVF vector index |
 | `perception` | tokenizer, Porter stemmer, Punkt sentences, NPMI phrases, Aho–Corasick, entity linker, infoboxes, TextRank, relation patterns, SGNS embeddings |
 | `reasoning` | source reliability (truth discovery), contradictions, rule learning + forward chaining, link prediction |
-| `drive` | PageRank, topic priorities (curiosity), targeted reading, user-requested learning, the bandit |
+| `drive` | PageRank, topic priorities (curiosity), targeted reading, user-requested learning, the bandit, self-improvement (tuning, changelog, specialists, reading strategy) |
 | `evaluation` | held-out facts, quizzes, nightly report |
 | `agents` | the agent society: directives → scopes, skills with verifiable tasks, rewards, per-agent learning, evolution |
 | `interface` | CLI, answering engine, dashboard, live feed |
@@ -169,6 +169,36 @@ code when the installed build changes.
   - layout: Fruchterman–Reingold in numpy, warm-started from the stored layout and rescaled to the unit square;
   - time-lapse: rebuilt from document read times with adaptive steps (hours to weeks, at most 96 frames), and
     raised to daily snapshots so evictions do not erase history.
+
+## Self-improvement (v0.4)
+
+It improves itself from what it measures, never by rewriting its code: only settings, rule trust, its reading
+strategy, specialist agents and sentence phrasings change. Every change goes to one log, `self_changes`
+(`drive/changelog.py`), which feeds the feed ("improved" lines; the face looks proud, or "oops" when it undoes
+something), the digest, the weekly recap, the dashboard panel *How it improved itself* and `polymath changes`.
+
+| job (action group) | every | module | what changes |
+|---|---|---|---|
+| `self.tune` (improve) | 8 h | `drive/selftune.py` | one setting per run, by a paired test; watched and rolled back if the self-test drops |
+| `reason.audit` (reason) | 6 h | `reasoning/rule_audit.py` | each rule's trust; demotes bad rules, withdraws contradicted conclusions |
+| `self.specialists` (improve) | 6 h | `drive/specialists.py` | spawns a *predict* agent for each weak relation, retires it when it recovers |
+| `self.strategy` (improve) | daily | `drive/strategy.py` | reading weights per source (job priorities) and per topic (curiosity) |
+| `perception.phrasing` (learn) | daily | `perception/phrasing.py` | sentence phrasings learned from relation patterns, used by `tell` |
+
+- **Settings** (`tuned()`): `link.subjects`, `link.features` (link predictor), `predict.min_confidence`
+  (predictions), `infer.min_confidence` (forward chaining). Each module reads its value through
+  `selftune.tuned(db, name, default)` (a one-minute cache over the `tuned` kv entry). A trial's questions and
+  answers are its job checkpoint, so a trial runs in normal slices and survives restarts. Settings you reset are
+  pinned (`tune_pinned`) and left alone.
+- **Rule trust** (`rule_trust`, `withdrawn`): inference multiplies a rule's confidence by
+  min(1, trust / 0.8) and skips demoted rules and withdrawn conclusions. Promotion clears the rule's
+  `demoted` withdrawals and rewinds the inference cursor, so its conclusions can come back.
+- **Specialists** are ordinary agents with `origin = 'auto'`: they share the agent society's scheduler, rewards
+  and evolution, at most 3 at a time. Your own agents are never touched.
+- **Reading weights** multiply the priority of `sources.plan` jobs, `feeds.poll` and `crawl.step`; topic factors
+  (0.5–1.5) multiply topic priority. "Basics first": unread articles are ordered by how often what it already
+  read refers to them, times PageRank.
+- **Phrasings** (`phrasings` table) are kept across pattern-table rebuilds.
 
 ## Disk writes and the brain's home (`body/wear.py`, `body/volumes.py`)
 

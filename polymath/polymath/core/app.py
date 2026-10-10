@@ -59,6 +59,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.body import maintenance
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
+    from polymath.drive import selftune, specialists, strategy
     from polymath.evaluation import jobs as vjobs
     from polymath.evaluation import recap, surprise
     from polymath.interface import knowledge_map
@@ -66,8 +67,9 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
     from polymath.perception import jobs as pjobs
+    from polymath.perception import phrasing
     from polymath.reasoning import jobs as rjobs
-    from polymath.reasoning import predictions
+    from polymath.reasoning import predictions, rule_audit
     from polymath.senses import (
         books_qa,
         crawler,
@@ -167,6 +169,11 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("eval.remedy", vjobs.remedy_job, "Read up on wrong answers and re-test them", action="evaluate")
     reg("eval.surprise", surprise.surprise_job, "Find facts that surprised its model", action="evaluate")
     reg("eval.recap", recap.recap_job, "Write the weekly recap (this week against last)", action="evaluate")
+    reg("self.tune", selftune.tune_job, "Test one of its own settings; keep a clearly better value", action="improve")
+    reg("self.specialists", specialists.specialists_job, "Spawn or retire specialists for weak spots", action="improve")
+    reg("self.strategy", strategy.strategy_job, "Measure what teaches it most; adjust what it reads", action="improve")
+    reg("reason.audit", rule_audit.audit_job, "Judge its rules by how their conclusions held up", action="reason")
+    reg("perception.phrasing", phrasing.phrasing_job, "Learn how sentences state relations", action="learn")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
@@ -187,6 +194,11 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (600.0, surprise.planner),
             (600.0, recap.planner),
             (600.0, knowledge_map.planner),
+            (600.0, selftune.planner),
+            (600.0, specialists.planner),
+            (600.0, strategy.planner),
+            (600.0, rule_audit.planner),
+            (600.0, phrasing.planner),
             (60.0, society.planner),
         ]
         if planners

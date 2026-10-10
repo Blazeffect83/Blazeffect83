@@ -50,6 +50,11 @@ h3.sub { font-size: 13px; color: var(--muted); margin: 14px 0 6px; font-weight: 
 
 .digest { margin: 0; padding-left: 1.1em; line-height: 1.5; }
 .digest li { margin: 0.15em 0; }
+.changes { list-style: none; margin: 0; padding: 0; }
+.changes li { padding: 0.55em 0 0.55em 0.8em; border-left: 3px solid var(--ok); margin: 0.35em 0; line-height: 1.45; }
+.changes li.chg-undo { border-left-color: var(--warn); }
+.chg-meta { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+.chg-watch { color: var(--warn); font-weight: 600; }
 
 /* terminal colours, shared by the face and the live feed (names from polymath/interface/feed.py) */
 .s-dim, .s-plain { color: var(--muted); }

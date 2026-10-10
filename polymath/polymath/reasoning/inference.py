@@ -156,14 +156,24 @@ def forward_chain(db: Database, *, max_new: int = 50_000, tick: Any = None) -> d
     rules = db.query("SELECT kind, p, q, confidence FROM rules WHERE kind IN ('transitive','inverse','symmetric')")
     if not rules:
         return {"new": 0, "examined": 0}
-    trans = {int(r["p"]): float(r["confidence"]) for r in rules if r["kind"] == "transitive"}
-    sym = {int(r["p"]): float(r["confidence"]) for r in rules if r["kind"] == "symmetric"}
+    from polymath.reasoning.rule_audit import factor, is_withdrawn, rule_key, trust_of
+
+    trust = trust_of(db)  # a rule's conclusions keep the confidence its track record earned (none when demoted)
+
+    def earned(r: Any) -> float:
+        q = None if r["q"] is None else int(r["q"])
+        return float(r["confidence"]) * factor(trust.get(rule_key(str(r["kind"]), int(r["p"]), q)))
+
+    trans = {int(r["p"]): earned(r) for r in rules if r["kind"] == "transitive" and earned(r) > 0}
+    sym = {int(r["p"]): earned(r) for r in rules if r["kind"] == "symmetric" and earned(r) > 0}
     inv: dict[int, list[tuple[int, float]]] = {}
     for r in rules:
-        if r["kind"] == "inverse":
-            inv.setdefault(int(r["p"]), []).append((int(r["q"]), float(r["confidence"])))
-            inv.setdefault(int(r["q"]), []).append((int(r["p"]), float(r["confidence"])))
+        if r["kind"] == "inverse" and earned(r) > 0:
+            inv.setdefault(int(r["p"]), []).append((int(r["q"]), earned(r)))
+            inv.setdefault(int(r["q"]), []).append((int(r["p"]), earned(r)))
     relevant = set(trans) | set(sym) | set(inv)
+    if not relevant:
+        return {"new": 0, "examined": 0}
     cursor = int(db.kv_get("inference_cursor", 0))
     q = ",".join("?" * len(relevant))
     delta: deque[tuple[int, int, int, int, float]] = deque(
@@ -178,12 +188,16 @@ def forward_chain(db: Database, *, max_new: int = 50_000, tick: Any = None) -> d
     max_seen = max((d[0] for d in delta), default=cursor)
     new = examined = 0
 
+    from polymath.drive.selftune import tuned
+
+    min_conf = float(tuned(db, "infer.min_confidence", MIN_CONF))
+
     def derive(s: int, p: int, o: int, conf: float, rule: str, premises: list[int]) -> None:
         nonlocal new
-        if s == o or conf < MIN_CONF or new >= max_new:
+        if s == o or conf < min_conf or new >= max_new:
             return
         existing = db.one("SELECT id FROM triples WHERE s=? AND p=? AND o=? AND value=''", (s, p, o))
-        if existing is not None:
+        if existing is not None or is_withdrawn(db, s, p, o):  # sources contradicted it, or its rule was demoted
             return
         tid, _added = graph.add_triple(
             s,

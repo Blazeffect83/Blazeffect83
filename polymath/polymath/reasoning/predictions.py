@@ -167,13 +167,16 @@ def predict_job(ctx: JobContext, predictor: Any = None) -> JobOutcome:
 
             predictor = predictor_for(ctx)
         per_rel = max(2, PER_RUN // len(rels))
+        from polymath.drive.selftune import tuned
+
+        threshold = float(tuned(db, "predict.min_confidence", MIN_CONFIDENCE))
         for rel in rels:
             for s in gaps(db, rel, per_rel):
                 options = options_for(db, s, rel["p"])
                 if len(options) < MIN_OPTIONS:
                     continue
                 pred = predictor.predict(s, rel["p"], options)
-                if pred.method == "none" or pred.confidence < MIN_CONFIDENCE:
+                if pred.method == "none" or pred.confidence < threshold:
                     continue
                 ranked = sorted(pred.probs, key=lambda o: -pred.probs[o])
                 db.execute(

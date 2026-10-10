@@ -64,6 +64,7 @@ MOODS: dict[str, Mood] = {
     "doubt": Mood(("¬_¬",), "yellow", ("?",)),
     "error": Mood(("×_×",), "red", ("!", ""), blink=False),
     "celebrate": Mood(("^‿^", "^ω^"), "bmagenta", ("★", "☆"), blink=False),
+    "improving": Mood(("◕‿◕",), "bgreen", ("↑", "↑↑", "↑", "")),  # changing something about itself
 }
 
 # job kind (or its prefix before the dot) → mood while that job runs
@@ -107,6 +108,7 @@ PREFIX_MOOD: dict[str, str] = {
     "agents": "agents",
     "body": "tidying",
     "sources": "thinking",
+    "self": "improving",
 }
 
 
@@ -169,6 +171,9 @@ class Face:
                 self.react("error", now, 6.0, 2)
             elif what == "recap":
                 self.react("happy", now, 6.0, 2)
+            elif what == "selfchange" and status != "reset":  # your reset is not its doing
+                worse = status in {"rolled_back", "demoted"}
+                self.react("oops" if worse else "proud", now, 6.0, 2)
             elif what == "site" and status in {"approved", "probation"}:
                 self.react("happy", now, 3.0, 1)
             elif what == "site" and status in {"refused", "dropped"}:

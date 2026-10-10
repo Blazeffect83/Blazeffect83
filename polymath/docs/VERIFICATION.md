@@ -23,11 +23,11 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 447 automated tests pass (`pytest`), including:
+- **Tests:** 476 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
-- **Coverage:** 93 % of statements and branches (`pytest --cov=polymath`).
+- **Coverage:** 94 % of statements and branches (`pytest --cov=polymath`).
 - **Lint and types:** `ruff check`, `ruff format --check` and `mypy --strict` (package, tests and scripts) are clean.
 - **Purity:**
   - `tests/test_purity.py` imports every runtime module and fails on any third-party import other than numpy.
@@ -428,6 +428,31 @@ and studies of people, science, and neural networks form visible clusters.
 - the week in review and the predictions panels: `docs/img/dashboard-panels.png`;
 - `/live` on a 390-pixel phone viewport: `docs/img/live-phone.png`.
 
+## 12d. Self-improvement (v0.4.0)
+
+Run on a copy of the same real learning database (97,822 facts; 141 transitive, inverse and symmetric rules; 2 self-tests with 77 answers).
+The first version ran on it and showed four problems; each was fixed and the run repeated.
+
+| part | first version on real data | after the fix |
+|---|---|---|
+| self-tuning | one trial ran 130 s, 112 s and 42 s in a single slice, starving every other job | trials run in normal slices (5 s budget: longest slice 6.6 s; 7–19 slices), resumable from JSON checkpoints |
+| link-predictor settings | gain exactly 0: the combiner gives the association clue weight 0, so no setting of it could show | judged on the association clue itself: 0.3–0.4 s per trial. It found the clue badly overconfident (log-likelihood −8.6 against −1.39 for chance) and adopted **`link.features` 40 → 20** (−8.24 → −7.43 on 60 questions), now under watch |
+| rule trust | "participant in ↔ participant" demoted, 8 of 8 "refuted", because sparse data made "participant" look single-valued | strict single-value test (≥ 50 subjects, ≥ 95 % one value): not demoted. 1 conclusion withdrawn ("drug or therapy used for treatment → inverse property → therapeutic area") |
+| withdrawn conclusions | would be re-derived by the next inference pass | remembered in `withdrawn`: a full re-run of inference from cursor 0 (34,704 facts, 604 new conclusions, 0.9 s) re-derived **0** of them |
+| reading strategy | papers, books, Q&A, feeds and the web all at weight 0.5: they add few facts and the median was 0 | value counts documents linked to known things (½ point each), median over sources that taught anything: OpenAlex 0.98, PubMed 1.04, Gutenberg 0.98, Stack Exchange 1.0, feeds 0.95, web 1.0; Wikipedia and Wikidata 2 |
+
+Also on this copy:
+- `link.subjects` 400 vs 200 scored identically: on this graph no object has enough subjects for the limit to
+  bind. `predict.min_confidence` 0.3 vs 0.4 also tied: no guess falls between them. Both trials were correctly
+  rejected and not shown in the feed.
+- No specialist was spawned: overall accuracy 44 %, and no relation had ≥ 12 answers in 14 days below the bar.
+  Spawning, retiring and the cool-down are covered by tests only.
+- Phrasing learned one sentence form, "X was born in Y" (birth place); the pattern table of this copy is small.
+- Germany still reads "capital Bonn (worked out by reasoning)": the contradicting fact (Berlin) is a hidden quiz
+  fact here, and hidden facts never count against a rule, by design.
+- Rule audit: 141 rules in 1.8–2.4 s.
+- Dashboard panel rendered in headless Chromium at 1280 and 390 px (`docs/img/self-improvement.png`).
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -443,6 +468,9 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 ## 14. Still pending on the Pi
 
 Not claimed until measured:
+
+0. v0.4.0 on the Pi's larger graph over a week: tuning trials and their rollbacks, rule demotions, specialists
+   spawned and retired, reading weights, learned phrasings (`polymath changes --all`).
 
 1. The test suite and `scripts/benchmark.py` on the Pi 4. A first run was cut off by a usage limit; the rerun is
    in progress.
