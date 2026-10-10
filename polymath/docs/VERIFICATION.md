@@ -19,7 +19,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 | 8 evaluation | quiz accuracy above chance on real held-out facts | ✅ see §6 |
 | 9 interface | CLI, cited answers, dashboard, /health semantics, live feed | ✅ automated, rendered in Chromium (§7) and in an emulated terminal (§10) |
 | 10 body | thermal, disk, backups (the Minecraft player check was removed, §10) | ✅ automated with injected sensors |
-| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; **⏳ on-device boot test pending** |
+| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; ✅ installed and rebooted on a real Raspberry Pi 4 (§12) |
 
 ## 1. Quality bar
 
@@ -313,19 +313,29 @@ development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and
 - The process-wide pool from one configuration could steer placement for another. Placement now uses only the
   pool of its own configuration.
 
-## 12. Pending — needs the actual Raspberry Pi
+## 12. Raspberry Pi 4 on-device results
 
-These cannot be done in a container and are **not** claimed:
+The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
+SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original spec named.
 
-1. `sudo ./install.sh` (here: `--allow-sd-card` on a Raspberry Pi 4, Debian 13, SD card only).
-2. Reboot. The agent, the dashboard and the live feed terminal must come up with no manual step.
-   Expected: lxterminal opens at login and shows "waiting" until the dashboard answers.
-3. 24 h soak:
+| step | result | source |
+|---|---|---|
+| preflight | 41.8 °C, never throttled (`throttled=0x0`); labwc desktop; lxterminal present | Pi session, read-only commands |
+| `sudo ./install.sh --allow-sd-card` | completed. It created the `polymath` user, the venv, and the config with `require_separate_mount = false` and a 15.0 GB brain budget; it set up the feed autostart and desktop autologin, and enabled both services. `/health` then returned `{"ok": true, "state": "running", "cycle": 4}` | the user's terminal output |
+| `polymath` on PATH | missing after the first install, so `/usr/local/bin/polymath` was added (aebacb0) | found on the Pi |
+| reboot | "running after reboot, all is well": the agent and the desktop feed came back with no manual step | reported by the user |
+
+## 13. Still pending on the Pi
+
+Not claimed until measured:
+
+1. The test suite and `scripts/benchmark.py` on the Pi 4. A first run was cut off by a usage limit; the rerun is
+   in progress.
+2. 24 h soak:
    - CPU temperature;
    - throttle and pause events;
    - memory under `MemoryMax=3G`;
    - the feed terminal staying responsive.
-4. Pull the power mid-run and check that the restart resumes cleanly on the real SD card and NVMe hardware.
-5. Re-run `scripts/benchmark.py` on the Pi.
-6. Plug in a real USB drive: blank, one with files, and FAT. Check the feed's `storage` line, `polymath storage
+3. Pull the power mid-run and check that the restart resumes cleanly on the SD card.
+4. Plug in a real USB drive: blank, one with files, and FAT. Check the feed's `storage` line, `polymath storage
    list`, spilling under pressure, unplug and replug, and `polymath storage retire`.
