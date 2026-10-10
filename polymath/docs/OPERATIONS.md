@@ -59,6 +59,8 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | logs | `journalctl -u polymath -f` (JSON lines; `-o cat` for compact) |
 | nightly report | `/srv/polymath/reports/report-YYYY-MM-DD.md` or `polymath report` |
 | research a topic | `polymath learn "topic"` or `polymath learn https://example.org/` |
+| what it learned today | `polymath digest` (written daily at 07:00; also in the feed and on the dashboard) |
+| new sites it vetted | `polymath sites` · `polymath sites --check example.org` |
 
 The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). `install.sh` puts
 `polymath` on everyone's PATH (`/usr/local/bin/polymath`):
@@ -81,6 +83,9 @@ The CLI reads the same configuration as the service (`/etc/polymath/polymath.tom
 | `curious` | the topics it most wants to learn about now |
 | `you` | what you asked it to learn |
 | `body` | throttling, pausing, back to normal, agent offline/online |
+| `site` / `safety` | a new site approved, put on probation, refused (and why), or dropped; a safety list loaded |
+| `relearn` / `fixed ✓` | reading up on a wrong self-test answer; getting it right on the re-test |
+| `digest` | the daily "what I learned today" summary, line by line |
 | `report` / `backup` / `error` | nightly report, backups, failed job slices (with retry or give-up) |
 
 Busy streams are capped per refresh (for example 5 facts and 4 documents every 1.5 s), and the rest are counted

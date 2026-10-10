@@ -20,6 +20,7 @@ from xml.etree import ElementTree as ET
 from polymath.core.jobs import JobContext, JobOutcome, PermanentError
 from polymath.memory.documents import Document, DocumentStore
 from polymath.senses.net import HttpClient
+from polymath.senses.openweb import record_citations
 from polymath.senses.streams import local_name, multistream_ranges
 from polymath.senses.wikitext import clean_wikitext, normalize_title, redirect_target
 
@@ -269,8 +270,10 @@ def fetch_titles(ctx: JobContext) -> JobOutcome:
                 redirects += 1
                 continue
             doc = page_to_document(page, lang)
-            if doc is not None and store.add(doc)[1] in {"new", "updated"}:
+            if doc is not None and (status := store.add(doc)[1]) in {"new", "updated"}:
                 stored += 1
+                if status == "new":
+                    record_citations(ctx.db, page.text)
         done_streams.add(key)
         ctx.tick()
     result = {"streams": len(streams), "stored": stored, "redirects": redirects, "not_in_index": len(missing)}
@@ -318,6 +321,8 @@ def ingest_part(ctx: JobContext) -> JobOutcome:
                 if status in {"new", "updated"}:
                     cp["articles"] += 1
                     value += 1.0
+                if status == "new":
+                    record_citations(ctx.db, page.text)  # sites it cites: candidates for vetted open-web learning
             cp["stream"] = k + 1
             ctx.tick()
             if ctx.should_stop() or (limit is not None and cp["articles"] >= limit):

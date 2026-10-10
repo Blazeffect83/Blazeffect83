@@ -102,6 +102,22 @@ class SensesConfig:
     crawl_allow_domains: list[str] = field(default_factory=list)
     default_feeds: bool = True  # with no feeds configured, follow the built-in list of public feeds
     default_seeds: bool = True  # with no seeds configured, crawl the built-in list of reference sites
+    # Open-web learning: sites cited by Wikipedia, each vetted before its first visit (senses.openweb).
+    open_web: bool = True
+    open_web_min_citations: int = 3  # cited by at least this many Wikipedia articles
+    open_web_trusted_citations: int = 50  # this many citations: approved outright (no probation)
+    open_web_sites_per_day: int = 200  # new sites vetted per day at most
+    open_web_probation_pages: int = 20  # pages read from a site on probation before its facts are judged
+    blocklists: list[str] = field(
+        default_factory=lambda: [
+            "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts",
+            "https://urlhaus.abuse.ch/downloads/hostfile/",
+            "https://dsi.ut-capitole.fr/blacklists/download/adult.tar.gz",
+            "https://dsi.ut-capitole.fr/blacklists/download/phishing.tar.gz",
+            "https://dsi.ut-capitole.fr/blacklists/download/malware.tar.gz",
+            "https://dsi.ut-capitole.fr/blacklists/download/gambling.tar.gz",
+        ]
+    )
 
 
 @dataclass
@@ -115,6 +131,9 @@ class LearningConfig:
     index_nprobe: int = 32
     holdout_fraction: float = 0.05
     quiz_size: int = 50
+    digest_hour: int = 7  # local hour of the daily "what I learned today" digest
+    relearn_delay_hours: float = 3.0  # read about a wrong answer, then re-test after this long
+    relearn_attempts: int = 3
 
 
 @dataclass
@@ -170,6 +189,10 @@ class Config:
             raise ConfigError("learning.embedding_dim must be between 16 and 512")
         if not 1 <= self.agents.max_agents <= 100:
             raise ConfigError("agents.max_agents must be between 1 and 100")
+        if not 0 <= self.learning.digest_hour <= 23:
+            raise ConfigError("learning.digest_hour must be 0..23")
+        if self.senses.open_web_min_citations < 1:
+            raise ConfigError("senses.open_web_min_citations must be at least 1")
         if not 0 < self.storage.shared_drive_share <= 1:
             raise ConfigError("storage.shared_drive_share must be in (0, 1]")
         if not 0 <= self.storage.reserve_fraction < 0.5:

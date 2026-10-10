@@ -29,6 +29,7 @@ retry_base = 0.01
 [senses]
 default_feeds = false
 default_seeds = false
+blocklists = []
 
 [body]
 thermal_zone = "{tmp_path / "thermal"}"

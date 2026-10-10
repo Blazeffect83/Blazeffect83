@@ -40,6 +40,18 @@ def quiz_job(ctx: JobContext) -> JobOutcome:
     return JobOutcome(done=True, value=float(res.get("n", 0)) * 0.02, result=res)
 
 
+def digest_job(ctx: JobContext) -> JobOutcome:
+    from polymath.evaluation.digest import digest_job as run
+
+    return run(ctx)
+
+
+def remedy_job(ctx: JobContext) -> JobOutcome:
+    from polymath.evaluation.remedy import remedy_job as run
+
+    return run(ctx)
+
+
 def report_job(ctx: JobContext) -> JobOutcome:
     res = write_report(ctx.db, ctx.config.paths.report_dir)
     return JobOutcome(done=True, value=0.2, result=res)
@@ -53,3 +65,5 @@ def planner(agent: Any) -> None:
     s.ensure_recurring("eval.quiz", 6 * 3600, priority=1.0)
     hour = agent.config.body.backup_hour
     s.ensure_recurring("eval.report", 86400, priority=3.0, phase=local_phase((hour + 1) % 24))
+    s.ensure_recurring("eval.digest", 86400, priority=2.0, phase=local_phase(agent.config.learning.digest_hour))
+    s.ensure_recurring("eval.remedy", 1800, priority=1.5)

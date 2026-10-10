@@ -12,6 +12,11 @@ implemented here and learns only from data the agent downloads itself.
 - **Grows onto any drive you plug in:** a USB SSD, HDD or stick becomes extra brain space automatically. A blank
   drive is formatted; on a drive with files only free space is used, and the files are never touched. It can
   start on the SD card (`--allow-sd-card`).
+- **Learns from the open web, safely:** new sites come only from links Wikipedia cites, and each is checked
+  before its first visit: offline safety lists (adult, malware, phishing, gambling), a valid HTTPS
+  certificate, robots.txt. Then it stays on probation until its facts check out.
+- **Learns from its mistakes:** every wrong self-test answer is read up on and re-tested.
+- **Tells you what it learned:** a daily digest in the feed, the dashboard, and `polymath digest`.
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
   tests itself on and gets rewarded for.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
@@ -46,6 +51,8 @@ polymath topics --weakest                        # where its knowledge is thinne
 polymath why "Black holes"                       # why it is (or is not) working on something
 polymath status                                  # health, queue, knowledge counts
 polymath storage list                            # the drives in its brain
+polymath digest                                  # what it learned today
+polymath sites                                   # new sites it vetted, refused or dropped, and why
 ```
 
 ### Agents with their own directives

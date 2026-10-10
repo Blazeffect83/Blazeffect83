@@ -251,6 +251,7 @@ class Crawler:
         user_agent: str,
         allow_domains: list[str],
         feed_sites: list[str] | None = None,
+        probation_pages: int = 20,
         max_bytes: int = 5_000_000,
         max_depth: int = 3,
         rate: float = 1.0,
@@ -263,6 +264,9 @@ class Crawler:
         self.allow = [d.lower().lstrip(".") for d in allow_domains]
         # sites of the approved news/science feeds: their own article pages may be fetched (never followed further)
         self.feed_sites = {site_of(s) for s in (feed_sites or [])}
+        self.probation_pages = probation_pages
+        self._vetted: dict[str, str] = {}
+        self._vetted_at = -1e18
         self.max_bytes = max_bytes
         self.max_depth = max_depth
         self.frontier = Frontier(db, rate=rate, clock=clock)
@@ -301,10 +305,39 @@ class Crawler:
         self._robots[host] = robots
         return robots
 
+    def refresh_vetted(self) -> None:
+        """Sites that passed the open-web gate (``senses.openweb``): approved, or on probation."""
+        try:
+            rows = self.db.query("SELECT site, status FROM sites WHERE status IN ('approved', 'probation')")
+        except Exception:  # an old database without the table: no vetted sites
+            rows = []
+        self._vetted = {str(r["site"]): str(r["status"]) for r in rows}
+        self._vetted_at = self.clock()
+
+    def vetted(self, host: str) -> str | None:
+        if self.clock() - self._vetted_at > 60:
+            self.refresh_vetted()
+        return self._vetted.get(site_of(host))
+
     def permitted(self, host: str) -> bool:
         """Only approved sites are ever fetched: the crawl allow-list (reference sites, and sites you asked it to
-        learn from) and the sites of the approved feeds. Nothing else, whatever links point to."""
-        return domain_allowed(host, self.allow) or site_of(host) in self.feed_sites
+        learn from), the sites of the approved feeds, and sites that passed the open-web vetting gate."""
+        return domain_allowed(host, self.allow) or site_of(host) in self.feed_sites or self.vetted(host) is not None
+
+    def followable(self, host: str) -> bool:
+        """Links are followed within the allow-list and vetted sites; a site on probation only up to its quota."""
+        if domain_allowed(host, self.allow):
+            return True
+        status = self.vetted(host)
+        if status == "approved":
+            return True
+        if status == "probation":
+            site = site_of(host)
+            seen = int(
+                self.db.scalar("SELECT COUNT(*) FROM frontier WHERE host = ? OR host LIKE ?", (site, f"%.{site}"))
+            )
+            return seen < self.probation_pages
+        return False
 
     # ------------------------------------------------------------------- steps
     def step(self) -> dict[str, Any]:
@@ -403,7 +436,7 @@ class Crawler:
                 if link.nofollow:
                     continue
                 norm = normalize_url(link.url)
-                if norm and domain_allowed(host_of(norm), self.allow):
+                if norm and self.followable(host_of(norm)):
                     added += self.frontier.add(norm, priority=item.priority - 0.1, depth=item.depth + 1, referrer=final)
         self.frontier.mark(
             item.url,

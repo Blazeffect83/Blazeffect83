@@ -108,6 +108,26 @@ ANSI scroll region, and spreads each batch over the interval so it reads as a st
 opens it at login in the first terminal it finds (lxterminal on Raspberry Pi OS). A lock file stops the XDG and
 compositor autostarts from opening two windows.
 
+## Open-web learning, the digest, learning from mistakes
+
+- **Open-web learning** (`senses/openweb.py`):
+  - Wikipedia ingestion counts cited sites (`site_citations`, `site_urls`).
+  - `web.blocklists` downloads the safety lists; `web.blocklist` loads each one in slices as 64-bit hashes
+    (`blocked_domains`).
+  - `web.vet` runs the gate (see SOURCES) and records `sites`; `web.trust` judges sites on probation.
+  - The crawler fetches only the allow list, approved feeds' sites and vetted sites. It follows links only within
+    the allow list, approved sites, and sites on probation that are under their quota.
+- **Learning from mistakes** (`evaluation/remedy.py`): `eval.remedy` turns wrong self-test answers (from quizzes
+  and agents) into `remediation` items. Each one queues `wikipedia.titles` for the subject, the answer and, later,
+  the wrong choice, then re-tests after `learning.relearn_delay_hours`, up to `relearn_attempts` times. The hidden
+  fact stays hidden, so a fix comes only from what was read.
+- **The digest** (`evaluation/digest.py`): `eval.digest`, daily at `learning.digest_hour`, stores `digests`:
+  - what it read and learned, notable new facts, the quiz trend;
+  - mistakes and fixes, vetted sites, disputes, the best agent, what's next.
+
+  The feed (`digest` lines), the dashboard panel and `polymath digest` show it. Vetting and relearning notices go
+  to the `events` table, which the feed streams.
+
 ## The storage pool (`memory/pool.py`, `body/volumes.py`)
 
 The pool has a privileged half and an unprivileged half.

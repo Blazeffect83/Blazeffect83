@@ -125,8 +125,12 @@ function kpis(o) {
 
 async function refresh() {
   try {
-    const [o, ts, tp, ag] = await Promise.all([get("/api/overview"), get("/api/timeseries"), get("/api/topics"),
-      get("/api/agents")]);
+    const [o, ts, tp, ag, dg] = await Promise.all([get("/api/overview"), get("/api/timeseries"), get("/api/topics"),
+      get("/api/agents"), get("/api/digest")]);
+    $("#digest-title").textContent = `What I learned — ${dg.day}`;
+    const ul = $("#digest");
+    ul.replaceChildren(...dg.lines.map((line) => { const li = document.createElement("li"); li.textContent = line; return li; }));
+    table($("#t-sites"), ["site", "verdict", "cited by", "why"], dg.sites.map((x) => [x.site, x.status, x.citations, x.reason]));
     const hl = $("#health");
     const state = o.health.state || "unknown";
     hl.textContent = o.health.ok ? `running · cycle ${fmt(o.health.cycle)}` : `${state}${o.paused_reason ? ": " + o.paused_reason : ""}`;

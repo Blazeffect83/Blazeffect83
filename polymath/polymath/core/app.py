@@ -58,6 +58,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
         crawler,
         dumpfiles,
         feeds,
+        openweb,
         scholarly,
         sources,
         wikidata,
@@ -85,6 +86,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
         user_agent=http.user_agent,
         allow_domains=allow,
         feed_sites=feed_sites,
+        probation_pages=config.senses.open_web_probation_pages,
         max_bytes=config.senses.crawl_max_bytes,
         rate=config.senses.crawl_rate,
     )
@@ -140,6 +142,12 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("body.spill", maintenance.spill_job, "Move document bodies to plugged-in drives", action="maintain")
     reg("body.recall", maintenance.recall_job, "Bring a drive's documents back (retire it)", action="maintain")
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
+    reg("web.blocklists", openweb.plan_blocklists_job, "Refresh the offline safety lists", action="download")
+    reg("web.blocklist", openweb.load_blocklist_job, "Load a safety list", action="maintain")
+    reg("web.vet", openweb.vet_job, "Vet new sites cited by Wikipedia before any visit", action="crawl")
+    reg("web.trust", openweb.trust_job, "Judge sites on probation by their facts", action="reason")
+    reg("eval.digest", vjobs.digest_job, "Write the daily 'what I learned today' digest", action="evaluate")
+    reg("eval.remedy", vjobs.remedy_job, "Read up on wrong answers and re-test them", action="evaluate")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
@@ -155,6 +163,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, djobs.planner),
             (300.0, vjobs.planner),
             (600.0, maintenance.planner),
+            (300.0, openweb.planner),
             (60.0, society.planner),
         ]
         if planners

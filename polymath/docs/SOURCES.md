@@ -34,6 +34,43 @@ from the code.
 
     A link or redirect to any other site is never fetched. There is no web search, and the crawler cannot
     wander off to sites nobody chose.
+  - **Open-web learning** (`senses.open_web`, on by default) adds sites that passed a vetting gate. The details
+    are below.
+
+## Open-web learning: every new site is vetted first
+
+New sites come only from links that **Wikipedia articles cite**. Every article read counts the sites it links
+to (`site_citations`), skipping archives, identifier resolvers and social media. A site cited by many articles
+has been vetted by Wikipedia's editors.
+
+**The gate** (`web.vet`) runs before a site's first visit, in this order:
+
+| check | how | if it fails |
+|---|---|---|
+| safety lists loaded | until every list is downloaded, **nothing is vetted** (fail closed) | waits |
+| not on a safety list | the site and every parent domain, against about 5 million domains: StevenBlack (fake news, gambling, porn, malware), URLhaus (malware), Université Toulouse 1 (adult, phishing, malware, gambling). Matched offline as 64-bit hashes; about 90 MB | refused, never contacted |
+| name looks safe | words like porn, xxx, casino, escort; whole-word sex, bet, torrent… | refused, never contacted |
+| cited enough | at least `open_web_min_citations` (3) Wikipedia articles | not considered |
+| HTTPS with a valid certificate | one request for robots.txt over TLS. Python verifies the certificate chain and host name. Public addresses only. A redirect to another site fails | refused |
+| robots.txt allows it | on the cited pages | refused |
+
+Sites cited by at least `open_web_trusted_citations` (50) articles are approved. The rest start on
+**probation**: at most `open_web_probation_pages` (20) pages are read, then `web.trust` compares the facts read
+there with Wikidata's.
+- If at least 10 facts can be checked and most contradict Wikidata, the site is dropped, and its queued pages
+  are skipped.
+- If most agree, it is approved.
+
+Single-valued relations are judged from Wikidata alone, so a site's own claims cannot hide its contradictions.
+The lists refresh weekly. At most `open_web_sites_per_day` (200) new sites are vetted per day.
+
+Measured with the real lists and real sites:
+- nasa.gov and nih.gov approved; smithsonianmag.com on probation;
+- pornhub.com refused (UT1 adult) and bet365.com refused (UT1 gambling), without being contacted;
+- self-signed, expired, wrong-host and untrusted-root certificates (badssl.com test sites) refused.
+
+`polymath sites` lists every verdict and its reason; `polymath sites --check example.org` shows how the gate sees
+a site.
 - **Feeds** are polled at most hourly, with conditional requests (ETag / Last-Modified). A feed is checked
   against its host's robots.txt before polling.
 - **Dumps** are downloaded with resumable range requests. Once a file has been read into the database it is

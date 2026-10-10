@@ -38,6 +38,13 @@ wikipedia_lang = "en"
 wikipedia_parts = 1
 wikidata_max_bytes = 0              # 0 = the whole dump
 openalex_files = 2
+open_web = true                     # learn from sites Wikipedia cites, each vetted before its first visit:
+                                    # safety lists (adult/malware/phishing/gambling), valid HTTPS, robots.txt,
+                                    # enough citations; then probation until its facts check out
+open_web_min_citations = 3
+open_web_trusted_citations = 50
+open_web_sites_per_day = 200
+open_web_probation_pages = 20
 pubmed_files = 2
 gutenberg_books = 200
 stackexchange_sites = ["ai", "datascience", "cs"]
@@ -57,6 +64,9 @@ index_nlist = 0
 index_nprobe = 32
 holdout_fraction = 0.05
 quiz_size = 50
+digest_hour = 7                     # the daily "what I learned today" digest (local time)
+relearn_delay_hours = 3.0           # after a wrong self-test answer: read about it, re-test this much later
+relearn_attempts = 3
 
 [dashboard]
 host = "0.0.0.0"

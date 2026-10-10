@@ -146,7 +146,8 @@ ARTICLE_TEXT = (
 def wiki_pages(n: int):
     pages: list[tuple[int, str, str, str | None]] = []
     for i in range(1, n + 1):
-        pages.append((i, f"Country {i}", ARTICLE_TEXT.replace("France", f"Country{i}"), None))
+        text = ARTICLE_TEXT.replace("France", f"Country{i}") + f" [https://www.stats{i % 3}.example/c{i} Statistics]"
+        pages.append((i, f"Country {i}", text, None))
     pages.append((n + 1, "Old name", "#REDIRECT [[Country 1]]", "Country 1"))
     pages.append(
         (
@@ -221,6 +222,8 @@ def test_wikipedia_resolve_and_sliced_ingest(config, db, web, monkeypatch):
             break
     assert slices > 3  # really resumed from checkpoints
     assert store.count("wikipedia") == 10  # 9 countries + disambiguation page
+    cites = {r["site"]: r["citations"] for r in db.query("SELECT site, citations FROM site_citations")}
+    assert cites == {"stats0.example": 3, "stats1.example": 3, "stats2.example": 3}  # sites the articles cite
     assert db.scalar("SELECT target FROM wiki_redirects WHERE title='Old name'") == "Country 1"
     with pytest.raises((PermanentError, FetchError)):
         wikipedia.resolve_multistream(c, "xx")
@@ -695,6 +698,8 @@ def test_offline_integration_all_sources_through_agent_loop(config, db, web, mon
     config.senses.feeds = [web.base + "/rss"]
     config.senses.seeds = [web.base + "/"]
     config.senses.crawl_allow_domains = ["127.0.0.1"]
+    web.add("/blocklist.hosts", "# safety list\n0.0.0.0 bad.example\n0.0.0.0 worse.example\n")
+    config.senses.blocklists = [web.base + "/blocklist.hosts"]  # downloaded and loaded offline, like the real ones
     config.loop.planners = True
     comps = build_components(config, db)
     comps.services["http"] = client()
@@ -729,6 +734,9 @@ def test_offline_integration_all_sources_through_agent_loop(config, db, web, mon
     dead = db.query("SELECT kind, last_error FROM jobs WHERE state='dead'")
     assert not dead, [dict(r) for r in dead]
     assert not any(Path(config.paths.raw_dir).rglob("*.part"))
+    from polymath.senses import openweb
+
+    assert openweb.blocklists_ready(db, config) and openweb.blocked(db, "www.bad.example")  # safety lists loaded
 
 
 def test_cli_sample_and_sources_commands(tmp_path, web, monkeypatch, capsys):

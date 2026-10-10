@@ -37,7 +37,7 @@ def _config(tmp: Path) -> Any:
     f.write_text(
         f'[paths]\ndata_dir = "{tmp / "data"}"\nrequire_separate_mount = false\n'
         "[loop]\nidle_sleep = 0.01\n"
-        "[senses]\ndefault_feeds = false\ndefault_seeds = false\n"
+        "[senses]\ndefault_feeds = false\ndefault_seeds = false\nblocklists = []\n"
     )
     return load_config(f, env={})
 

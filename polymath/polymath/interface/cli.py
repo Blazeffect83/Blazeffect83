@@ -515,6 +515,77 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
 
 
+def cmd_digest(config: Config, args: argparse.Namespace) -> int:
+    """Today's "what I learned" digest: the last one written, or one computed now (``--now``)."""
+    from polymath.evaluation import digest
+
+    if args.write:
+        db = _db(config)
+        try:
+            with db.transaction():
+                d = digest.write_digest(db)
+            day, data = d["day"], d
+        finally:
+            db.close()
+    else:
+        db = _db(config, readonly=True)
+        try:
+            last = None if args.now else digest.latest(db)
+            if last is None:
+                day, data = time.strftime("%Y-%m-%d") + " (so far)", digest.collect(db, time.time() - 86400)
+            else:
+                day, data = last["day"], last["data"]
+        finally:
+            db.close()
+    print(json.dumps({"day": day, **data}, indent=2, default=str) if args.json else digest.to_markdown(data, day))
+    return 0
+
+
+def cmd_sites(config: Config, args: argparse.Namespace) -> int:
+    """Open-web learning: which sites passed or failed vetting, and why; or check one site against the gate."""
+    from polymath.senses import openweb
+
+    db = _db(config, readonly=True)
+    try:
+        if args.check:
+            host = args.check.lower().removeprefix("https://").removeprefix("http://").split("/")[0]
+            from polymath.senses.crawler import site_of
+
+            site = site_of(host)
+            row = db.one("SELECT * FROM sites WHERE site=?", (site,))
+            cites = db.scalar("SELECT citations FROM site_citations WHERE site=?", (site,), default=0)
+            ready = openweb.blocklists_ready(db, config)
+            print(json.dumps({
+                "site": site,
+                "safety_lists_loaded": ready,
+                "on_safety_list": openweb.blocked(db, host) if ready else "unknown (lists not loaded yet)",
+                "name_looks_unsafe": openweb.bad_name(host),
+                "cited_by_wikipedia_articles": int(cites or 0),
+                "verdict": dict(row) if row else "not vetted yet",
+            }, indent=2, default=str))  # fmt: skip
+            return 0
+        where = "WHERE status = ?" if args.status else ""
+        rows = db.query(
+            f"SELECT site, status, citations, trust, reason, vetted_at FROM sites {where} "
+            "ORDER BY vetted_at DESC LIMIT ?",
+            ((args.status,) if args.status else ()) + (args.limit,),
+        )
+        counts = {r["status"]: r["n"] for r in db.query("SELECT status, COUNT(*) AS n FROM sites GROUP BY status")}
+        loaded = db.kv_get("blocklists_loaded") or {}
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps({"counts": counts, "sites": [dict(r) for r in rows], "safety_lists": loaded}, indent=2))
+        return 0
+    lists = ", ".join(f"{v['name']} ({v['count']:,})" for v in loaded.values()) or "not loaded yet"
+    print(f"safety lists: {lists}")
+    print("sites: " + (", ".join(f"{n} {k}" for k, n in sorted(counts.items())) or "none vetted yet"))
+    for r in rows:
+        trust = "" if r["trust"] is None else f" trust {r['trust']:.2f}"
+        print(f"  {r['status']:<9} {r['site']:<40} cited {r['citations']:>6,}{trust}  {r['reason']}")
+    return 0
+
+
 def cmd_feed(config: Config, args: argparse.Namespace) -> int:
     from polymath.core.loop import heartbeat_path
     from polymath.interface import feed
@@ -840,6 +911,19 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
     sto.set_defaults(func=cmd_storage)
+
+    dg = sub.add_parser("digest", help='"what I learned today": the daily digest')
+    dg.add_argument("--now", action="store_true", help="compute one for the last 24 h now instead of the last one")
+    dg.add_argument("--write", action="store_true", help="write today's digest now (agent stopped)")
+    dg.add_argument("--json", action="store_true")
+    dg.set_defaults(func=cmd_digest)
+
+    si = sub.add_parser("sites", help="open-web learning: vetted, refused and dropped sites, and why")
+    si.add_argument("--status", choices=["approved", "probation", "refused", "dropped", "retry"])
+    si.add_argument("--limit", type=int, default=30)
+    si.add_argument("--check", metavar="DOMAIN", help="check one site against the gate (offline)")
+    si.add_argument("--json", action="store_true")
+    si.set_defaults(func=cmd_sites)
 
     fd = sub.add_parser("feed", help="live feed of what it is learning (what the desktop terminal shows)")
     fd.add_argument("--url", default=None, help="dashboard to read from (default: this machine's)")

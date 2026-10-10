@@ -11,7 +11,10 @@ cursor, read straight from the agent's own tables. There is no event log to keep
 * ``quiz``      a self-test answer on a hidden fact (right or wrong), ``quizscore`` the quiz result;
 * ``agent``     an agent was rewarded or penalised, ``newagent`` an agent was spawned or evolved;
 * ``request``   you asked it to learn something; ``report`` / ``backup`` nightly work; ``error`` a failed slice;
-* ``storage``   a drive was plugged in and added to the brain, went away, came back, or was retired.
+* ``storage``   a drive was plugged in and added to the brain, went away, came back, or was retired;
+* ``site``      a new site passed or failed vetting (open-web learning), ``safety`` a safety list loaded;
+* ``relearn`` / ``fixed``  reading up on a wrong self-test answer, and getting it right on the re-test;
+* ``digest``    the daily "what I learned today" summary, line by line.
 
 Busy streams are capped per poll: the newest few are shown, the rest are counted in a ``more`` event, so a
 Wikidata ingest at thousands of facts per second stays readable. The cursor is opaque to clients.
@@ -57,6 +60,8 @@ STREAMS: dict[str, tuple[str, int]] = {
     "j": ("jobs", 50),
     "c": ("cycles", 0),
     "v": ("volume_events", 3),
+    "e": ("events", 8),
+    "x": ("digests", 1),
 }
 CAPS = {"read": 4, "fact": 5, "inferred": 3, "disputed": 2, "quiz": 4, "agent": 5, "error": 3}
 FACT_SAMPLE = 400  # newest facts examined per poll to find readable ones
@@ -109,6 +114,12 @@ ACTIVITY: dict[str, str] = {
     "body.housekeeping": "housekeeping",
     "body.evict": "freeing disk space",
     "body.spill": "moving documents to a plugged-in drive",
+    "web.blocklists": "refreshing the safety lists",
+    "web.blocklist": "loading a safety list",
+    "web.vet": "vetting new sites before visiting them",
+    "web.trust": "checking the facts of sites on probation",
+    "eval.digest": "writing today's digest",
+    "eval.remedy": "going back over its mistakes",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -175,6 +186,8 @@ class Feed:
         events += self._reports_backups(lo["p"], heads["p"], lo["b"], heads["b"])
         events += self._failures(lo["c"], heads["c"])
         events += self._storage(lo["v"], heads["v"])
+        events += self._events(lo["e"], heads["e"])
+        events += self._digests(lo["x"], heads["x"])
         events.sort(key=lambda e: float(e.get("at") or 0))
         return {"cursor": format_cursor(heads), "events": events, "status": self.status()}
 
@@ -513,6 +526,33 @@ class Feed:
             out.append({"kind": "storage", "at": r["at"], "event": str(r["event"]), "name": name, "detail": detail})
         return out
 
+    def _events(self, lo: int, hi: int) -> list[dict[str, Any]]:
+        out = []
+        for r in self.db.query(
+            "SELECT at, kind, text, detail FROM events WHERE id > ? AND id <= ? ORDER BY id DESC LIMIT 12", (lo, hi)
+        ):
+            try:
+                detail = json.loads(r["detail"] or "{}")
+            except ValueError:
+                detail = {}
+            out.append({"kind": "note", "at": r["at"], "what": str(r["kind"]), "text": _short(str(r["text"]), 240),
+                        "status": str(detail.get("status", "")) if isinstance(detail, dict) else ""})  # fmt: skip
+        return out[::-1]
+
+    def _digests(self, lo: int, hi: int) -> list[dict[str, Any]]:
+        from polymath.evaluation.digest import lines
+
+        out: list[dict[str, Any]] = []
+        for r in self.db.query("SELECT day, created, data FROM digests WHERE id > ? AND id <= ? ORDER BY id", (lo, hi)):
+            try:
+                data = json.loads(r["data"])
+            except ValueError:
+                continue
+            out.append({"kind": "digest", "at": r["created"], "text": f"what I learned — {r['day']}", "head": True})
+            out += [{"kind": "digest", "at": float(r["created"]) + 1e-6 * i, "text": line}
+                    for i, line in enumerate(lines(data), 1)]  # fmt: skip
+        return out
+
     def _failures(self, lo: int, hi: int) -> list[dict[str, Any]]:
         out = []
         for r in self.db.query(
@@ -817,6 +857,22 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
     if k == "error":
         retry = " (will retry)" if e.get("state") == "queued" else " (gave up)" if e.get("state") == "dead" else ""
         return [*head, _tag("error", "red"), (f"{e['job']}: {e['error']}{retry}", "red")]
+    if k == "note":
+        what, status = e.get("what"), e.get("status")
+        style = {
+            "site": {"approved": "bgreen", "probation": "green", "refused": "yellow", "dropped": "red"}.get(
+                str(status), "cyan"
+            ),
+            "safety": "bmagenta",
+            "relearn": "magenta",
+            "fixed": "bgreen",
+        }.get(str(what), "")
+        tag = {"site": "site", "safety": "safety", "relearn": "relearn", "fixed": "fixed ✓"}.get(str(what), str(what))
+        return [*head, _tag(tag, style), (str(e["text"]), "")]
+    if k == "digest":
+        if e.get("head"):
+            return [*head, _tag("digest", "bmagenta"), (str(e["text"]), "bold")]
+        return [*head, _tag("", ""), ("· " + str(e["text"]), "")]
     if k == "storage":
         d = e.get("detail") or {}
         ev = e.get("event")

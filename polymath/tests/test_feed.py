@@ -46,7 +46,7 @@ def test_cursor_round_trip_and_malformed():
     c = {"d": 12, "t": 3400, "c": 9}
     assert parse_cursor(format_cursor(c)) == c
     assert format_cursor(c) == "d12.t3400.c9"  # stream order, not dict order
-    assert parse_cursor("d1.x5") == {"d": 1}  # a stream from a newer version is ignored
+    assert parse_cursor("d1.y5") == {"d": 1}  # a stream from a newer version is ignored
     for bad in ("", None, "d", "d-1", "D1", "d1..t2", "d1;DROP"):
         assert parse_cursor(bad) is None
 

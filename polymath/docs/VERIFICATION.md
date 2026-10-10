@@ -19,7 +19,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 | 8 evaluation | quiz accuracy above chance on real held-out facts | ✅ see §6 |
 | 9 interface | CLI, cited answers, dashboard, /health semantics, live feed | ✅ automated, rendered in Chromium (§7) and in an emulated terminal (§10) |
 | 10 body | thermal, disk, backups (the Minecraft player check was removed, §10) | ✅ automated with injected sensors |
-| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; ✅ installed and rebooted on a real Raspberry Pi 4 (§12) |
+| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; ✅ installed and rebooted on a real Raspberry Pi 4 (§13) |
 
 ## 1. Quality bar
 
@@ -313,7 +313,40 @@ development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and
 - The process-wide pool from one configuration could steer placement for another. Placement now uses only the
   pool of its own configuration.
 
-## 12. Raspberry Pi 4 on-device results
+## 12. Open-web learning, the daily digest, learning from mistakes
+
+**The gate, against the real internet** (development container, real HTTP client):
+
+| what | result |
+|---|---|
+| safety lists | all six downloaded and loaded in 44 s: StevenBlack 157,912, URLhaus 398, UT1 adult 4,592,050, UT1 phishing 240,482, UT1 malware 240,482, UT1 gambling 47,804. About 5.0 M hashes, 88 MB; downloads deleted afterwards |
+| nasa.gov, nih.gov | approved (heavily cited, valid HTTPS, robots.txt allows) |
+| smithsonianmag.com | probation (20 citations) |
+| pornhub.com / bet365.com | refused: on UT1 adult / UT1 gambling; **never contacted** |
+| self-signed / expired / wrong-host / untrusted-root certificates (badssl.com) | refused: "no valid HTTPS certificate" |
+| a valid certificate on the same test site | approved |
+
+**Tests.**
+- `tests/test_openweb.py` (21 tests):
+  - citation counting; list loading (hosts files, plain lists, UT1 archives in slices, reload replacing a list);
+    subdomain blocking; unsafe names;
+  - the gate failing closed until the lists load, and every verdict (blocklist, name, certificate, private
+    address, unreachable then retried, robots, redirect away), with refused sites never contacted;
+  - the daily cap and the probation quota; trust judging (a site contradicting Wikidata dropped, an agreeing one
+    approved);
+  - mistakes read about, re-tested, fixed or given up after 3 tries; agents' mistakes collected; the digest
+    content, its feed lines, the CLI and the dashboard.
+- The offline end-to-end test now downloads and loads a safety list through the real agent loop, and checks that
+  Wikipedia articles record the sites they cite.
+
+**Bugs these tests caught.**
+- A newly approved site stayed blocked for up to a minute, because the crawler refreshed before the verdict was
+  saved.
+- Single-valued relations were judged from all facts, so a lying site's own claims could make a relation look
+  multi-valued and dodge the check. They are now judged from Wikidata only.
+- The "offline" end-to-end test started downloading the real safety lists; tests now use local lists only.
+
+## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
 SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original spec named.
@@ -325,7 +358,7 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 | `polymath` on PATH | missing after the first install, so `/usr/local/bin/polymath` was added (aebacb0) | found on the Pi |
 | reboot | "running after reboot, all is well": the agent and the desktop feed came back with no manual step | reported by the user |
 
-## 13. Still pending on the Pi
+## 14. Still pending on the Pi
 
 Not claimed until measured:
 

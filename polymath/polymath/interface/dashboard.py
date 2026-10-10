@@ -188,6 +188,20 @@ class DashboardData:
         ]
         return {"agents": agents_list(db), "rewards": rewards}
 
+    def digest(self) -> dict[str, Any]:
+        from polymath.evaluation import digest
+
+        db = self.db()
+        last = digest.latest(db) if db.scalar("SELECT 1 FROM sqlite_master WHERE name='digests'") else None
+        sites = [
+            dict(r)
+            for r in db.query("SELECT site, status, citations, reason FROM sites ORDER BY vetted_at DESC LIMIT 12")
+        ] if db.scalar("SELECT 1 FROM sqlite_master WHERE name='sites'") else []  # fmt: skip
+        if last is None:
+            data = digest.collect(db, time.time() - 86400)
+            return {"day": "last 24 hours (no digest written yet)", "lines": digest.lines(data), "sites": sites}
+        return {"day": last["day"], "lines": last["lines"], "sites": sites}
+
     def feed(self, cursor: str | None) -> dict[str, Any]:
         from polymath.interface.feed import Feed
 
@@ -305,6 +319,8 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._json(200, data.topics())
                 if path == "/api/agents":
                     return self._json(200, data.agents())
+                if path == "/api/digest":
+                    return self._json(200, data.digest())
                 if path == "/api/feed":
                     cursor = (parse_qs(url.query).get("cursor") or [""])[0][:400]
                     return self._json(200, data.feed(cursor or None))
