@@ -65,6 +65,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.perception import embed_jobs as ejobs
     from polymath.perception import jobs as pjobs
     from polymath.reasoning import jobs as rjobs
+    from polymath.reasoning import predictions
     from polymath.senses import (
         books_qa,
         crawler,
@@ -141,6 +142,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("reason.infer", rjobs.infer_job, "Forward-chain new facts", action="reason", heavy=True)
     reg("reason.contradictions", rjobs.contradictions_job, "Detect contradictions", action="reason")
     reg("reason.reliability", rjobs.reliability_job, "Learn source reliability", action="reason")
+    reg("reason.predict", predictions.predict_job, "Guess missing facts, check earlier guesses", action="reason")
     reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
@@ -176,6 +178,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, vjobs.planner),
             (600.0, maintenance.planner),
             (300.0, openweb.planner),
+            (600.0, predictions.planner),
             (60.0, society.planner),
         ]
         if planners

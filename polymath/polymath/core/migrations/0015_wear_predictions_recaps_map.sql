@@ -18,6 +18,8 @@ CREATE TABLE predictions (
     o          INTEGER NOT NULL,           -- the predicted object
     score      REAL NOT NULL,              -- the predictor's confidence
     runner_up  INTEGER,                    -- its second choice
+    n_options  INTEGER NOT NULL DEFAULT 0, -- candidates it chose from (guessing would be right 1 in n)
+    method     TEXT NOT NULL DEFAULT '',   -- the evidence that weighed most
     made_at    REAL NOT NULL,
     state      TEXT NOT NULL DEFAULT 'open',  -- open | confirmed | refuted | expired
     checked_at REAL,

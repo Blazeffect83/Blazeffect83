@@ -533,6 +533,39 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
 
 
+def cmd_predictions(config: Config, args: argparse.Namespace) -> int:
+    """Facts it guessed before reading them: confirmed, wrong, still open."""
+    from polymath.reasoning import predictions
+
+    db = _db(config, readonly=True)
+    try:
+        sb = predictions.scoreboard(db)
+        open_rows = db.query(
+            "SELECT pr.s, pr.o, pr.score, p.label AS pl FROM predictions pr JOIN predicates p ON p.id = pr.p "
+            "WHERE pr.state = 'open' ORDER BY pr.score DESC LIMIT ?",
+            (args.limit,),
+        )
+
+        def label(e: int) -> str:
+            return str(db.scalar("SELECT label FROM entities WHERE id = ?", (e,), default="?"))
+
+        pending = [f"{label(int(r['s']))} → {r['pl']} → {label(int(r['o']))} ({float(r['score']):.0%} sure)"
+                   for r in open_rows]  # fmt: skip
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(sb | {"open_guesses": pending}, indent=2))
+        return 0
+    print(predictions.describe(sb))
+    for h in sb["recent_hits"]:
+        print(f"  ✓ {h['subject']} → {h['relation']} → {h['guess']} ({h['confidence']:.0%} sure)")
+    if pending:
+        print("open:")
+        for line in pending:
+            print(f"  ? {line}")
+    return 0
+
+
 def cmd_tell(config: Config, args: argparse.Namespace) -> int:
     """A paragraph about something, written from the facts it learned, with sources."""
     from polymath.interface.tell import Teller
@@ -1013,6 +1046,11 @@ def build_parser() -> argparse.ArgumentParser:
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")
     stf.add_argument("--erase-files", action="store_true", help="also when it holds files: they are erased")
     sto.set_defaults(func=cmd_storage)
+
+    pr = sub.add_parser("predictions", help="facts it guessed before reading them, and how many came true")
+    pr.add_argument("--limit", type=int, default=10, help="open guesses to list")
+    pr.add_argument("--json", action="store_true")
+    pr.set_defaults(func=cmd_predictions)
 
     te = sub.add_parser("tell", help="a paragraph about something, written from what it learned (with sources)")
     te.add_argument("topic", nargs="+")

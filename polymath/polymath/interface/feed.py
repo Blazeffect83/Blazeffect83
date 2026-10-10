@@ -109,6 +109,7 @@ ACTIVITY: dict[str, str] = {
     "reason.infer": "inferring new facts",
     "reason.contradictions": "looking for contradictions",
     "reason.reliability": "learning which sources to trust",
+    "reason.predict": "guessing facts it has not read yet",
     "wikipedia.titles": "reading articles it is curious about",
     "drive.pagerank": "ranking what matters",
     "drive.priorities": "deciding what to learn next",

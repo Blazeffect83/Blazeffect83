@@ -19,6 +19,7 @@ from polymath.core.db import Database
 from polymath.core.jobs import JobContext, JobOutcome
 from polymath.evaluation import remedy
 from polymath.interface.answer import render_value
+from polymath.reasoning import predictions
 
 HIGHLIGHTS = 5
 
@@ -161,6 +162,16 @@ def collect(db: Database, since: float, now: float | None = None, cfg: Config | 
         "best_agent": {"name": rewards["name"], "reward": round(float(rewards["total"]), 1)} if rewards else None,
         "curious": curious,
         "wear": wear.sd_summary(db, cfg, now) if cfg is not None else None,
+        "predictions": predictions.scoreboard(db)
+        | {
+            "confirmed_today": int(
+                db.scalar(
+                    "SELECT COUNT(*) FROM predictions WHERE state = 'confirmed' AND checked_at >= ?",
+                    (since,),
+                    default=0,
+                )
+            )
+        },
     }
 
 
@@ -206,6 +217,10 @@ def lines(d: dict[str, Any]) -> list[str]:
         out.append(f"Best agent today: {d['best_agent']['name']} (+{d['best_agent']['reward']} verified reward).")
     if d.get("curious"):
         out.append("Wants to learn next: " + ", ".join(d["curious"]) + ".")
+    pr = d.get("predictions") or {}
+    if pr.get("made"):
+        today = f" {pr['confirmed_today']} came true today." if pr.get("confirmed_today") else ""
+        out.append(predictions.describe(pr) + today)
     w = d.get("wear")
     if w and w.get("measured_days", 0) >= 0.9:
         verdict = {"ok": "within budget", "high": "over budget", "critical": "far over budget"}.get(
