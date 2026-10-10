@@ -61,6 +61,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.drive import learn as dlearn
     from polymath.evaluation import jobs as vjobs
     from polymath.evaluation import recap, surprise
+    from polymath.interface import knowledge_map
     from polymath.memory import jobs as memjobs
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
@@ -122,6 +123,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("memory.index", memjobs.index_documents, "Index passages, near-duplicates and topics", action="memorize")
     reg("memory.graph", memjobs.build_graph, "Build the knowledge graph from Wikidata", action="memorize")
     reg("memory.topics", memjobs.maintain_topics, "Maintain the hierarchical topic map", action="memorize")
+    reg("memory.snapshot", knowledge_map.snapshot_job, "Record the knowledge map's day", action="memorize")
     reg("perception.anchors", pjobs.anchor_job, "Harvest Wikipedia links, profiles, infoboxes", action="perceive")
     reg("perception.automaton", pjobs.automaton_job, "Compile the alias automaton", action="perceive", heavy=True)
     reg(
@@ -184,6 +186,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (600.0, predictions.planner),
             (600.0, surprise.planner),
             (600.0, recap.planner),
+            (600.0, knowledge_map.planner),
             (60.0, society.planner),
         ]
         if planners

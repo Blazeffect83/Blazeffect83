@@ -10,8 +10,10 @@
 <body>
 <header>
   <div class="brand"><img src="/static/icon.svg" alt="" width="28" height="28"><h1>Polymath</h1></div>
+  <div id="face" class="face" title="what it is doing">[·_·]</div>
   <div id="health" class="pill">connecting…</div>
-  <div class="meta" id="meta"></div>
+  <a class="live-link" href="/live">live feed ›</a>
+  <div class="meta"><span id="meta"></span> <span id="badge" class="badge"></span></div>
 </header>
 <main>
   <section class="kpis" id="kpis"></section>
@@ -20,11 +22,31 @@
     <form id="ask-form">
       <label for="question">Ask what it knows (offline)</label>
       <div class="row">
-        <input id="question" name="question" maxlength="500" placeholder="e.g. What is the capital of France?" autocomplete="off">
+        <input id="question" name="question" maxlength="500" placeholder="e.g. Tell me about Marie Curie · What is the capital of France?" autocomplete="off">
         <button type="submit">Ask</button>
       </div>
     </form>
     <div id="answer" class="answer" aria-live="polite"></div>
+  </section>
+
+  <section class="card map-card">
+    <h2>Knowledge map <span class="muted small-inline">— topics it has read about; click one to hear what it knows</span></h2>
+    <div class="map-wrap"><canvas id="c-map" height="460"></canvas><div id="map-tip" class="map-tip" hidden></div></div>
+    <div class="map-controls">
+      <button id="map-play" type="button">▶ time-lapse</button>
+      <input id="map-time" type="range" min="0" max="0" value="0" aria-label="time">
+      <span id="map-when" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2 id="recap-title">The week in review</h2><ul id="recap" class="digest"></ul></div>
+    <div class="card"><h2>Predictions — guessed before reading</h2><p id="pred-line"></p><ul id="pred-hits" class="digest"></ul></div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><h2>Did you know?</h2><ul id="dyk" class="digest"></ul></div>
+    <div class="card"><h2>Disks — SD card wear</h2><ul id="wear" class="digest"></ul></div>
   </section>
 
   <section class="grid">
@@ -65,6 +87,7 @@
   </section>
 </main>
 <footer>Everything here was learned by this machine from public dumps it downloaded itself — no AI services, no pretrained models.</footer>
+<script src="/static/face.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

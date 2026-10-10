@@ -32,9 +32,13 @@ log = get_logger("dashboard")
 MAX_BODY = 4096
 ASK_PER_MINUTE = 20
 ANSWERER_TTL = 600.0
+MAP_TTL = 120.0  # the knowledge map is recomputed at most this often
 STATIC = {
     "index.html": "text/html; charset=utf-8",
+    "live.html": "text/html; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "live.js": "text/javascript; charset=utf-8",
+    "face.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
     "icon.svg": "image/svg+xml",
 }
@@ -61,6 +65,10 @@ class DashboardData:
         self._answerer_at = 0.0
         self._feed: Any = None
         self._lock = threading.Lock()
+        from polymath.interface.feed import _Seen
+
+        self._seen = _Seen()
+        self._map: tuple[float, dict[str, Any]] | None = None
 
     def db(self) -> Database:
         with self._lock:
@@ -205,7 +213,7 @@ class DashboardData:
             return {"day": "last 24 hours (no digest written yet)", "lines": digest.lines(data), "sites": sites}
         return {"day": last["day"], "lines": last["lines"], "sites": sites}
 
-    def feed(self, cursor: str | None) -> dict[str, Any]:
+    def feed(self, cursor: str | None, *, render: bool = False) -> dict[str, Any]:
         from polymath.interface.feed import Feed
 
         db = self.db()
@@ -214,7 +222,66 @@ class DashboardData:
                 self._feed = Feed(db, pulse=heartbeat_path(self.config), stale=self.config.loop.heartbeat_stale)
             feed = self._feed
         result: dict[str, Any] = feed.poll(cursor)
+        from polymath.interface.face import state
+        from polymath.interface.feed import badge, transitions
+
+        st = result.get("status") or {}
+        result["face"] = state(st, transitions(self._seen, st) + list(result.get("events") or []))
+        installed = read_build()
+        if render:  # the live page shows the terminal's own wording and colours
+            from polymath.interface.feed import render_event
+
+            result["lines"] = [render_event(e) for e in result.get("events") or []]
+        result["badge"] = {
+            "text": "".join(t for t, _ in badge(installed, st)),
+            "current": st.get("build") == installed.key if st.get("online") else None,
+        }
         return result
+
+    def insights(self) -> dict[str, Any]:
+        """The weekly recap, predictions, surprises, and the disks (one call for the dashboard's new panels)."""
+        from polymath.body import wear
+        from polymath.evaluation import recap, surprise
+        from polymath.reasoning import predictions
+
+        db = self.db()
+        last = recap.latest(db)
+        if last is None:
+            data = recap.collect(db, cfg=self.config)
+            week = {"week": data["week"] + " (so far)", "lines": recap.lines(data)}
+        else:
+            week = {"week": last["week"], "lines": last["lines"]}
+        sb = predictions.scoreboard(db)
+        home = self.config.paths.data_dir / "home-drive.json"
+        try:
+            home_info = json.loads(home.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            home_info = None
+        return {
+            "recap": week,
+            "predictions": sb | {"line": predictions.describe(sb)},
+            "didyouknow": surprise.recent(db, time.time() - 7 * 86400, 6),
+            "wear": [r | {"line": wear.describe(r)} for r in wear.report(db, self.config)],
+            "home": home_info,
+        }
+
+    def tell(self, q: str) -> dict[str, Any]:
+        from polymath.interface.tell import Teller
+
+        story = Teller(self.db()).tell(q)
+        return story.to_dict() | {"text": story.render()}
+
+    def knowledge_map(self) -> dict[str, Any]:
+        from polymath.interface.knowledge_map import build_map
+
+        with self._lock:
+            hit = self._map
+        if hit is not None and time.monotonic() - hit[0] < MAP_TTL:
+            return hit[1]
+        data = build_map(self.db(), store=False)
+        with self._lock:
+            self._map = (time.monotonic(), data)
+        return data
 
     def knowledge(self, q: str) -> dict[str, Any]:
         from polymath.interface.answer import render_value
@@ -324,9 +391,23 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._json(200, data.agents())
                 if path == "/api/digest":
                     return self._json(200, data.digest())
+                if path == "/api/insights":
+                    return self._json(200, data.insights())
+                if path == "/api/map":
+                    return self._json(200, data.knowledge_map())
+                if path == "/api/face":
+                    from polymath.interface.face import definitions
+
+                    return self._json(200, definitions())
+                if path == "/api/tell":
+                    q = (parse_qs(url.query).get("q") or [""])[0][:200]
+                    return self._json(200, data.tell(q) if q.strip() else {"subject": "", "paragraph": ""})
+                if path in {"/live", "/live.html"}:
+                    return self._static("live.html")
                 if path == "/api/feed":
-                    cursor = (parse_qs(url.query).get("cursor") or [""])[0][:400]
-                    return self._json(200, data.feed(cursor or None))
+                    qs = parse_qs(url.query)
+                    cursor = (qs.get("cursor") or [""])[0][:400]
+                    return self._json(200, data.feed(cursor or None, render=(qs.get("render") or [""])[0] == "1"))
                 if path == "/api/knowledge":
                     q = (parse_qs(url.query).get("q") or [""])[0][:200]
                     return self._json(200, data.knowledge(q) if q.strip() else {"query": "", "entities": []})

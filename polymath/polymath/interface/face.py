@@ -217,3 +217,30 @@ class Face:
             spark = ("✦", "byellow") if n % 4 == 0 else ("✧", "yellow")  # a heartbeat on its antenna
         body = f"[{face}]{trail}"
         return [spark, (body.ljust(WIDTH - 1), m.style)]
+
+
+def definitions() -> dict[str, Any]:
+    """The moods as data, so the dashboard's live page animates exactly the same face."""
+    return {
+        "frame_s": FRAME_S,
+        "blink_every": BLINK_EVERY,
+        "width": WIDTH,
+        "spinner": list(SPINNER),
+        "moods": {
+            name: {"frames": list(m.frames), "style": m.style, "trail": list(m.trail), "blink": m.blink}
+            for name, m in MOODS.items()
+        },
+    }
+
+
+def state(status: dict[str, Any] | None, events: list[dict[str, Any]], now: float | None = None) -> dict[str, Any]:
+    """The mood for a status, and the reaction the latest events call for (mood, seconds, priority), if any."""
+    now = time.time() if now is None else now
+    f = Face()
+    f.update(status)
+    base = f.mood(now)
+    for ev in events:
+        f.see(ev, now)
+    r = f.reaction
+    reaction = None if r is None else {"mood": r.mood, "seconds": round(r.until - now, 1), "priority": r.priority}
+    return {"mood": base, "reaction": reaction}

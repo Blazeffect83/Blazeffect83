@@ -135,7 +135,7 @@ async function refresh() {
     const state = o.health.state || "unknown";
     hl.textContent = o.health.ok ? `running · cycle ${fmt(o.health.cycle)}` : `${state}${o.paused_reason ? ": " + o.paused_reason : ""}`;
     hl.className = "pill " + (o.health.ok ? "ok" : state === "paused" ? "warn" : "bad");
-    $("#meta").textContent = `heartbeat ${o.health.heartbeat_age_s ?? "–"} s · ${o.health.build || "v" + o.health.version}`;
+    $("#meta").textContent = `heartbeat ${o.health.heartbeat_age_s ?? "–"} s`;
     kpis(o);
     const sources = Object.keys(ts.documents_per_day);
     lineChart($("#c-docs"), sources.map((s) => ({points: ts.documents_per_day[s]})));
@@ -187,6 +187,167 @@ $("#kg-form").addEventListener("submit", async (ev) => {
     : `<p class="muted">No entity called “${esc(q)}” yet.</p>`;
 });
 
+// ------------------------------------------------------------------ face, version, new panels
+let faceCursor = null;
+async function pollFace() {
+  try {
+    const d = await get("/api/feed" + (faceCursor ? "?cursor=" + encodeURIComponent(faceCursor) : ""));
+    faceCursor = d.cursor || faceCursor;
+    PolyFace.update(d.face);
+    if (d.status && !d.status.online) PolyFace.offline();
+    const b = $("#badge");
+    b.textContent = d.badge ? d.badge.text : "";
+    b.className = "badge " + (d.badge && d.badge.current === false ? "s-byellow" : "muted");
+  } catch (e) { PolyFace.update(null); }
+}
+
+function list(el, lines, empty) {
+  el.replaceChildren(...(lines.length ? lines : [empty]).map((t) => { const li = document.createElement("li"); li.textContent = t; return li; }));
+  if (!lines.length) el.firstElementChild.className = "muted";
+}
+
+async function insights() {
+  try {
+    const d = await get("/api/insights");
+    $("#recap-title").textContent = `The week in review — ${d.recap.week}`;
+    list($("#recap"), d.recap.lines, "nothing yet");
+    $("#pred-line").textContent = d.predictions.made ? d.predictions.line : "No guesses yet: it predicts facts it has not read once it knows enough similar ones.";
+    list($("#pred-hits"), d.predictions.recent_hits.map((h) => `✓ ${h.subject} → ${h.relation} → ${h.guess} (${Math.round(h.confidence * 100)}% sure)`), "no confirmed guesses yet");
+    list($("#dyk"), d.didyouknow, "nothing surprising yet");
+    const wearLines = d.wear.map((w) => w.line + (w.status && w.status !== "ok" ? ` — ${w.status === "critical" ? "far " : ""}over budget` : ""));
+    if (d.home) wearLines.unshift(`The brain lives on the drive ${d.home.name || d.home.id}; the SD card only boots the Pi.`);
+    list($("#wear"), wearLines, "measuring (every 15 minutes)…");
+  } catch (e) { /* the main refresh reports database problems */ }
+}
+
+// ------------------------------------------------------------------ the knowledge map
+const MAP = {data: null, frame: 0, playing: false, timer: null, hover: null, pos: []};
+const CLUSTER = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+
+async function loadMap() {
+  try {
+    MAP.data = await get("/api/map");
+    const n = MAP.data.times.length;
+    const slider = $("#map-time");
+    slider.max = String(Math.max(0, n - 1));
+    if (!MAP.playing) { MAP.frame = n - 1; slider.value = String(n - 1); }
+    drawMap();
+  } catch (e) { /* drawn as empty */ }
+}
+
+function sizeAt(node, frame) {
+  const h = MAP.data.history[String(node.id)];
+  return h && h.length ? h[Math.min(frame, h.length - 1)] : node.docs;
+}
+
+function drawMap() {
+  const canvas = $("#c-map");
+  const {ctx, w, h} = setupCanvas(canvas);
+  ctx.clearRect(0, 0, w, h);
+  const d = MAP.data;
+  if (!d || !d.nodes.length) { ctx.fillStyle = css("--muted"); ctx.fillText("no topics yet", w / 2 - 35, h / 2); return; }
+  const f = Math.max(0, MAP.frame);
+  const last = d.times.length - 1;
+  const max = Math.max(...d.nodes.map((n) => n.docs), 1);
+  const R = (v) => v > 0 ? 3 + 22 * Math.sqrt(v / max) : 0;
+  const X = (x) => 20 + (w - 40) * x, Y = (y) => 16 + (h - 32) * y;
+  const byId = new Map(d.nodes.map((n) => [n.id, n]));
+  ctx.lineWidth = 1;
+  for (const e of d.edges) {
+    const a = byId.get(e.a), b = byId.get(e.b);
+    if (!a || !b || sizeAt(a, f) <= 0 || sizeAt(b, f) <= 0) continue;
+    ctx.strokeStyle = css("--line");
+    ctx.globalAlpha = Math.min(0.9, 0.25 + e.w);
+    ctx.beginPath(); ctx.moveTo(X(a.x), Y(a.y)); ctx.lineTo(X(b.x), Y(b.y)); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  MAP.pos = [];
+  const ordered = [...d.nodes].sort((a, b) => sizeAt(a, f) - sizeAt(b, f));
+  for (const n of ordered) {
+    const v = sizeAt(n, f);
+    if (v <= 0) continue;
+    const r = R(v), x = X(n.x), y = Y(n.y);
+    const color = css(CLUSTER[n.group % CLUSTER.length]);
+    const prev = f > 0 ? sizeAt(n, f - 1) : 0;
+    const growing = f === last ? n.day > 0 : v > prev;  // lit up: read about in the last day (or this step)
+    if (growing) {
+      const g = ctx.createRadialGradient(x, y, r * 0.4, x, y, r * 2.4);
+      g.addColorStop(0, color); g.addColorStop(1, "transparent");
+      ctx.globalAlpha = 0.35; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 2.4, 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = growing ? 1 : 0.75;
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+    if (MAP.hover === n.id) { ctx.globalAlpha = 1; ctx.strokeStyle = css("--text"); ctx.lineWidth = 2; ctx.stroke(); ctx.lineWidth = 1; }
+    MAP.pos.push({n, x, y, r, v});
+  }
+  ctx.globalAlpha = 1;
+  ctx.font = "12px system-ui"; ctx.fillStyle = css("--text");
+  const boxes = [];  // labels for the biggest topics, skipping any that would overlap one already drawn
+  for (const p of [...MAP.pos].sort((a, b) => b.v - a.v)) {
+    if (boxes.length >= 22) break;
+    const text = p.n.name.slice(0, 26);
+    const bw = ctx.measureText(text).width;
+    let x = p.x + p.r + 3;
+    if (x + bw > w - 4) x = p.x - p.r - 3 - bw;
+    const box = [x - 2, p.y - 9, x + bw + 2, p.y + 6];
+    if (boxes.some((o) => box[0] < o[2] && box[2] > o[0] && box[1] < o[3] && box[3] > o[1])) continue;
+    boxes.push(box);
+    ctx.fillText(text, x, p.y + 4);
+  }
+  const t = d.times[f];
+  $("#map-when").textContent = t ? new Date(t * 1000).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"}) +
+    (f === last ? " (now)" : "") : "";
+}
+
+function mapHit(ev) {
+  const rect = $("#c-map").getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  let best = null;
+  for (const p of MAP.pos) { const d2 = (p.x - mx) ** 2 + (p.y - my) ** 2; if (d2 <= (p.r + 4) ** 2 && (!best || p.r < best.r)) best = p; }
+  return {best, mx, my};
+}
+
+$("#c-map").addEventListener("mousemove", (ev) => {
+  const {best, mx, my} = mapHit(ev);
+  const tip = $("#map-tip");
+  if (!best) { tip.hidden = true; if (MAP.hover !== null) { MAP.hover = null; drawMap(); } return; }
+  tip.hidden = false;
+  tip.textContent = `${best.n.name} — ${fmt(best.v)} documents` + (best.n.week ? ` · +${fmt(best.n.week)} this week` : "") + ` · ${best.n.kind}`;
+  tip.style.left = `${Math.min(mx + 14, $("#c-map").clientWidth - 270)}px`;
+  tip.style.top = `${my + 12}px`;
+  if (MAP.hover !== best.n.id) { MAP.hover = best.n.id; drawMap(); }
+});
+$("#c-map").addEventListener("mouseleave", () => { $("#map-tip").hidden = true; MAP.hover = null; drawMap(); });
+$("#c-map").addEventListener("click", (ev) => {
+  const {best} = mapHit(ev);
+  if (!best) return;
+  $("#question").value = `Tell me about ${best.n.name}`;
+  $("#ask-form").requestSubmit();
+  $("#question").scrollIntoView({behavior: "smooth", block: "center"});
+});
+$("#map-time").addEventListener("input", (ev) => { MAP.frame = Number(ev.target.value); stopMap(); drawMap(); });
+function stopMap() { MAP.playing = false; clearInterval(MAP.timer); $("#map-play").textContent = "▶ time-lapse"; }
+$("#map-play").addEventListener("click", () => {
+  if (MAP.playing) { stopMap(); return; }
+  if (!MAP.data || MAP.data.times.length < 2) return;
+  MAP.playing = true; $("#map-play").textContent = "⏸ pause";
+  if (MAP.frame >= MAP.data.times.length - 1) MAP.frame = 0;
+  MAP.timer = setInterval(() => {
+    MAP.frame += 1;
+    $("#map-time").value = String(MAP.frame);
+    drawMap();
+    if (MAP.frame >= MAP.data.times.length - 1) stopMap();
+  }, Math.max(60, 6000 / MAP.data.times.length));
+});
+
+PolyFace.load().catch(() => {});
 refresh();
+insights();
+loadMap();
+pollFace();
 setInterval(refresh, 10000);
-window.addEventListener("resize", refresh);
+setInterval(insights, 60000);
+setInterval(loadMap, 120000);
+setInterval(pollFace, 2000);
+setInterval(() => PolyFace.paint($("#face")), 250);
+window.addEventListener("resize", () => { refresh(); drawMap(); });

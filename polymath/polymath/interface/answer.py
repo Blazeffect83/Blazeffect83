@@ -266,12 +266,25 @@ class Answerer:
             elif p["source"] == "wikidata":
                 c = Citation("Wikidata", "https://www.wikidata.org/", "CC0 1.0", "wikidata dump")
             elif p["source"] == "rule":
-                c = Citation(f"Inference: {p['detail'][:80]}", None, "derived", "rule")
+                c = Citation(self._reasoning_title(str(p["detail"])), None, "derived", "rule")
             else:
                 c = Citation(p["source"], None, "see source", p["source"])
             if c not in cits:
                 cits.append(c)
         return cits
+
+    def _reasoning_title(self, detail: str) -> str:
+        """'inverse 294->16: #21803' → 'Worked out from: Bonn → capital of → Germany' (the premises, readable)."""
+        shown = []
+        for tid in re.findall(r"#(\d+)", detail)[:2]:
+            t = self.db.one(
+                "SELECT t.s, t.o, t.value, p.label AS pl FROM triples t JOIN predicates p ON p.id = t.p WHERE t.id = ?",
+                (int(tid),),
+            )
+            if t is not None:
+                s_label = str(self.db.scalar("SELECT label FROM entities WHERE id = ?", (int(t["s"]),), default="?"))
+                shown.append(f"{s_label} → {t['pl']} → {render_value(self.db, int(t['o']), str(t['value']))}")
+        return "Worked out from: " + "; ".join(shown) if shown else f"Worked out by a learned rule ({detail[:60]})"
 
     def facts(self, entity: Entity, predicates: list[int], limit: int = 5) -> list[Statement]:
         out: list[Statement] = []

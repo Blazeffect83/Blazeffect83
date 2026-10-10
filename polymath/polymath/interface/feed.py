@@ -97,6 +97,7 @@ ACTIVITY: dict[str, str] = {
     "memory.index": "indexing what it read",
     "memory.graph": "building the knowledge graph",
     "memory.topics": "organising topics",
+    "memory.snapshot": "drawing today's knowledge map",
     "perception.anchors": "harvesting Wikipedia links and infoboxes",
     "perception.automaton": "compiling its name recogniser",
     "perception.read": "reading documents for names and relations",
