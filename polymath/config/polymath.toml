@@ -4,7 +4,7 @@
 log_level = "INFO"
 
 [paths]
-data_dir = "/srv/polymath"          # NVMe mount. Bulk data never goes to the SD card.
+data_dir = "/srv/polymath"          # NVMe mount (or the SD card with install.sh --allow-sd-card)
 require_separate_mount = true       # refuse to start if data_dir is on the root (SD) filesystem
 
 [loop]
@@ -67,3 +67,14 @@ max_agents = 12                     # active agents (yours + evolved children)
 evolve = true                       # strong agents fork mutated children; weaker children retire
 step_interval = 120.0               # seconds between agent society slices
 min_tasks_to_judge = 30             # verified tasks before an agent can fork or be judged
+
+[storage]
+# Drives you plug in (USB SSD/HDD/stick, NVMe) are added to the brain automatically: mounted under
+# mount_root, used for document bodies, downloads and backups. Existing files on them are never touched.
+mount_root = "/mnt/polymath"
+adopt = true                        # add every drive that is plugged in (never the system disk)
+format_blank_disks = true           # a drive with nothing at all on it is formatted (ext4, label POLYMATH)
+shared_drive_share = 0.5            # on a drive that already holds files, use this share of its free space
+reserve_fraction = 0.1              # always leave this share of every drive free
+spill_at = 0.75                     # move document bodies to drives once the main disk is this full
+ignore = []                         # filesystem UUIDs never to adopt (see `polymath storage list`)

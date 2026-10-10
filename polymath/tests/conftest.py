@@ -53,3 +53,12 @@ def db(config: Config) -> Iterator[Database]:
 @pytest.fixture()
 def python() -> str:
     return sys.executable
+
+
+@pytest.fixture(autouse=True)
+def _no_storage_pool_leaks() -> Iterator[None]:
+    """The process-wide storage pool (activated by build_agent) must not leak from one test into the next."""
+    from polymath.memory import pool
+
+    yield
+    pool.deactivate()

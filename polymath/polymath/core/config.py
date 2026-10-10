@@ -126,6 +126,20 @@ class AgentsConfig:
 
 
 @dataclass
+class StorageConfig:
+    """The storage pool: drives plugged in later become extra brain space (see ``memory.pool``)."""
+
+    mount_root: Path = Path("/mnt/polymath")  # where plugged-in drives are mounted
+    adopt: bool = True  # add every drive that is plugged in (except the system disk and ignored ones)
+    format_blank_disks: bool = True  # a drive with nothing at all on it is formatted (ext4, label POLYMATH)
+    shared_drive_share: float = 0.5  # on a drive that already holds files: this share of its free space
+    reserve_fraction: float = 0.1  # always leave this share of every drive free
+    spill_at: float = 0.75  # move document bodies to drives once the main disk is this full (of its budget)
+    ignore: list[str] = field(default_factory=list)  # filesystem UUIDs never to adopt
+    allow_virtual: bool = False  # adopt loop devices too (testing only)
+
+
+@dataclass
 class DashboardConfig:
     host: str = "0.0.0.0"
     port: int = 8765
@@ -140,6 +154,7 @@ class Config:
     learning: LearningConfig = field(default_factory=LearningConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     log_level: str = "INFO"
 
     def validate(self) -> None:
@@ -155,6 +170,12 @@ class Config:
             raise ConfigError("learning.embedding_dim must be between 16 and 512")
         if not 1 <= self.agents.max_agents <= 100:
             raise ConfigError("agents.max_agents must be between 1 and 100")
+        if not 0 < self.storage.shared_drive_share <= 1:
+            raise ConfigError("storage.shared_drive_share must be in (0, 1]")
+        if not 0 <= self.storage.reserve_fraction < 0.5:
+            raise ConfigError("storage.reserve_fraction must be in [0, 0.5)")
+        if not 0.1 <= self.storage.spill_at <= 1:
+            raise ConfigError("storage.spill_at must be in [0.1, 1]")
         if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ConfigError(f"unknown log_level {self.log_level!r}")
 

@@ -10,7 +10,8 @@ cursor, read straight from the agent's own tables. There is no event log to keep
   source reliability;
 * ``quiz``      a self-test answer on a hidden fact (right or wrong), ``quizscore`` the quiz result;
 * ``agent``     an agent was rewarded or penalised, ``newagent`` an agent was spawned or evolved;
-* ``request``   you asked it to learn something; ``report`` / ``backup`` nightly work; ``error`` a failed slice.
+* ``request``   you asked it to learn something; ``report`` / ``backup`` nightly work; ``error`` a failed slice;
+* ``storage``   a drive was plugged in and added to the brain, went away, came back, or was retired.
 
 Busy streams are capped per poll: the newest few are shown, the rest are counted in a ``more`` event, so a
 Wikidata ingest at thousands of facts per second stays readable. The cursor is opaque to clients.
@@ -55,6 +56,7 @@ STREAMS: dict[str, tuple[str, int]] = {
     "b": ("backups", 0),
     "j": ("jobs", 50),
     "c": ("cycles", 0),
+    "v": ("volume_events", 3),
 }
 CAPS = {"read": 4, "fact": 5, "inferred": 3, "disputed": 2, "quiz": 4, "agent": 5, "error": 3}
 FACT_SAMPLE = 400  # newest facts examined per poll to find readable ones
@@ -106,6 +108,8 @@ ACTIVITY: dict[str, str] = {
     "body.backup": "backing up",
     "body.housekeeping": "housekeeping",
     "body.evict": "freeing disk space",
+    "body.spill": "moving documents to a plugged-in drive",
+    "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
     "eval.report": "writing the nightly report",
@@ -170,6 +174,7 @@ class Feed:
         events += self._requests(lo["j"], heads["j"])
         events += self._reports_backups(lo["p"], heads["p"], lo["b"], heads["b"])
         events += self._failures(lo["c"], heads["c"])
+        events += self._storage(lo["v"], heads["v"])
         events.sort(key=lambda e: float(e.get("at") or 0))
         return {"cursor": format_cursor(heads), "events": events, "status": self.status()}
 
@@ -492,6 +497,22 @@ class Feed:
         ]
         return out
 
+    def _storage(self, lo: int, hi: int) -> list[dict[str, Any]]:
+        out = []
+        for r in self.db.query(
+            "SELECT e.at, e.volume_id, e.event, e.detail, v.label, v.model FROM volume_events e "
+            "LEFT JOIN volumes v ON v.id = e.volume_id WHERE e.id > ? AND e.id <= ? ORDER BY e.id",
+            (lo, hi),
+        ):
+            try:
+                detail = json.loads(r["detail"] or "{}")
+            except ValueError:
+                detail = {}
+            detail = detail if isinstance(detail, dict) else {}
+            name = str(detail.get("name") or r["label"] or r["model"] or str(r["volume_id"])[:8])
+            out.append({"kind": "storage", "at": r["at"], "event": str(r["event"]), "name": name, "detail": detail})
+        return out
+
     def _failures(self, lo: int, hi: int) -> list[dict[str, Any]]:
         out = []
         for r in self.db.query(
@@ -540,6 +561,13 @@ class Feed:
             "quiz": dict(quiz) if quiz else None,
         }
 
+    def brain(self) -> dict[str, Any]:
+        """Total brain space: the main disk's budget plus the budgets of the drives plugged in now."""
+        primary = self.db.kv_get("disk_budget_bytes")
+        row = self.db.one("SELECT COUNT(*) AS n, COALESCE(SUM(budget_bytes), 0) AS b FROM volumes WHERE online = 1")
+        drives, extra = (int(row["n"]), int(row["b"])) if row else (0, 0)
+        return {"primary_bytes": int(primary or 0), "drives": drives, "drive_bytes": extra}
+
     def status(self) -> dict[str, Any]:
         now = time.time()
         hb = self.db.kv_get("heartbeat") or {}
@@ -578,6 +606,7 @@ class Feed:
             "paused_reason": self.db.kv_get("paused_reason") if state == "paused" else None,
             "curious": curious,
             "counts": self.counts(now),
+            "brain": self.brain(),
         }
 
 
@@ -670,6 +699,8 @@ def compact(n: int | float) -> str:
 
 
 def human_bytes(n: int) -> str:
+    if n >= 1e12:
+        return f"{n / 1e12:.2f} TB"
     return f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.1f} MB" if n >= 1e6 else f"{n / 1e3:.0f} kB"
 
 
@@ -786,6 +817,29 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
     if k == "error":
         retry = " (will retry)" if e.get("state") == "queued" else " (gave up)" if e.get("state") == "dead" else ""
         return [*head, _tag("error", "red"), (f"{e['job']}: {e['error']}{retry}", "red")]
+    if k == "storage":
+        d = e.get("detail") or {}
+        ev = e.get("event")
+        size = f" ({human_bytes(int(d['size']))} {d.get('fstype', '')})" if d.get("size") else ""
+        if ev == "added":
+            use = f": {human_bytes(int(d.get('budget', 0)))} of it is now brain space" if d.get("budget") else ""
+            return [*head, _tag("storage", "bgreen"), (f"new drive {e['name']}{size}", "bold"), (use, "")]
+        if ev == "online":
+            return [
+                *head,
+                _tag("storage", "green"),
+                (f"drive {e['name']} is back; its documents are readable again", ""),
+            ]
+        if ev == "offline":
+            return [
+                *head,
+                _tag("storage", "yellow"),
+                (f"drive {e['name']} was unplugged; its documents wait for it", ""),
+            ]
+        if ev == "retired":
+            text = f"drive {e['name']} retired: {d.get('recalled', 0):,} documents brought back; safe to unplug"
+            return [*head, _tag("storage", "bmagenta"), (text, "")]
+        return [*head, _tag("storage", ""), (f"drive {e['name']}: {ev}", "")]
     if k == "body":
         return [*head, _tag("body", str(e.get("style", "yellow"))), (str(e["text"]), "")]
     if k == "curious":
@@ -829,6 +883,10 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[S
     q = c.get("quiz")
     if q:
         line2.append((f" · quiz {float(q['accuracy']):.0%}", ""))
+    b = st.get("brain") or {}
+    if b.get("drives"):
+        total = int(b.get("primary_bytes", 0)) + int(b.get("drive_bytes", 0))
+        line2.append((f" · brain {human_bytes(total)} ({b['drives']} drive{'s' if b['drives'] != 1 else ''})", ""))
     if c.get("agents"):
         line2.append((f" · {c['agents']} agents", ""))
     if st.get("temp_c") is not None:

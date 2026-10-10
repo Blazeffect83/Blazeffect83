@@ -1,7 +1,10 @@
 """Document store: every item the senses collect, with provenance and license.
 
 Bodies are stored as lzma-compressed JSON (text + link spans + extras), which
-keeps the NVMe budget small; ``meta`` holds small searchable fields.
+keeps the NVMe budget small; ``meta`` holds small searchable fields. When the main disk fills up, bodies
+can be *spilled* to a plugged-in drive (``codec = 'spilled'``, pointer in ``meta.spill``; see
+:mod:`polymath.memory.pool`). They read transparently; while the drive is away they read as empty, with
+``meta.unavailable`` set.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from polymath.core.db import Database
+from polymath.memory import pool as storage_pool
 
 
 @dataclass
@@ -78,6 +82,24 @@ def decode_body(blob: bytes | None, codec: str) -> dict[str, Any]:
     return data
 
 
+EMPTY_BODY: dict[str, Any] = {"text": "", "links": [], "extra": {}}
+
+
+def load_body(row: Any) -> tuple[dict[str, Any], bool]:
+    """A document row's body, wherever it is stored. ``(body, available)``: False while its drive is away."""
+    if row["codec"] != "spilled":
+        return decode_body(row["body"], row["codec"]), True
+    try:
+        ref = json.loads(row["meta"]).get("spill") or {}
+    except ValueError:
+        ref = {}
+    p = storage_pool.active()
+    blob = p.read_body(ref, int(row["id"])) if p is not None and ref else None
+    if blob is None:
+        return dict(EMPTY_BODY), False
+    return decode_body(blob, str(ref.get("codec", "lzma"))), True
+
+
 class DocumentStore:
     def __init__(self, db: Database, codec: str = "lzma") -> None:
         self.db = db
@@ -99,13 +121,17 @@ class DocumentStore:
             raise ValueError("every document needs license metadata")
         h = content_hash(doc.text)
         row = self.db.one(
-            "SELECT id, content_hash FROM documents WHERE source=? AND external_id=?", (doc.source, doc.external_id)
+            "SELECT id, content_hash, codec, body, meta FROM documents WHERE source=? AND external_id=?",
+            (doc.source, doc.external_id),
         )
         body = encode_body({"text": doc.text, "links": doc.links, "extra": doc.extra}, self.codec)
         meta = json.dumps(doc.meta, ensure_ascii=False, separators=(",", ":"))
         now = time.time()
         if row is not None:
             if row["content_hash"] == h:
+                return int(row["id"]), "unchanged"
+            if row["codec"] == "spilled" and not load_body(row)[1]:
+                # its old passages can only leave the index with the old text: update when the drive is back
                 return int(row["id"]), "unchanged"
             self._forget_index(int(row["id"]))
             self.db.execute(
@@ -155,10 +181,10 @@ class DocumentStore:
 
     def _forget_index(self, doc_id: int) -> None:
         """Before a body changes, remove its passages from the (contentless) FTS index and its signatures."""
-        old = self.db.one("SELECT title, body, codec FROM documents WHERE id=?", (doc_id,))
+        old = self.db.one("SELECT id, title, body, codec, meta FROM documents WHERE id=?", (doc_id,))
         chunks = self.db.query("SELECT id, start, end FROM chunks WHERE doc_id=?", (doc_id,))
         if old is not None and chunks:
-            text = decode_body(old["body"], old["codec"]).get("text", "")
+            text = load_body(old)[0].get("text", "")
             for c in chunks:
                 self.db.execute(
                     "INSERT INTO chunk_fts(chunk_fts, rowid, title, body) VALUES('delete', ?, ?, ?)",
@@ -173,7 +199,10 @@ class DocumentStore:
         row = self.db.one("SELECT * FROM documents WHERE id=?", (doc_id,))
         if row is None:
             return None
-        body = decode_body(row["body"], row["codec"])
+        body, available = load_body(row)
+        meta = json.loads(row["meta"])
+        if not available:
+            meta["unavailable"] = True
         return StoredDocument(
             id=int(row["id"]),
             source=row["source"],
@@ -186,7 +215,7 @@ class DocumentStore:
             published=row["published"],
             text=body.get("text", ""),
             links=[(int(x[0]), int(x[1]), str(x[2])) for x in body.get("links", [])],
-            meta=json.loads(row["meta"]),
+            meta=meta,
             extra=body.get("extra", {}),
             state=row["state"],
         )

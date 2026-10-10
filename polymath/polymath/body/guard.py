@@ -12,6 +12,9 @@ Modes (strongest wins), recomputed every cycle from cheap sensors:
 
 The guard also logs a vitals sample every five minutes (dashboard charts) and asks
 for eviction when the data directory outgrows ``disk_budget_gb`` or space runs low.
+It watches the storage pool too: drives plugged in or pulled out are recorded, and once
+the main disk passes ``storage.spill_at`` of its budget, document bodies are moved to a
+drive with room (``body.spill``) long before anything has to be evicted.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
 from polymath.core.loop import BodyState
+from polymath.memory import pool as storage_pool
 
 log = get_logger("body")
 VITALS_EVERY = 300.0
@@ -33,6 +37,8 @@ SIZE_EVERY = 600.0
 PAUSE_HYSTERESIS = 5.0
 THROTTLE_HYSTERESIS = 3.0
 EVICT_PRIORITY = 3.5  # urgent: runs ahead of the bandit's choices
+SPILL_PRIORITY = 2.95  # ahead of learning work, behind eviction
+STORAGE_EVERY = 30.0
 
 
 def directory_bytes(path: Path) -> int:
@@ -71,6 +77,7 @@ class Guard:
         self._size_at = -1e18
         self._vitals_at = -1e18
         self._last_mode = "normal"
+        self._storage_at = -1e18
 
     # ----------------------------------------------------------------- sensors
     def data_gb(self) -> float:
@@ -123,6 +130,7 @@ class Guard:
             elif v.disk_free_gb < b.disk_min_free_gb:
                 want("yield", f"only {v.disk_free_gb:.1f} GB free on the data disk")
         data_gb = self.data_gb()
+        self._storage(data_gb)
         if data_gb > b.disk_budget_gb or (v.disk_free_gb is not None and v.disk_free_gb < b.disk_min_free_gb):
             self._request_eviction(data_gb, v.disk_free_gb)
         intensity = {"normal": 1.0, "throttle": 0.5, "yield": 0.5, "pause": 0.0}[mode]
@@ -133,6 +141,25 @@ class Guard:
         # a disk-full pause still lets eviction run (it is what ends the pause); a thermal pause stops everything
         allow = ["body.evict"] if mode == "pause" and disk_critical and thermal != "pause" else []
         return BodyState(mode=mode, intensity=intensity, reasons=reasons, vitals=v, allow=allow)
+
+    def _storage(self, data_gb: float) -> None:
+        """Record drives arriving or leaving; ask for a spill when the main disk is filling and a drive has room."""
+        pool = storage_pool.for_config(self.config)
+        now = self.clock()
+        if pool is None or now - self._storage_at < STORAGE_EVERY:
+            return
+        self._storage_at = now
+        storage_pool.sync(self.db, pool)
+        self.db.kv_set("disk_budget_bytes", int(self.config.body.disk_budget_gb * 1e9))
+        if data_gb > self.config.storage.spill_at * self.config.body.disk_budget_gb and pool.choose(1 << 20):
+            from polymath.core.scheduler import Scheduler
+
+            Scheduler(self.db).enqueue(
+                "body.spill",
+                {"data_gb": round(data_gb, 2)},
+                key=f"body.spill:{int(now // 3600)}",
+                priority=SPILL_PRIORITY,
+            )
 
     def _request_eviction(self, data_gb: float, free_gb: float | None) -> None:
         from polymath.core.scheduler import Scheduler

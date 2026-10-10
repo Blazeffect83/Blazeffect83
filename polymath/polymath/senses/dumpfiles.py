@@ -16,11 +16,15 @@ MAX_OPEN_ITERATORS = 4
 
 
 def raw_path(ctx: JobContext, rel: str) -> Path:
+    """Where a download lives: on the main disk or a plugged-in drive (wherever it already is, else the roomiest)."""
+    from polymath.memory import pool as storage_pool
+
     base = ctx.config.paths.raw_dir.resolve()
     path = (base / rel).resolve()
     if base not in path.parents:
         raise PermanentError(f"refusing path outside raw dir: {rel}")
-    return path
+    pool = storage_pool.for_config(ctx.config)
+    return pool.raw_path(rel) if pool is not None else path
 
 
 def download_job(ctx: JobContext) -> JobOutcome:

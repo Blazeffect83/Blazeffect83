@@ -135,6 +135,8 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
     reg("body.housekeeping", maintenance.housekeeping_job, "Prune old job and cycle records", action="maintain")
     reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
+    reg("body.spill", maintenance.spill_job, "Move document bodies to plugged-in drives", action="maintain")
+    reg("body.recall", maintenance.recall_job, "Bring a drive's documents back (retire it)", action="maintain")
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
@@ -160,7 +162,10 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
 
 
 def build_agent(config: Config, *, notifier: Notifier | None = None, planners: bool = True) -> Agent:
+    from polymath.memory import pool as storage_pool
+
     check_storage(config)
+    storage_pool.activate(config)
     db = open_database(config.paths.db_path)
     comps = build_components(config, db, planners=planners and config.loop.planners)
     from polymath.body.guard import Guard
