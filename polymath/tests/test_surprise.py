@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 
@@ -13,12 +14,16 @@ from polymath.memory.graph import KnowledgeGraph
 from polymath.reasoning.link_prediction import LinkPredictor, Prediction
 
 
-class Ctx:
+class _Ctx:
     def __init__(self, db):
         self.db = db
 
     def tick(self):
         pass
+
+
+def Ctx(db) -> Any:
+    return _Ctx(db)
 
 
 def text_of(segs):
@@ -124,7 +129,12 @@ def test_job_uses_the_default_predictor_and_skips_dull_relations(db, world, monk
     for land in world["lands"][:3]:
         g.add_triple(land, cap, o=city, kind="wikidata", source="wikidata")
     called = []
-    monkeypatch.setattr(vjobs, "predictor_for", lambda ctx: called.append(1) or LinkPredictor(ctx.db))
+
+    def loader(ctx: Any) -> LinkPredictor:
+        called.append(1)
+        return LinkPredictor(ctx.db)
+
+    monkeypatch.setattr(vjobs, "predictor_for", loader)
     db.kv_set("surprise_cursor", world["big"])  # only the newer facts
     S.surprise_job(Ctx(db))
     assert called  # loaded once, lazily, for entity-valued facts
@@ -132,13 +142,11 @@ def test_job_uses_the_default_predictor_and_skips_dull_relations(db, world, monk
 
 
 def test_planner_feed_and_face(db, world):
+    from types import SimpleNamespace
+
     from polymath.core.scheduler import Scheduler
 
-    class Agent:
-        pass
-
-    a = Agent()
-    a.db, a.scheduler = db, Scheduler(db)
+    a = SimpleNamespace(db=db, scheduler=Scheduler(db))
     S.planner(a)
     assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind = 'eval.surprise'") == 1
     ev = {"kind": "note", "at": time.time(), "what": "didyouknow", "text": "Did you know? X."}

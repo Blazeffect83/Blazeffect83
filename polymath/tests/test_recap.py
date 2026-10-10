@@ -72,7 +72,8 @@ def test_write_latest_feed_face_and_cli(db, config, tmp_path, capsys):
     now = time.time()
     seed(db, now)
     d = R.write_recap(db, now, cfg=config)
-    assert R.latest(db)["week"] == d["week"] == time.strftime("%G-W%V", time.localtime(now))
+    latest = R.latest(db)
+    assert latest is not None and latest["week"] == d["week"] == time.strftime("%G-W%V", time.localtime(now))
     R.write_recap(db, now + 60, cfg=config)  # the same week again: replaced, not duplicated
     assert db.scalar("SELECT COUNT(*) FROM recaps") == 1
     evs = [e for e in Feed(db).poll()["events"] if e["kind"] == "recap"]
@@ -101,11 +102,9 @@ def test_sunday_morning_schedule(db, config):
     local = time.localtime(7 * DAY * 1000 + phase)  # every slot boundary is a Sunday, 08:00 local time
     assert local.tm_wday == 6 and local.tm_hour == 8
 
-    class Agent:
-        pass
+    from types import SimpleNamespace
 
-    a = Agent()
-    a.db, a.scheduler, a.config = db, Scheduler(db), config
+    a = SimpleNamespace(db=db, scheduler=Scheduler(db), config=config)
     R.planner(a)
     assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind = 'eval.recap'") == 0  # nothing read yet
     DocumentStore(db).add(Document("web", "x", "X", "text " * 30, "CC0"))

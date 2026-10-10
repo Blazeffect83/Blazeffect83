@@ -63,6 +63,12 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | research a topic | `polymath learn "topic"` or `polymath learn https://example.org/` |
 | what it learned today | `polymath digest` (written daily at 07:00; also in the feed and on the dashboard) |
 | new sites it vetted | `polymath sites` · `polymath sites --check example.org` |
+| the week in review | `polymath recap` (Sundays at 08:00; `--now` for this week so far) |
+| tell me about … | `polymath tell "topic"`, or ask "Tell me about …" on the dashboard |
+| its predictions | `polymath predictions` (guessed before reading; confirmed, wrong, open) |
+| SD card wear | `polymath wear` |
+| on your phone | `http://<pi>:8765/live`: the face and the live feed |
+| knowledge map | on the dashboard: topics clustered by what they share, sized by documents. ▶ plays the time-lapse; click a topic to ask about it |
 
 The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). `install.sh` puts
 `polymath` on everyone's PATH (`/usr/local/bin/polymath`):
@@ -146,6 +152,23 @@ These limits always apply, whatever the mode:
 - `CPUQuota=200%` (2 of 4 cores), `MemoryMax=3G`, `Nice=10`, idle-ish IO priority;
 - numpy is limited to 2 threads;
 - the dashboard is limited to 25 % CPU and 400 MB.
+
+**SD card wear.** An SD card wears out from writes, and nothing on it reports its own wear, so Polymath measures
+writes and estimates. Every 15 minutes it records the bytes written to the data disk and the system disk
+(`/sys/dev/block/…/stat`), and the agent's own share (`/proc/self/io`):
+- **rated life**: `capacity × sd_endurance_cycles ÷ sd_write_amplification` (1,000 and 3 by default, which
+  is conservative for consumer cards). The daily budget makes that last `sd_target_years` (5);
+- **over budget**: on the data disk it switches to saver mode, with twice-as-long job slices. Each slice is
+  one commit, so fewer, larger commits write less. The feed and the digest say so once a day;
+- **read-only**: a data disk the kernel turned read-only (the usual sign of a failing card) pauses everything,
+  with that reason in the feed;
+- **lower baseline**: idle cycles no longer write a heartbeat every 2 seconds (that was about 350 MB a day),
+  and a busy job slice writes 25 % less than before (measured).
+
+`polymath wear` shows the numbers ("SD card (data disk): 3.6 GB written in the last day, budget 11.7 GB/day; at
+this rate it lasts about 6.6 years"). The figure is a rate, not the card's remaining life, because writes from
+before Polymath was installed are unknown. **The permanent fix is a drive** (§8): plug one in and the brain
+moves onto it.
 
 The limits leave half the CPU and a quarter of the memory to the desktop. To give the agent the whole Pi, raise
 them with a drop-in (`sudo systemctl edit polymath`, for example `CPUQuota=350%` and `MemoryMax=6G` on an 8 GB
@@ -237,6 +260,43 @@ polymath storage retire <id>          # bring its documents back (what no longer
                                       # unplug for good; it is never adopted again
 ```
 
+### <a id="home"></a>Moving the brain onto a drive (your SSD)
+
+While the brain is on the SD card, the first **dedicated, Linux-formatted** drive with room becomes its new home,
+automatically:
+- "dedicated" means it was blank and Polymath formatted it, or it is labelled `POLYMATH`, or it is empty;
+- "room" means at least `home_min_gb` (32 GB) free, and three times the brain's size.
+
+What happens:
+1. the agent and the dashboard stop (each commits and exits cleanly);
+2. `/srv/polymath` is copied to `polymath-brain/home` on the drive and checked: the same files and bytes, and
+   SQLite's `quick_check` on the database. A 15 GB brain takes a few minutes;
+3. the SD card's copy is moved aside to `/srv/polymath-sd-copy`, as a safety net. It is not deleted, and it is
+   not used any more;
+4. the drive's copy is mounted over `/srv/polymath` and everything starts again. The feed says `storage  moved
+   the brain onto <drive>`, `polymath storage list` shows the main disk as that drive, and its budget is the
+   drive's (90 % of it).
+
+From then on, every boot mounts the brain from the drive before the agent starts. If the drive is missing, the
+agent **waits** (`polymath status` / the journal: "the brain lives on the drive …, which is not plugged in") and
+does not run on the old SD copy. Plug the drive back in and it starts by itself. `storage eject` refuses
+while the agent runs on it.
+
+**A new SSD formatted for Windows or macOS** (exFAT, NTFS, FAT; most come that way) is used for documents
+only. The feed tells you what to do. Reformat it explicitly:
+
+```bash
+polymath storage list                              # find its id
+sudo polymath storage format <id> --yes            # an empty drive: reformatted ext4, then the brain moves
+sudo polymath storage format <id> --yes --erase-files   # it holds files (e.g. the maker's installers): erased
+```
+
+`format` lists the files first and refuses without `--erase-files`. It refuses outright if Polymath already
+stored documents there.
+
+When you are happy with the drive, free the SD card's space with `sudo rm -rf /srv/polymath-sd-copy` (optional).
+To turn the move off: `move_home = false` under `[storage]`.
+
 **Settings** (`[storage]` in `/etc/polymath/polymath.toml`):
 - `adopt = false` stops adopting drives;
 - `format_blank_disks = false` never formats anything;
@@ -258,4 +318,7 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 | live feed says "waiting: no answer from http://127.0.0.1:8765" | `systemctl status polymath-dashboard`; it reconnects by itself |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |
+| the agent waits: "the brain lives on the drive …" | plug that drive in; `journalctl -u 'polymath-volume@*'` shows it being mounted |
+| a new SSD did not become the brain's home | the feed's `storage` line says why: run the `storage format` command it shows (§8) |
+| `polymath wear` says over budget | expected on an SD card under heavy ingest: plug in a drive (§8) |
 | "ignoring retired configuration key(s)" | delete the `minecraft_*` lines from `/etc/polymath/polymath.toml` (or re-run `install.sh`) |

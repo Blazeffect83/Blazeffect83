@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -174,7 +175,7 @@ def test_guard_saver_mode_feed_note_and_read_only_pause(config, db, tmp_path):
     g = Guard(config, db, clock=lambda: clock[0], sensors=lambda: Vitals(50.0, 0.5, 4, 1000.0, 500.0, 10.0))
     g.wear = m
     st = g.observe()
-    assert st.mode == "normal" and st.slice_factor == 1.0 and not g.saver
+    assert (st.mode, st.slice_factor, g.saver) == ("normal", 1.0, False)
     for i in range(1, 100):  # 1 GB every 15 minutes: far over a 62.9 GB card's budget
         clock[0] += wear.SAMPLE_EVERY
         set_written(stat, i * (GB // 512))
@@ -183,16 +184,16 @@ def test_guard_saver_mode_feed_note_and_read_only_pause(config, db, tmp_path):
     notes = db.query("SELECT text, detail FROM events WHERE kind = 'wear'")
     assert len(notes) == 1 and "plug in a USB drive" in notes[0]["text"]  # once a day, not every sample
     (tmp_path / "mounts").write_text(f"/dev/mmcblk0p2 {config.paths.data_dir} ext4 ro 0 0\n")
-    st = g.observe()
-    assert st.mode == "pause" and "read-only" in st.reasons[0]
+    paused = g.observe()
+    assert paused.mode == "pause" and "read-only" in paused.reasons[0]
     assert db.scalar("SELECT COUNT(*) FROM events WHERE kind = 'wear' AND detail LIKE '%read-only%'") == 1
     g.observe()
     assert db.scalar("SELECT COUNT(*) FROM events WHERE kind = 'wear' AND detail LIKE '%read-only%'") == 1
 
 
-def test_guard_on_a_system_sd_card_only_explains(config, db, tmp_path):
+def test_guard_on_a_system_sd_card_only_explains(config, db, tmp_path, monkeypatch):
     g = Guard(config, db, sensors=lambda: Vitals(50.0, 0.5, 4, 1000.0, 500.0, 10.0))
-    g.wear.sample = lambda now, force=False: True  # type: ignore[method-assign]
+    monkeypatch.setattr(g.wear, "sample", lambda now, force=False: True)
     now = time.time()
     for i in range(30):
         db.execute("INSERT INTO disk_writes VALUES(?, 'mmcblk0p2', 'system', 'sd', ?, ?, 0)",
@@ -229,9 +230,14 @@ def test_saver_doubles_slices_within_the_watchdog(config, db):
     from polymath.core.jobs import JobOutcome, JobRegistry
     from polymath.core.loop import BodyState
 
-    seen = []
+    seen: list[float] = []
     reg = JobRegistry()
-    reg.register("probe", lambda ctx: (seen.append(ctx.deadline - time.monotonic()), JobOutcome(done=True))[1], "probe")
+
+    def probe(ctx: Any) -> JobOutcome:
+        seen.append(ctx.deadline - time.monotonic())
+        return JobOutcome(done=True)
+
+    reg.register("probe", probe, "probe")
 
     class SaverBody:
         def observe(self):

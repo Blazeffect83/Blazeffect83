@@ -16,7 +16,20 @@ implemented here and learns only from data the agent downloads itself.
   before its first visit: offline safety lists (adult, malware, phishing, gambling), a valid HTTPS
   certificate, robots.txt. Then it stays on probation until its facts check out.
 - **Learns from its mistakes:** every wrong self-test answer is read up on and re-tested.
-- **Tells you what it learned:** a daily digest in the feed, the dashboard, and `polymath digest`.
+- **Tells you what it learned:** a daily digest in the feed, the dashboard, and `polymath digest`, and every
+  Sunday a recap of the week against the week before (`polymath recap`).
+- **Tells you about anything it knows:** `polymath tell "Marie Curie"` writes a short encyclopedia-style
+  paragraph from its facts ("Curie was born in Warsaw on 7 November 1867 …") with numbered sources.
+- **Predicts facts before it reads them:** it guesses missing facts, checks the guesses when the facts arrive,
+  and keeps score against chance (`polymath predictions`). On earlier real data it got 25 of 27 hidden facts
+  right, where guessing would score 23 %.
+- **Did you know?** It flags facts that surprised its own model, such as the largest or smallest of their kind,
+  or a different answer from what everything else it knew pointed to.
+- **Knowledge map:** an interactive star map of what it has read about on the dashboard, with a time-lapse of
+  its brain growing. Click a topic and it tells you what it knows.
+- **Watch from your phone:** `http://<pi>:8765/live` shows the face and the live feed.
+- **Protects the SD card:** it measures how much it writes and estimates how long the card lasts at that rate.
+  It writes less (idle cycles now write nothing), and when you plug in a drive, the whole brain moves onto it.
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
   tests itself on and gets rewarded for. A little animated face at the top shows its mood (reading, thinking,
   proud of a fixed mistake, dozing when idle), and the top right shows the exact version it runs, with ✓ when
@@ -27,6 +40,8 @@ implemented here and learns only from data the agent downloads itself.
 - **Answers offline**, with citations and confidences, and says "I don't know yet" instead of guessing.
 
 ![Live feed](docs/img/feed.png)
+
+![Knowledge map](docs/img/knowledge-map.png)
 
 ## Install (Raspberry Pi OS Bookworm, 64-bit)
 
@@ -55,6 +70,10 @@ polymath status                                  # health, queue, knowledge coun
 polymath version                                 # installed version and commit; is the agent running it?
 polymath storage list                            # the drives in its brain
 polymath digest                                  # what it learned today
+polymath recap                                   # the week in review (this week against last week)
+polymath tell "Marie Curie"                      # a paragraph written from what it learned, with sources
+polymath predictions                             # facts it guessed before reading them, and how many came true
+polymath wear                                    # disk writes per day; how long the SD card lasts at this rate
 polymath sites                                   # new sites it vetted, refused or dropped, and why
 ```
 

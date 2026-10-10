@@ -137,6 +137,56 @@ code when the installed build changes.
   The feed (`digest` lines), the dashboard panel and `polymath digest` show it. Vetting and relearning notices go
   to the `events` table, which the feed streams.
 
+## Telling, predicting, surprise, recap, the map
+
+- **`interface/tell.py`** writes a paragraph from relation templates, in a fixed order:
+  1. what it is: the description with the right article;
+  2. a life sentence for people: born and died, using the surname and never a pronoun;
+  3. the facts that matter for that kind of thing;
+  4. what points to it;
+  5. a few plain facts, from an allow-list (identifiers and codes never appear).
+
+  Inferred and disputed facts are labelled. Every sentence carries citations, and a citation to reasoning
+  names its premises. The answerer uses it for "tell me about / who is" questions.
+- **`reasoning/predictions.py`** (`reason.predict`, every 2 h):
+  - candidate relations: single-valued, entity-valued, with 30+ subjects and no housekeeping, each with its
+    subjects' usual P31 class;
+  - gaps: members of that class lacking the relation entirely, not even as a hidden quiz fact. A cursor walks
+    the class;
+  - candidate answers: the relation's common objects plus objects already linked to the subject;
+  - the link predictor chooses, and the guess is kept at ≥ 0.4 confidence when some evidence spoke;
+  - settling: a later *sourced* fact (never an inferred one) marks it confirmed or refuted;
+  - expiry: 90 days.
+- **`evaluation/surprise.py`** (`eval.surprise`, every 3 h) looks at new facts, important subjects first:
+  - numbers that are extreme among peers of the same class, relation and unit;
+  - single-valued facts that the predictor, with the fact hidden, expected otherwise (at most 40 such
+    predictions per run).
+- **`evaluation/recap.py`** (`eval.recap`, Sundays 08:00 local): last 7 days against the 7 before.
+- **`interface/knowledge_map.py`** (`memory.snapshot`, daily):
+  - nodes: the top 120 topics by documents;
+  - edges: cosine-normalised co-occurrence, each node's 4 strongest;
+  - clusters: label propagation;
+  - layout: Fruchterman–Reingold in numpy, warm-started from the stored layout and rescaled to the unit square;
+  - time-lapse: rebuilt from document read times with adaptive steps (hours to weeks, at most 96 frames), and
+    raised to daily snapshots so evictions do not erase history.
+
+## Disk writes and the brain's home (`body/wear.py`, `body/volumes.py`)
+
+- `WearMeter` samples the device counters and the process counters every 15 minutes into `disk_writes`. Counter
+  resets are handled: a reboot or restart counts from zero.
+- `report()` derives per-day rates, the SD budget and years-at-this-rate. The guard switches on saver
+  (`BodyState.slice_factor = 2`, capped at 60 s per slice), and pauses on a read-only data disk.
+- Fewer writes per cycle:
+  - idle cycles commit the heartbeat only on change or every 30 s, because the pulse file proves liveness;
+  - busy cycles commit it every 10 s;
+  - the redundant `jobs_kind` index is dropped;
+  - `wal_autocheckpoint` is 4,000 pages.
+- `Helper.move_home` (root, from the udev-started unit): stop the services, `copytree`, compare file count and
+  bytes, `quick_check`, write `home-drive.json` (its budget is read by `config.apply_home`), move the SD copy
+  aside, leave `MOVED-TO-DRIVE.json` (`check_storage` refuses to start on it), set the manifest's `home` and a
+  pool budget of 0, bind-mount, start. `mount_home` repeats the bind mount at boot or replug; `detach` stops
+  the services first.
+
 ## The storage pool (`memory/pool.py`, `body/volumes.py`)
 
 The pool has a privileged half and an unprivileged half.

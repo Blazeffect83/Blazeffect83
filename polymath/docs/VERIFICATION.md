@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 394 automated tests pass (`pytest`), including:
+- **Tests:** 447 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -363,6 +363,71 @@ development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and
   - `install.sh` writing the stamp once.
 - Not yet seen on the Pi itself: the font check used the same DejaVu Sans Mono that Raspberry Pi OS ships.
 
+## 12c. SD card guard, the brain's home, tell, predictions, surprise, recap, map, live page (v0.3.0)
+
+**Writes per cycle.** `/proc/self/io` `write_bytes` for 1,500 cycles each, against the previous version on the
+same database:
+
+| cycle | before | after |
+|---|---|---|
+| idle (nothing to do, every 2 s) | 4.2 kB | 0 kB (heartbeat only on change or every 30 s) |
+| a job slice (no-op job) | 103.5 kB | 77.1 kB (−25 %: busy heartbeat every 10 s, redundant `jobs_kind` index dropped) |
+
+An idle agent used to write about 360 MB a day just for its heartbeat. Raising `wal_autocheckpoint` from 1,000
+to 4,000 pages changed little (−1.5 %); it is kept at 4,000. A real day's total on the Pi will come from
+`polymath wear`.
+
+**Moving the brain onto a drive.** Tested with a fake `blkid`/`lsblk`/`mount`/`systemctl` (`tests/test_wear.py`):
+- a blank SSD is formatted, then the agent is stopped and the data copied and verified (file count, bytes,
+  SQLite `quick_check`, and the copied database still holds events written before the move);
+- the SD copy is moved aside, the marker is left, the drive is bind-mounted and the agent started;
+- boot re-mounts the brain, unplugging stops the agent, and eject refuses while the agent runs;
+- a failed copy or a corrupt database copy leaves the brain on the SD card;
+- shared, small, Windows-formatted, and NVMe-already cases do not move;
+- `storage format` refuses a drive with files unless `--erase-files`, and always refuses one holding spilled
+  documents.
+
+**Not yet done on real hardware.**
+
+**Tell.** On the earlier real learning copy (97,822 facts):
+
+| entity | its paragraph |
+|---|---|
+| Portugal | "Portugal is a country in Southwestern Europe. Its capital is Lisbon. Its official language is Portuguese. It has a population of about 10.3 million. It covers 92,225 km². It was founded on 25 July 1139…" |
+| Albrecht Dürer | "Dürer was born in Free Imperial City of Nuremberg on 21 May 1471 and died … on 6 April 1528…" |
+
+Problems found by reading real output, and fixed before shipping:
+- units printed as ids ("Q712226");
+- codes and identifiers shown as facts;
+- "a"/"the" errors;
+- people not recognised because the class "human" had not been read yet.
+
+**Predictions.** A backtest on the same copy hid real single-valued facts from every evidence source and let the
+predictor guess among the relation's usual answers. It got **25 of 27 right, against 23 % chance**, and abstained
+on 33 where no evidence spoke. Earlier runs, with junk relations still included, gave 20/32 and 8/17, so it
+depends on the relation mix. On the copy's real gaps it made no guesses: there was no evidence, and it does not
+guess blind. The Pi's much larger graph is where it will be measured.
+
+**Did you know.**
+- Speed: 300 new facts per run in 0–4 s, after capping hidden-fact predictions at 40 per run (the first
+  version took over a minute).
+- Problems found by reading real output, and fixed:
+  - many-valued relations (borders, diplomatic relations) produced nonsense surprises;
+  - areas were compared across units;
+  - series values were repeated;
+  - Wikidata's own bookkeeping entities appeared.
+- What it says now: "Sierra Leone has the smallest life expectancy of the 33 similar things it knows: 51.84
+  years."
+
+**Knowledge map.** 120 topics, 339 edges and 19 clusters on the real copy, in 0.5–0.8 s. Literature, medicine
+and studies of people, science, and neural networks form visible clusters.
+
+**Dashboard and live page.** Rendered in headless Chromium against the real copy: no console errors.
+- the map, with hover and click-to-ask: `docs/img/knowledge-map.png`;
+- "Tell me about Germany" in the ask box;
+- the week in review and the predictions panels: `docs/img/dashboard-panels.png`;
+- `/live` on a 390-pixel phone viewport: `docs/img/live-phone.png`.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -389,3 +454,10 @@ Not claimed until measured:
 3. Pull the power mid-run and check that the restart resumes cleanly on the SD card.
 4. Plug in a real USB drive: blank, one with files, and FAT. Check the feed's `storage` line, `polymath storage
    list`, spilling under pressure, unplug and replug, and `polymath storage retire`.
+5. **The 1 TB SSD**:
+   - the brain moves onto it (or `storage format` first, if it comes exFAT);
+   - reboot with it plugged in;
+   - boot without it: the agent waits;
+   - plug it in: the agent starts;
+   - `polymath wear` before and after.
+6. A day of `polymath wear` on the SD card, to replace the estimate with a measured daily rate.

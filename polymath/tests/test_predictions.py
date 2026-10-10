@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 
 import pytest
 
@@ -15,12 +16,16 @@ from polymath.reasoning import predictions as P
 from polymath.reasoning.link_prediction import LinkPredictor
 
 
-class Ctx:
+class _Ctx:
     def __init__(self, db):
         self.db = db
 
     def tick(self):
         pass
+
+
+def Ctx(db) -> Any:
+    return _Ctx(db)
 
 
 def text_of(segs):
@@ -50,7 +55,7 @@ def world(db):
         if side < 2:
             add(c, member, (eu, asean)[side])
         add(c, flag, g.upsert_entity(f"Q{800 + i}", f"flag of Land{i}"))
-    gaps = {}
+    gaps: dict[str, int] = {}
     for name, union in (("Newland", eu), ("Eastland", asean), ("Mystery", None)):
         c = g.upsert_entity(f"Q{700 + len(gaps)}", name)
         add(c, p31, country)

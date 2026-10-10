@@ -8,6 +8,7 @@ import os
 import time
 import unicodedata
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -191,7 +192,7 @@ def test_milestones():
 
 # ------------------------------------------------------------------ face
 def test_every_face_is_single_width_and_fits():
-    glyphs = set()
+    glyphs: set[str] = set()
     for name, m in MOODS.items():
         for f in m.frames:
             for t in m.trail:
@@ -289,7 +290,7 @@ def test_reactions_last_a_while_and_respect_priority():
     assert f.mood(t + 2) == "celebrate"
     f.see({"kind": "inferred"}, t + 20)  # after it expired: anything goes
     assert f.mood(t + 20) == "aha"
-    cases = [
+    cases: list[tuple[dict[str, Any], str]] = [
         ({"kind": "quizscore", "accuracy": 0.8, "chance": 0.25}, "happy"),
         ({"kind": "quizscore", "accuracy": 0.2, "chance": 0.25}, "oops"),
         ({"kind": "disputed"}, "doubt"),
