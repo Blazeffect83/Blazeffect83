@@ -353,7 +353,26 @@ class Helper:
             return self.mount_home(brain, manifest, out)
         if self.should_move(brain, manifest):
             return self.move_home(brain, manifest, out)
-        return out
+        hint = self.home_hint(brain, manifest)
+        if hint != manifest.get("home_hint", ""):
+            manifest["home_hint"] = hint
+            self._write_manifest(brain, manifest)
+        return Outcome(out.action, f"{out.detail}; {hint}", out.volume) if hint else out
+
+    def home_hint(self, brain: Path, manifest: dict[str, Any]) -> str:
+        """Why a big drive did not become the brain's home, and the one thing to do about it ("" if none)."""
+        st, data = self.config.storage, self.config.paths.data_dir
+        if not st.move_home or (data / MOVED_FILE).exists() or not self.data_on_system_disk():
+            return ""
+        if int(manifest.get("size_bytes") or 0) < st.home_min_gb * 1e9:
+            return ""
+        vol = manifest.get("id", "")
+        if manifest.get("fstype") in FOREIGN_FS:
+            fs = manifest.get("fstype")
+            return f"to move the brain onto it (now {fs}): empty it, then sudo polymath storage format {vol} --yes"
+        if not manifest.get("dedicated"):
+            return "it holds other files: empty it and plug it in again to move the brain onto it"
+        return ""
 
     def should_move(self, brain: Path, manifest: dict[str, Any]) -> bool:
         st, data = self.config.storage, self.config.paths.data_dir

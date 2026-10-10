@@ -533,3 +533,33 @@ def test_digest_reports_the_sd_card(config, db):
     lines = digest.lines(digest.collect(db, now - 86400, now, config))
     assert any(line.startswith("SD card (data disk)") and "over budget" in line for line in lines)
     assert not any("SD card" in line for line in digest.lines(digest.collect(db, now - 86400, now)))
+
+
+def test_a_windows_formatted_ssd_gets_clear_instructions(home_helper, config, db):
+    h, fake = home_helper
+    config.storage.home_min_gb = 0.000001
+    fake.add("/dev/sda1", disk="sda", probe={"TYPE": "exfat", "UUID": "AB12-CD34", "LABEL": "T7"})
+    out = h.attach("/dev/sda1")
+    assert "sudo polymath storage format AB12-CD34 --yes" in out.detail
+    brain = config.storage.mount_root / "AB12-CD34" / storage_pool.BRAIN
+    assert "storage format AB12-CD34" in storage_pool.read_manifest(brain)["home_hint"]  # type: ignore[index]
+    pool = storage_pool.StoragePool(config, ismount=lambda p: True)
+    storage_pool.sync(db, pool)
+    from polymath.interface.feed import Feed
+
+    evs = [e for e in Feed(db).poll()["events"] if e["kind"] == "storage"]
+    lines = [text_of(render_event(e)) for e in evs]
+    assert any("new drive T7" in x for x in lines) and any("storage format AB12-CD34" in x for x in lines)
+    fake.add("/dev/sdc1", disk="sdc", probe={"TYPE": "ext4", "UUID": "files-1"})
+    (config.storage.mount_root / "files-1" / "Music").mkdir(parents=True)
+    assert "empty it and plug it in again" in h.attach("/dev/sdc1").detail
+    config.storage.home_min_gb = 10**9
+    fake.add("/dev/sdd1", disk="sdd", probe={"TYPE": "exfat", "UUID": "TINY-1"})
+    assert "storage format" not in h.attach("/dev/sdd1").detail  # too small to be the home: no advice
+    home_brain = config.storage.mount_root / "z" / storage_pool.BRAIN
+    home_brain.mkdir(parents=True)
+    pool2 = storage_pool.StoragePool(config, ismount=lambda p: True)
+    (home_brain / storage_pool.MANIFEST).write_text(json.dumps({"id": "z", "home": True, "fstype": "ext4"}))
+    storage_pool.sync(db, pool2)
+    added = [e for e in Feed(db).poll()["events"] if e["kind"] == "storage" and e["event"] == "added"]
+    assert any("the whole brain lives on it" in text_of(render_event(e)) for e in added)

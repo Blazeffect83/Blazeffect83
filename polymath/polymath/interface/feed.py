@@ -531,6 +531,8 @@ class Feed:
             detail = detail if isinstance(detail, dict) else {}
             name = str(detail.get("name") or r["label"] or r["model"] or str(r["volume_id"])[:8])
             out.append({"kind": "storage", "at": r["at"], "event": str(r["event"]), "name": name, "detail": detail})
+            if detail.get("hint") and r["event"] in {"added", "online"}:  # its own line, so it is never cut off
+                out.append({"kind": "storage", "at": r["at"], "event": "hint", "name": name, "detail": detail})
         return out
 
     def _events(self, lo: int, hi: int) -> list[dict[str, Any]]:
@@ -931,6 +933,8 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
         size = f" ({human_bytes(int(d['size']))} {d.get('fstype', '')})" if d.get("size") else ""
         if ev == "added":
             use = f": {human_bytes(int(d.get('budget', 0)))} of it is now brain space" if d.get("budget") else ""
+            if d.get("home"):
+                use = ": the whole brain lives on it now"
             return [*head, _tag("storage", "bgreen"), (f"new drive {e['name']}{size}", "bold"), (use, "")]
         if ev == "online":
             return [
@@ -944,6 +948,8 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
                 _tag("storage", "yellow"),
                 (f"drive {e['name']} was unplugged; its documents wait for it", ""),
             ]
+        if ev == "hint":
+            return [*head, _tag("storage", "yellow"), (str(d.get("hint", "")), "yellow")]
         if ev == "retired":
             text = f"drive {e['name']} retired: {d.get('recalled', 0):,} documents brought back; safe to unplug"
             return [*head, _tag("storage", "bmagenta"), (text, "")]

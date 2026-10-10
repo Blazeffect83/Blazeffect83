@@ -67,6 +67,8 @@ class Volume:
     budget_bytes: int
     dedicated: bool
     path: Path  # the polymath-brain folder
+    hint: str = ""  # what to do so the brain can move onto this drive (set by the storage helper)
+    home: bool = False  # the whole brain lives on this drive
 
     @property
     def name(self) -> str:
@@ -136,6 +138,8 @@ class StoragePool:
                         budget_bytes=int(m.get("budget_bytes") or 0),
                         dedicated=bool(m.get("dedicated")),
                         path=brain,
+                        hint=str(m.get("home_hint") or ""),
+                        home=bool(m.get("home")),
                     )
                 )
             except (TypeError, ValueError):
@@ -297,6 +301,8 @@ def sync(db: Database, pool: StoragePool) -> list[dict[str, Any]]:
                 "size": v.size_bytes,
                 "budget": v.budget_bytes,
                 "dedicated": v.dedicated,
+                "hint": v.hint,
+                "home": v.home,
             }
         )
         if vid not in known:
