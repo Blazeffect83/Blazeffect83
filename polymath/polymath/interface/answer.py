@@ -141,6 +141,19 @@ class Answer:
         return "\n".join(lines)
 
 
+# Common Wikidata units, so quantities read well before the unit's own entity has been read.
+UNITS = {
+    "Q712226": "km²", "Q25343": "m²", "Q35852": "hectares", "Q81292": "acres", "Q232291": "square miles",
+    "Q11573": "m", "Q828224": "km", "Q174728": "cm", "Q174789": "mm", "Q3710": "feet", "Q253276": "miles",
+    "Q11570": "kg", "Q41803": "grams", "Q191118": "tonnes", "Q100995": "pounds", "Q11574": "seconds",
+    "Q7727": "minutes", "Q25235": "hours", "Q573": "days", "Q577": "years", "Q1092296": "years",
+    "Q4917": "US dollars", "Q4916": "euros", "Q25224": "pounds sterling", "Q8146": "yen", "Q11229": "%",
+    "Q25267": "°C", "Q42289": "°F", "Q11579": "K", "Q180154": "km/h", "Q182429": "m/s", "Q1811": "au",
+    "Q531": "light-years", "Q12129": "parsecs", "Q39369": "hertz", "Q25250": "volts", "Q25236": "watts",
+    "Q1397": "kilometres per second", "Q199": "", "Q11582": "litres", "Q130964": "calories",
+}  # fmt: skip
+
+
 def render_value(db: Database, o: int, value: str) -> str:
     if o:
         label = str(db.scalar("SELECT label FROM entities WHERE id=?", (o,), default=f"#{o}"))
@@ -152,11 +165,13 @@ def render_value(db: Database, o: int, value: str) -> str:
         if "time" in v:
             return str(v["time"])
         if "amount" in v:
-            amt = v["amount"]
-            num = f"{amt:,.0f}" if float(amt).is_integer() else f"{amt:,}"
+            amt = float(v["amount"])
+            num = f"{amt:,.0f}" if amt.is_integer() or abs(amt) >= 1000 else f"{amt:,.4g}"
             unit = v.get("unit")
             if unit and str(unit).startswith("Q"):
-                unit = db.scalar("SELECT label FROM entities WHERE key=?", (unit,), default=unit)
+                unit = UNITS.get(str(unit)) or db.scalar(
+                    "SELECT label FROM entities WHERE key=? AND label NOT GLOB 'Q[0-9]*'", (unit,), default=""
+                )  # an unknown unit is left out rather than shown as an id
             return f"{num} {unit}".strip() if unit else num
         if "text" in v:
             return str(v["text"])
@@ -318,6 +333,21 @@ class Answerer:
                     )
         return out
 
+    def story(self, entity: Entity) -> list[Statement]:
+        """A paragraph written from its facts (interface.tell), then the article's opening, when there is one."""
+        from polymath.interface.tell import Teller
+
+        st = Teller(self.db, self).tell_entity(entity)
+        if not st.paragraph or st.facts_used == 0:
+            return []
+        strip = re.compile(r" \[\d+(?:, \d+)*\]")
+        out = [Statement(strip.sub("", st.paragraph), st.confidence, "story", st.citations[:8])]
+        doc = self.store.get(entity.doc_id) if entity.doc_id else None
+        if st.article and doc is not None:
+            out.append(Statement(strip.sub("", st.article), 0.75, "passage",
+                                 [Citation(doc.title, doc.url, doc.license, doc.source)]))  # fmt: skip
+        return out
+
     def _names(self, entity: Entity) -> list[str]:
         """Normalised names a sentence must use to be about ``entity`` (label and learned aliases)."""
         names = {norm_alias(entity.label)}
@@ -374,7 +404,7 @@ class Answerer:
         note = ""
         if entity is not None:
             if kind == "describe":
-                statements = self.describe(entity)
+                statements = self.story(entity) or self.describe(entity)
             else:
                 labels = None
                 if kind == "when":

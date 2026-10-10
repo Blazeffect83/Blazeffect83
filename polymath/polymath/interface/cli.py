@@ -533,6 +533,19 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     return 0 if out.action != "skipped" or op in {"attach", "detach"} else 1
 
 
+def cmd_tell(config: Config, args: argparse.Namespace) -> int:
+    """A paragraph about something, written from the facts it learned, with sources."""
+    from polymath.interface.tell import Teller
+
+    db = _db(config, readonly=True)
+    try:
+        story = Teller(db).tell(" ".join(args.topic))
+    finally:
+        db.close()
+    print(json.dumps(story.to_dict(), indent=2) if args.json else story.render())
+    return 0 if story.paragraph else 1
+
+
 def cmd_wear(config: Config, args: argparse.Namespace) -> int:
     """Disk writes per day (data and system disk) and how long an SD card lasts at this rate."""
     from polymath.body import wear
@@ -1000,6 +1013,11 @@ def build_parser() -> argparse.ArgumentParser:
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")
     stf.add_argument("--erase-files", action="store_true", help="also when it holds files: they are erased")
     sto.set_defaults(func=cmd_storage)
+
+    te = sub.add_parser("tell", help="a paragraph about something, written from what it learned (with sources)")
+    te.add_argument("topic", nargs="+")
+    te.add_argument("--json", action="store_true")
+    te.set_defaults(func=cmd_tell)
 
     we = sub.add_parser("wear", help="disk writes per day and how long the SD card lasts at this rate")
     we.add_argument("--json", action="store_true")
