@@ -508,7 +508,9 @@ def test_feed_poll_conditional_and_job(config, db, web):
     out = feeds_job(ctx)
     assert out.value >= 1 and out.result["polled"] == 3
     assert db.scalar("SELECT errors FROM feeds WHERE url LIKE '%/bad'") == 1
-    assert db.scalar("SELECT depth FROM frontier WHERE url='https://example.org/e1'") == 99
+    # the Atom feed lives on 127.0.0.1 but links to example.org: summary kept, the other site never fetched
+    assert db.scalar("SELECT COUNT(*) FROM frontier WHERE url='https://example.org/e1'") == 0
+    assert db.scalar("SELECT COUNT(*) FROM documents WHERE title='Entry one'") == 1
 
 
 def test_json_job_results_are_serialisable(config, db, web):
@@ -516,3 +518,39 @@ def test_json_job_results_are_serialisable(config, db, web):
     cr = Crawler(db, client(), DocumentStore(db), user_agent="PolymathBot", allow_domains=[])
     out = crawl_job(make_ctx(config, db, services={"crawler": cr}))
     assert json.dumps(out.result) and out.done
+
+
+def test_only_approved_sites_are_ever_fetched(config, db, web):
+    """The crawler fetches only the allow-list and the approved feeds' own sites — never where links lead."""
+    from polymath.senses.crawler import site_of
+
+    assert [site_of(h) for h in ("feeds.npr.org", "rss.nytimes.com", "feeds.bbci.co.uk", "www.bbc.co.uk",
+                                 "news.example.com:8080", "127.0.0.1:9", "localhost")] == [
+        "npr.org", "nytimes.com", "bbci.co.uk", "bbc.co.uk", "example.com", "127.0.0.1", "localhost"]  # fmt: skip
+    web.add("/robots.txt", "", status=404)
+    web.add("/ok", "<p>" + "approved page words here " * 20 + "</p>")
+    web.add("/hop", "", status=302, headers={"Location": f"http://localhost:{web.port}/ok"})  # same server, other site
+    clock = Clock()
+    cr = Crawler(db, client(), DocumentStore(db), user_agent="PolymathBot", allow_domains=["127.0.0.1"], clock=clock)
+    assert cr.permitted("127.0.0.1:5") and not cr.permitted("evil.example.net")
+    cr.frontier.add("https://evil.example.net/page", priority=9.0, depth=99)  # e.g. queued before this rule existed
+    out = cr.step()
+    assert out == {"action": "skipped", "url": "https://evil.example.net/page", "reason": "not an approved site"}
+    assert db.scalar("SELECT reason FROM frontier WHERE url='https://evil.example.net/page'") == "not an approved site"
+    cr.frontier.add(web.base + "/hop", priority=5.0)
+    assert cr.step()["action"] == "robots"
+    clock.t += 5
+    out = cr.step()
+    assert out["action"] == "skipped" and out["reason"] == "redirected off the approved sites"
+    assert not db.scalar("SELECT COUNT(*) FROM documents WHERE source='web'")
+    feeds_cr = Crawler(db, client(), DocumentStore(db), user_agent="PolymathBot", allow_domains=[],
+                       feed_sites=["www.nature.com"])  # fmt: skip
+    assert feeds_cr.permitted("nature.com") and feeds_cr.permitted("www.nature.com")
+    assert not feeds_cr.permitted("nature.example.com")
+
+
+def test_default_feeds_link_only_to_their_own_sites():
+    """No aggregator whose items point anywhere on the web is in the default feed list."""
+    from polymath.senses.sources import SAMPLE_FEEDS
+
+    assert not [u for u in SAMPLE_FEEDS if "hnrss" in u or "reddit" in u]

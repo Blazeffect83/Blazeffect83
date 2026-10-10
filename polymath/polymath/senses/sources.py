@@ -261,7 +261,6 @@ SAMPLE_FEEDS = [
     "https://www.raspberrypi.com/news/feed/",
     "https://blog.python.org/feeds/posts/default",
     "https://lwn.net/headlines/rss",
-    "https://hnrss.org/frontpage",
     "https://www.quantamagazine.org/feed/",
     "https://www.eurekalert.org/rss/technology_engineering.xml",
     "https://www.eurekalert.org/rss.xml",

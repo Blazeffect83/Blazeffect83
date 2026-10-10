@@ -12,7 +12,7 @@ from the code.
 | pubmed | biomedical citations and abstracts, MeSH | `ftp.ncbi.nlm.nih.gov/pubmed/updatefiles` (HTTPS) | NLM terms; abstracts may be © publishers |
 | gutenberg | public-domain books | catalog `pg_catalog.csv.gz` and texts from the official mirror `gutenberg.pglaf.org` | public domain in the USA (PG license for the e-text) |
 | stackexchange | questions and accepted/high-score answers | `archive.org/download/stackexchange/<site>.7z` | CC BY-SA (version per post) |
-| feed | RSS 2.0 / RDF / Atom items | your `senses.feeds`, or the built-in list of 47 public science/tech/news feeds | per publisher, recorded per item |
+| feed | RSS 2.0 / RDF / Atom items | your `senses.feeds`, or the built-in list of 46 public science/tech/news feeds (no aggregators) | per publisher, recorded per item |
 | web | pages from allow-listed domains | the crawler, from `senses.seeds` (or built-in reference sites) and links within the allow list | Creative Commons when the page declares it, else "unknown" |
 
 ## Politeness and safety
@@ -26,8 +26,14 @@ from the code.
   - At most **1 request per second per host**, enforced by a persisted token bucket of capacity 1, so restarts
     cannot burst. `crawl_rate` can only lower this.
   - Errors back off exponentially, and `429`/`Retry-After` is honoured.
-  - Only allow-listed domains are crawled: the seeds' own hosts, plus hosts you add with
-    `polymath learn <url>`.
+  - **Only approved sites are ever fetched.** The crawler checks every URL just before fetching it, including
+    URLs queued earlier and redirect targets. A URL passes only if it is on one of:
+    - the allow list: the seeds' own hosts, plus hosts you add with `polymath learn <url>`;
+    - the site of an approved feed (an article page on, say, `nature.com` from Nature's feed; its links are not
+      followed).
+
+    A link or redirect to any other site is never fetched. There is no web search, and the crawler cannot
+    wander off to sites nobody chose.
 - **Feeds** are polled at most hourly, with conditional requests (ETag / Last-Modified). A feed is checked
   against its host's robots.txt before polling.
 - **Dumps** are downloaded with resumable range requests. Once a file has been read into the database it is

@@ -77,12 +77,14 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
         {crawler.host_of(u) for u in config.senses.seeds if crawler.host_of(u)}
     )
     allow += [d for d in (db.kv_get("user_allow_domains", []) or []) if d not in allow]
+    feed_sites = sorted({crawler.site_of(crawler.host_of(u)) for u in config.senses.feeds if crawler.host_of(u)})
     crawl = crawler.Crawler(
         db,
         http,
         docs,
         user_agent=http.user_agent,
         allow_domains=allow,
+        feed_sites=feed_sites,
         max_bytes=config.senses.crawl_max_bytes,
         rate=config.senses.crawl_rate,
     )

@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 
 from polymath.core.jobs import JobContext, JobOutcome
 from polymath.memory.documents import Document, DocumentStore
-from polymath.senses.crawler import Frontier, domain_allowed, host_of, normalize_url
+from polymath.senses.crawler import Frontier, domain_allowed, host_of, normalize_url, site_of
 from polymath.senses.html_text import extract
 from polymath.senses.net import FetchError, HttpClient
 from polymath.senses.safexml import UnsafeXML, parse_untrusted_xml
@@ -110,6 +110,7 @@ def poll_feed(
         f"publisher terms ({feed.rights})" if feed.rights else "unknown (publisher feed; stored for private learning)"
     )
     new = 0
+    feed_site = site_of(host_of(url))
     for item in feed.items:
         text = extract(f"<p>{item.summary}</p>").text if "<" in item.summary else item.summary.strip()
         body = f"{item.title}\n\n{text}".strip()
@@ -129,8 +130,11 @@ def poll_feed(
         )
         new += status in {"new", "updated"}
         if item.link and (norm := normalize_url(item.link)):
-            depth = 0 if domain_allowed(host_of(norm), allow_domains) else 99  # fetch the item page only
-            frontier.add(norm, priority=1.0, depth=depth)
+            if domain_allowed(host_of(norm), allow_domains):
+                frontier.add(norm, priority=1.0, depth=0)
+            elif site_of(host_of(norm)) == feed_site:
+                frontier.add(norm, priority=1.0, depth=99)  # the feed's own article page; links not followed
+            # a link to any other site is never fetched: the feed's summary is all that is kept
     db.execute(
         "INSERT INTO feeds(url, title, etag, last_modified, last_checked, items_seen) VALUES(?,?,?,?,?,?) "
         "ON CONFLICT(url) DO UPDATE SET title=excluded.title, etag=excluded.etag, last_modified=excluded.last_modified,"

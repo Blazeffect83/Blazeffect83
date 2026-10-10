@@ -80,6 +80,23 @@ def domain_allowed(host: str, allow: list[str]) -> bool:
     return any(name == d or name.endswith("." + d) for d in allow)
 
 
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu", "or", "ne", "go"}
+
+
+def site_of(host: str) -> str:
+    """The site a host belongs to, roughly its registrable domain.
+
+    ``feeds.npr.org`` → ``npr.org``; ``rss.nytimes.com`` → ``nytimes.com``; ``feeds.bbci.co.uk`` → ``bbci.co.uk``.
+    """
+    name = (host.rsplit(":", 1)[0] if host.count(":") == 1 else host).lower().strip(".")
+    if ":" in name or name.replace(".", "").isdigit():
+        return name  # an IP address is its own site
+    parts = name.split(".")
+    if len(parts) >= 3 and len(parts[-1]) == 2 and parts[-2] in _SECOND_LEVEL:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
 class TokenBucket:
     """Classic token bucket; with capacity 1 it enforces a strict minimum interval."""
 
@@ -233,6 +250,7 @@ class Crawler:
         *,
         user_agent: str,
         allow_domains: list[str],
+        feed_sites: list[str] | None = None,
         max_bytes: int = 5_000_000,
         max_depth: int = 3,
         rate: float = 1.0,
@@ -243,6 +261,8 @@ class Crawler:
         self.store = store
         self.agent = user_agent
         self.allow = [d.lower().lstrip(".") for d in allow_domains]
+        # sites of the approved news/science feeds: their own article pages may be fetched (never followed further)
+        self.feed_sites = {site_of(s) for s in (feed_sites or [])}
         self.max_bytes = max_bytes
         self.max_depth = max_depth
         self.frontier = Frontier(db, rate=rate, clock=clock)
@@ -281,12 +301,20 @@ class Crawler:
         self._robots[host] = robots
         return robots
 
+    def permitted(self, host: str) -> bool:
+        """Only approved sites are ever fetched: the crawl allow-list (reference sites, and sites you asked it to
+        learn from) and the sites of the approved feeds. Nothing else, whatever links point to."""
+        return domain_allowed(host, self.allow) or site_of(host) in self.feed_sites
+
     # ------------------------------------------------------------------- steps
     def step(self) -> dict[str, Any]:
         """Perform at most one HTTP request. Returns what happened."""
         item = self.frontier.next_ready()
         if item is None:
             return {"action": "none"}
+        if not self.permitted(item.host):
+            self.frontier.mark(item.url, "skipped", reason="not an approved site")
+            return {"action": "skipped", "url": item.url, "reason": "not an approved site"}
         scheme = urlsplit(item.url).scheme
         robots = self.robots(item.host)
         if robots is None:
@@ -328,6 +356,9 @@ class Crawler:
             self.frontier.mark(item.url, "failed", status=resp.status, reason=f"HTTP {resp.status}")
             return {"action": "failed", "url": item.url, "status": resp.status}
         final = normalize_url(resp.url) or item.url
+        if not self.permitted(host_of(final)):
+            self.frontier.mark(item.url, "skipped", status=resp.status, reason="redirected off the approved sites")
+            return {"action": "skipped", "url": item.url, "reason": "redirected off the approved sites"}
         ctype = resp.content_type
         etag, lm = resp.headers.get("etag"), resp.headers.get("last-modified")
         if ctype in FEED_TYPES or (ctype in {"application/xml", "text/xml"} and b"<rss" in resp.body[:2000]):
