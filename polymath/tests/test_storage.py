@@ -265,7 +265,7 @@ def test_sync_records_arrivals_departures_and_returns(config, db, caplog):
     assert "was unplugged; its documents wait for it" in texts[1] and "is back" in texts[2]
     assert "storage" in text_of(render_event({"kind": "storage", "event": "full", "name": "X", "at": 0}))
     db.kv_set("disk_budget_bytes", 15 * GB)
-    line2 = text_of(status_lines(f.status())[1])
+    line2 = text_of(status_lines(f.status())[2])
     assert "brain 915.00 GB (1 drive)" in line2
 
 

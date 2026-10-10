@@ -19,12 +19,26 @@ function addLine(segs) {
   while (feed.children.length > MAX_LINES) feed.lastElementChild.remove();
 }
 
+function setNow(banner, el, st) {
+  // what it is doing right now: large, high-contrast, coloured by state
+  let text = "waiting for the agent…", cls = "off";
+  if (st && !st.online) { text = "not running"; cls = "off"; }
+  else if (st && (st.state === "paused" || st.mode === "pause")) { text = "paused" + (st.paused_reason ? ` — ${st.paused_reason}` : ""); cls = "warn"; }
+  else if (st) {
+    const a = st.activity || "starting up";
+    text = a.charAt(0).toUpperCase() + a.slice(1) + (st.mode === "throttle" ? " (slowed: running hot)" : st.mode === "yield" ? " (slowed: low on disk)" : "");
+    cls = "on";
+  }
+  el.textContent = text;
+  banner.className = "now-banner " + cls;
+}
+
 function status(st, badge) {
   const s = $("#state");
   if (!st || !st.online) { s.textContent = st ? (st.state === "stopped" ? "agent stopped" : "agent offline") : "connecting…"; s.className = "s-red"; }
   else if (st.state === "paused" || ["pause", "throttle", "yield"].includes(st.mode)) { s.textContent = {pause: "paused", throttle: "throttled", yield: "slowed"}[st.mode] || "paused"; s.className = "s-yellow"; }
   else { s.textContent = "● learning"; s.className = "s-green"; }
-  $("#now").textContent = st && st.online && st.activity ? `now: ${st.activity}` : "";
+  setNow($("#now-banner"), $("#now"), st);
   const c = (st && st.counts) || {};
   const q = c.quiz ? ` · quiz ${Math.round(c.quiz.accuracy * 100)}%` : "";
   $("#counts").textContent = st ? `${compact(c.documents)} docs · ${compact(c.facts)} facts · ${c.rules || 0} rules${q}` : "";

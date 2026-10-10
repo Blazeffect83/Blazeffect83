@@ -97,8 +97,14 @@ The CLI reads the same configuration as the service (`/etc/polymath/polymath.tom
 | `report` / `backup` / `error` | nightly report, backups, failed job slices (with retry or give-up) |
 
 Busy streams are capped per refresh (for example 5 facts and 4 documents every 1.5 s), and the rest are counted
-(`+4,312 more facts`), so a Wikidata ingest stays readable. The pinned header shows the state, what it is doing
-now, its knowledge counts, the latest quiz score and the CPU temperature.
+(`+4,312 more facts`), so a Wikidata ingest stays readable. The pinned header shows:
+- the state, and the version top right;
+- **a NOW line** with what it is doing right now, highlighted (cyan; yellow when paused; red when not running);
+- its knowledge counts, the latest quiz score and the CPU temperature.
+
+The feed window uses a larger font (14 pt) than other terminals. Change it with `POLYMATH_FEED_FONT_SIZE`, or
+edit `~/.config/polymath-feed/lxterminal/lxterminal.conf` (your other terminals are not affected). The dashboard
+and the `/live` page show the same NOW line as a large banner.
 
 **Version, top right.** `v0.2.0 · ab12cd3 · 2026-10-10 ✓` is the installed version, git commit and commit date;
 `✓` means the running agent was started from exactly that build. `↻ agent still on v0.1.0` means an update is

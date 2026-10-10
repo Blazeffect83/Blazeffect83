@@ -77,7 +77,7 @@ h3.sub { font-size: 13px; color: var(--muted); margin: 14px 0 6px; font-weight: 
 
 /* the live page: made for a phone */
 body.live { min-height: 100vh; display: flex; flex-direction: column; }
-.live-head { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+.live-head { background: var(--panel); border-bottom: 1px solid var(--line);
   display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; padding: 14px 16px; align-items: center; }
 .live-face { font: 700 28px/1 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; white-space: pre; min-width: 10ch; }
 .live-info { min-width: 0; font-size: 14px; }
@@ -90,3 +90,13 @@ body.live { min-height: 100vh; display: flex; flex-direction: column; }
 .live-foot { color: var(--muted); font-size: 12px; text-align: center; padding: 12px; }
 .live-foot a { color: var(--accent); }
 @media (min-width: 900px) { .live-main { max-width: 1100px; margin: 0 auto; width: 100%; } }
+
+/* NOW: what it is doing, readable from across the room */
+.now-banner { display: flex; align-items: center; gap: 14px; padding: 14px 22px; font-size: 22px; font-weight: 700;
+  line-height: 1.25; border-bottom: 1px solid var(--line); background: rgba(57,197,207,.10); overflow-wrap: anywhere; }
+.now-banner .now-tag { flex: none; font-size: 15px; letter-spacing: 1px; padding: 4px 10px; border-radius: 6px;
+  background: var(--s6); color: #0b1015; }
+.now-banner.warn { background: rgba(210,153,34,.14); } .now-banner.warn .now-tag { background: var(--warn); }
+.now-banner.off { background: rgba(248,81,73,.12); } .now-banner.off .now-tag { background: var(--bad); color: #fff; }
+body.live .now-banner { position: sticky; top: 0; z-index: 3; font-size: 24px; padding: 16px; }
+@media (max-width: 520px) { .now-banner { font-size: 20px; padding: 12px 14px; } }

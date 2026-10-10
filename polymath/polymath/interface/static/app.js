@@ -195,10 +195,24 @@ async function pollFace() {
     faceCursor = d.cursor || faceCursor;
     PolyFace.update(d.face);
     if (d.status && !d.status.online) PolyFace.offline();
+    setNow(d.status);
     const b = $("#badge");
     b.textContent = d.badge ? d.badge.text : "";
     b.className = "badge " + (d.badge && d.badge.current === false ? "s-byellow" : "muted");
-  } catch (e) { PolyFace.update(null); }
+  } catch (e) { PolyFace.update(null); setNow(null); }
+}
+
+function setNow(st) {
+  let text = "waiting for the agent…", cls = "off";
+  if (st && !st.online) { text = "not running"; }
+  else if (st && (st.state === "paused" || st.mode === "pause")) { text = "paused" + (st.paused_reason ? ` — ${st.paused_reason}` : ""); cls = "warn"; }
+  else if (st) {
+    const a = st.activity || "starting up";
+    text = a.charAt(0).toUpperCase() + a.slice(1) + (st.mode === "throttle" ? " (slowed: running hot)" : st.mode === "yield" ? " (slowed: low on disk)" : "");
+    cls = "on";
+  }
+  $("#now").textContent = text;
+  $("#now-banner").className = "now-banner " + cls;
 }
 
 function list(el, lines, empty) {

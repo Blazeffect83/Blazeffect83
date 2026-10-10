@@ -205,7 +205,10 @@ def feed_env(tmp_path: Path, terminals: tuple[str, ...]) -> dict[str, str]:
     bindir.mkdir(exist_ok=True)
     for name in terminals:
         fake = bindir / name
-        fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {tmp_path}/{name}.args\n')
+        fake.write_text(
+            f'#!/bin/sh\nprintf "%s\\n" "$@" > {tmp_path}/{name}.args\n'
+            f'printf "%s\\n" "$XDG_CONFIG_HOME" > {tmp_path}/{name}.env\n'
+        )
         fake.chmod(0o755)
     return {
         "PATH": f"{bindir}:/usr/bin:/bin",
@@ -220,6 +223,10 @@ def test_open_feed_prefers_lxterminal_and_opens_one_window(tmp_path):
     subprocess.run([script], env=env, check=True, timeout=30)
     args = (tmp_path / "lxterminal.args").read_text().splitlines()
     assert args == ["--no-remote", "--title=Polymath — live feed", "--geometry=120x36", "-e", f"{script} --inside"]
+    conf = tmp_path / ".config/polymath-feed/lxterminal/lxterminal.conf"
+    assert "fontname=Monospace 14" in conf.read_text()  # a bigger font for this window only
+    assert (tmp_path / "lxterminal.env").read_text().strip() == str(tmp_path / ".config/polymath-feed")
+    conf.write_text("[general]\nfontname=Monospace 18\n")  # the user's own change survives the next launch
     assert not (tmp_path / "xterm.args").exists()
     import fcntl
 
@@ -230,13 +237,15 @@ def test_open_feed_prefers_lxterminal_and_opens_one_window(tmp_path):
         assert not (tmp_path / "lxterminal.args").exists()  # autostart: nothing more
         subprocess.run([script, "--new"], env=env, check=True, timeout=30)
         assert (tmp_path / "lxterminal.args").exists()  # the menu entry always opens a window
+    assert "Monospace 18" in conf.read_text()
 
 
 @pytest.mark.parametrize(
     ("terminal", "expected"),
     [
-        ("foot", ["--title=Polymath — live feed", "--window-size-chars=120x36", "{script}", "--inside"]),
-        ("xterm", ["-T", "Polymath — live feed", "-geometry", "120x36", "-fa", "Monospace", "-fs", "11", "-e",
+        ("foot", ["--title=Polymath — live feed", "--window-size-chars=120x36", "--font=monospace:size=14", "{script}",
+                  "--inside"]),
+        ("xterm", ["-T", "Polymath — live feed", "-geometry", "120x36", "-fa", "Monospace", "-fs", "14", "-e",
                    "{script}", "--inside"]),
         ("x-terminal-emulator", ["-T", "Polymath — live feed", "-e", "{script}", "--inside"]),
     ],

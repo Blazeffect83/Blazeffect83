@@ -748,6 +748,10 @@ ANSI = {
     "byellow": "1;33",
     "bcyan": "1;36",
     "bmagenta": "1;35",
+    "bright": "1;97",  # bold bright white: the NOW line's text
+    "now": "1;30;46",  # black on cyan: the NOW tag stands out on any terminal theme
+    "nowwarn": "1;30;43",  # black on yellow
+    "nowoff": "1;37;41",  # white on red
 }
 ASCII_FALLBACK = {
     "→": "->",
@@ -789,6 +793,7 @@ ASCII_FALLBACK = {
     "◞": "|",
     "◟": "/",
     "↻": "~",
+    "▶": ">",
 }
 
 
@@ -992,12 +997,32 @@ def render_event(e: dict[str, Any]) -> list[Seg]:
     return [*head, _tag(str(k), ""), (json.dumps(e, default=str)[:200], "dim")]
 
 
+def now_line(st: dict[str, Any]) -> list[Seg]:
+    """The header's second line: what it is doing right now, large and clear (a highlighted NOW tag)."""
+    if not st.get("online"):
+        return [(" NOW ", "nowoff"), ("  not running", "red")]
+    if st.get("state") == "paused" or st.get("mode") == "pause":
+        return [
+            (" NOW ", "nowwarn"),
+            ("  paused", "byellow"),
+            (f" — {st.get('paused_reason') or 'cooling down'}", "yellow"),
+        ]
+    activity = str(st.get("activity") or "starting up")
+    segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
+    if st.get("mode") in {"throttle", "yield"}:
+        segs.append(
+            ("  (slowed: " + ("running hot" if st.get("mode") == "throttle" else "low on disk") + ")", "yellow")
+        )
+    return segs
+
+
 def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[Seg]]:
-    """The pinned header: state and activity, then knowledge counts."""
+    """The pinned header: state, then what it is doing now (its own line), then knowledge counts."""
     if st is None or offline:
         return [
             [(" POLYMATH ", "bold"), (" ○ ", "yellow"), (offline or "connecting…", "yellow")],
-            [(" waiting for the agent; the feed starts by itself", "dim")],
+            [(" NOW ", "nowoff"), ("  waiting for the agent", "yellow")],
+            [(" the feed starts by itself", "dim")],
         ]
     state = st.get("state", "")
     if not st.get("online"):
@@ -1012,10 +1037,6 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[S
     line1: list[Seg] = [(" POLYMATH ", "bold"), (f" {dot[0]} ", dot[1]), (label, dot[1])]
     if st.get("cycle") is not None:
         line1.append((f"   cycle {int(st['cycle']):,}", "dim"))
-    if st.get("activity") and st.get("online"):
-        line1 += [("   now: ", "dim"), (str(st["activity"]), "bold")]
-    if st.get("paused_reason"):
-        line1.append((f"   ({st['paused_reason']})", "yellow"))
     c = st.get("counts") or {}
     line2: list[Seg] = [
         (f" {compact(c.get('documents', 0))} docs · {compact(c.get('entities', 0))} things · ", ""),
@@ -1035,7 +1056,7 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[S
     if st.get("temp_c") is not None:
         hot = float(st["temp_c"]) >= 75
         line2.append((f" · {st['temp_c']:.0f} °C", "yellow" if hot else "dim"))
-    return [line1, line2]
+    return [line1, now_line(st), line2]
 
 
 def badge(installed: Build, st: dict[str, Any] | None) -> list[Seg]:
@@ -1109,7 +1130,7 @@ def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
 class Screen:
     """Terminal output: a pinned header above a scrolling feed (tty), or plain lines (pipe / dumb terminal)."""
 
-    HEADER = 3
+    HEADER = 4  # state · NOW · counts · rule
 
     def __init__(self, out: TextIO, *, color: bool, fancy: bool, clock: Callable[[], float] = time.time) -> None:
         self.out = out

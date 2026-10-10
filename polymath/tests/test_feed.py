@@ -282,14 +282,21 @@ def test_status_lines_and_states():
     base = {"online": True, "state": "running", "cycle": 1234, "activity": "reading Wikipedia articles",
             "mode": "normal", "temp_c": 61.0, "counts": {"documents": 12_345, "entities": 2_000_000, "facts": 3_456_789,
             "inferred": 19_917, "disputed": 12, "rules": 270, "agents": 6, "quiz": {"accuracy": 0.815, "chance": 0.25}}}  # fmt: skip
-    l1, l2 = (text_of(x) for x in status_lines(base))
-    assert "● learning" in l1 and "cycle 1,234" in l1 and "now: reading Wikipedia articles" in l1
+    l1, now, l2 = (text_of(x) for x in status_lines(base))
+    assert "● learning" in l1 and "cycle 1,234" in l1 and now == " NOW   Reading Wikipedia articles"
     assert l2 == (" 12,345 docs · 2.00M things · 3.46M facts (19,917 inferred, 12 disputed) · 270 rules"
                   " · quiz 82% · 6 agents · 61 °C")  # fmt: skip
     hot = text_of(status_lines(base | {"mode": "throttle", "temp_c": 76.0})[0])
     assert "throttled" in hot
     paused = text_of(status_lines(base | {"state": "paused", "mode": "pause", "paused_reason": "disk"})[0])
-    assert "paused" in paused and "(disk)" in paused
+    assert "paused" in paused
+    assert (
+        text_of(status_lines(base | {"state": "paused", "mode": "pause", "paused_reason": "disk"})[1])
+        == " NOW   paused — disk"
+    )
+    assert "slowed: running hot" in text_of(status_lines(base | {"mode": "throttle"})[1])
+    assert "not running" in text_of(status_lines(base | {"online": False})[1])
+    assert "waiting for the agent" in text_of(status_lines(None)[1])
     assert "agent offline" in text_of(status_lines(base | {"online": False})[0])
     assert "agent stopped" in text_of(status_lines(base | {"online": False, "state": "stopped"})[0])
     assert "waiting: x" in text_of(status_lines(None, offline="waiting: x")[0])
@@ -374,7 +381,7 @@ def test_run_fancy_pins_header_spreads_lines_and_restores_terminal(monkeypatch):
     slept: list[float] = []
     assert feed.run(source, out=out, color=True, fancy=True, once=True, sleep=slept.append) == 0
     text = out.getvalue()
-    assert text.startswith("\033[?25l\033[2J\033[4;24r\033[24;1H")  # hide cursor, clear, scroll region below header
+    assert text.startswith("\033[?25l\033[2J\033[5;24r\033[24;1H")  # hide cursor, clear, scroll region below header
     assert "\0337\033[1;1H\033[2K" in text and "\0338" in text  # header drawn in place, cursor restored
     assert text.endswith("\033[r\033[?25h\033[24;1H\n")  # region reset, cursor shown
     assert len(slept) == 3 and all(s == 0.25 for s in slept)  # a batch is spread out
@@ -397,7 +404,7 @@ def test_resize_redraws_region(monkeypatch):
     s.start()
     s._on_resize()
     s.header(status_lines(status()))
-    assert "\033[4;40r" in out.getvalue() and s.cols == 120
+    assert "\033[5;40r" in out.getvalue() and s.cols == 120
 
 
 def test_wants_color():
