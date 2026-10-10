@@ -115,6 +115,14 @@ class LearningConfig:
 
 
 @dataclass
+class AgentsConfig:
+    max_agents: int = 12  # user-created + evolved agents, active at once
+    evolve: bool = True  # strong agents fork mutated children; weak evolved children retire
+    step_interval: float = 120.0  # seconds between agent society slices
+    min_tasks_to_judge: int = 30  # verified tasks before an agent can be forked or retired
+
+
+@dataclass
 class DashboardConfig:
     host: str = "0.0.0.0"
     port: int = 8765
@@ -128,6 +136,7 @@ class Config:
     senses: SensesConfig = field(default_factory=SensesConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
     log_level: str = "INFO"
 
     def validate(self) -> None:
@@ -141,6 +150,8 @@ class Config:
             raise ConfigError("body.backup_keep must be between 1 and 365")
         if self.learning.embedding_dim not in range(16, 513):
             raise ConfigError("learning.embedding_dim must be between 16 and 512")
+        if not 1 <= self.agents.max_agents <= 100:
+            raise ConfigError("agents.max_agents must be between 1 and 100")
         if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
             raise ConfigError(f"unknown log_level {self.log_level!r}")
 

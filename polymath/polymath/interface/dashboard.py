@@ -167,6 +167,21 @@ class DashboardData:
         ]
         return {"top": top, "weakest": weakest, "decisions": decisions}
 
+    def agents(self) -> dict[str, Any]:
+        from polymath.interface.cli import agents_list
+
+        db = self.db()
+        if not db.scalar("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agents'"):
+            return {"agents": [], "rewards": []}
+        rewards = [
+            dict(r)
+            for r in db.query(
+                "SELECT r.at, a.name, r.amount, r.reason FROM agent_rewards r JOIN agents a ON a.id=r.agent_id "
+                "ORDER BY r.id DESC LIMIT 25"
+            )
+        ]
+        return {"agents": agents_list(db), "rewards": rewards}
+
     def knowledge(self, q: str) -> dict[str, Any]:
         from polymath.interface.answer import render_value
         from polymath.memory.graph import KnowledgeGraph
@@ -271,6 +286,8 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._json(200, data.timeseries())
                 if path == "/api/topics":
                     return self._json(200, data.topics())
+                if path == "/api/agents":
+                    return self._json(200, data.agents())
                 if path == "/api/knowledge":
                     q = (parse_qs(url.query).get("q") or [""])[0][:200]
                     return self._json(200, data.knowledge(q) if q.strip() else {"query": "", "entities": []})

@@ -440,6 +440,179 @@ def cmd_restore(config: Config, args: argparse.Namespace) -> int:
     return 0
 
 
+def _agents_write(config: Config, payload: dict[str, Any]) -> tuple[str, Any]:
+    """Apply an agent command: through the running agent's inbox, or directly when it is stopped."""
+    from polymath.agents import society
+
+    if agent_running(config):
+        path = inbox.submit(
+            config.paths.data_dir,
+            {"type": "enqueue", "kind": "agents.command", "payload": payload,
+             "key": f"agents:{payload['op']}:{time.time_ns()}", "priority": 4.0},
+        )  # fmt: skip
+        return "inbox", path.name
+    check_storage(config)
+    db = open_database(config.paths.db_path)
+    try:
+        with db.transaction():
+            op = payload["op"]
+            if op == "spawn":
+                a = society.spawn(db, payload["directive"], name=payload.get("name"))
+                return "database", a
+            if op == "task":
+                tid = society.give_task(db, payload["agent"], payload["text"])
+                from polymath.agents import skills, store
+
+                agent = store.get(db, payload["agent"])
+                assert agent is not None
+                import random
+
+                skills.answer_pending(
+                    skills.Runtime(db, Scheduler(db), config, {}, agent, random.Random())
+                )  # answer now: nobody else will
+                return "database", tid
+            if op == "feedback":
+                return "database", society.feedback(
+                    db, int(payload["task"]), payload["verdict"], payload.get("note", "")
+                )
+            from polymath.agents import store
+
+            agent = store.get(db, payload["agent"])
+            if agent is None:
+                raise KeyError(f"no agent called {payload['agent']!r}")
+            store.set_status(db, agent.id, {"pause": "paused", "resume": "active", "retire": "retired"}[op], "by you")
+            return "database", agent.name
+    finally:
+        db.close()
+
+
+def agents_list(db: Database) -> list[dict[str, Any]]:
+    from polymath.agents import store
+
+    out = []
+    for a in store.all_agents(db):
+        out.append(
+            {
+                "name": a.name, "kind": a.kind, "directive": a.directive, "status": a.status, "level": a.level,
+                "xp": round(a.xp, 2), "reward": round(a.reward_total, 2), "correct": a.tasks_correct,
+                "wrong": a.tasks_wrong, "accuracy": None if a.accuracy is None else round(a.accuracy, 3),
+                "generation": a.generation, "origin": a.origin,
+                "scope": int(db.scalar("SELECT COUNT(*) FROM agent_scope WHERE agent_id=?", (a.id,), 0)),
+            }
+        )  # fmt: skip
+    return out
+
+
+def agent_detail(db: Database, ident: str, n: int = 15) -> dict[str, Any] | None:
+    from polymath.agents import store
+    from polymath.agents.directives import describe
+
+    a = store.get(db, ident)
+    if a is None:
+        return None
+    tasks = [
+        {**dict(r), "payload": json.loads(r["payload"]), "result": json.loads(r["result"])}
+        for r in db.query(
+            "SELECT id, kind, action, state, reward, reason, created, payload, result FROM agent_tasks "
+            "WHERE agent_id=? ORDER BY id DESC LIMIT ?",
+            (a.id, n),
+        )
+    ]
+    arms = [
+        dict(r)
+        for r in db.query(
+            "SELECT action, n, ROUND(mean, 3) AS mean FROM agent_arms WHERE agent_id=? ORDER BY mean DESC", (a.id,)
+        )
+    ]
+    return {
+        **next(x for x in agents_list(db) if x["name"] == a.name),
+        "purpose": describe(a.kind, a.subject, a.scope.get("qualifier")),
+        "params": {k: v for k, v in a.params.items() if k != "cursor"},
+        "parent": (store.get(db, a.parent).name if a.parent and store.get(db, a.parent) else None),  # type: ignore[union-attr]
+        "preferences": arms,
+        "tasks": tasks,
+    }
+
+
+def cmd_agents(config: Config, args: argparse.Namespace) -> int:
+    op = args.agents_op
+    if op in {"list", "show"}:
+        db = _db(config, readonly=True)
+        try:
+            if op == "list":
+                rows = agents_list(db)
+                if args.json:
+                    print(json.dumps(rows, indent=2))
+                elif not rows:
+                    print('no agents yet — try: polymath agents spawn "research black holes"')
+                else:
+                    print(
+                        f"{'agent':<32} {'kind':<9} {'lvl':>3} {'xp':>7} {'net':>7} {'right':>6} {'wrong':>6} "
+                        f"{'status':<8}"
+                    )
+                    for r in rows:
+                        print(f"{r['name'][:32]:<32} {r['kind']:<9} {r['level']:>3} {r['xp']:>7.1f} "
+                              f"{r['reward']:>7.1f} "
+                              f"{r['correct']:>6} {r['wrong']:>6} {r['status']:<8}")  # fmt: skip
+                return 0
+            detail = agent_detail(db, args.name)
+        finally:
+            db.close()
+        if detail is None:
+            print(f"no agent called {args.name!r}", file=sys.stderr)
+            return 2
+        if args.json:
+            print(json.dumps(detail, indent=2, default=str))
+            return 0
+        acc = "–" if detail["accuracy"] is None else f"{detail['accuracy']:.0%}"
+        print(f"{detail['name']} — {detail['purpose']}  [{detail['status']}, level {detail['level']}, "
+              f"{detail['xp']} XP, net reward {detail['reward']}, accuracy {acc}, "
+              f"scope {detail['scope']} entities]")  # fmt: skip
+        if detail["parent"]:
+            print(f"  forked from {detail['parent']} (generation {detail['generation']})")
+        print("  learned preferences: " + (", ".join(f"{p['action']} {p['mean']:+.2f} (n={p['n']})"
+                                                     for p in detail["preferences"]) or "none yet"))  # fmt: skip
+        for t in detail["tasks"]:
+            what = t["payload"].get("question") or t["payload"].get("title") or t["payload"].get("text") or ""
+            if t["kind"] == "user" and t["result"].get("rendered"):
+                what = f"{what} → {t['result']['rendered'].splitlines()[0]}"
+            print(f"  #{t['id']:<6} {t['kind']:<9} {t['state']:<8} {t['reward']:+.2f}  {str(what)[:90]}")
+        return 0
+    if op == "spawn":
+        payload: dict[str, Any] = {"op": "spawn", "directive": " ".join(args.directive), "name": args.name}
+    elif op == "task":
+        payload = {"op": "task", "agent": args.name, "text": " ".join(args.text)}
+    elif op == "feedback":
+        payload = {"op": "feedback", "task": args.task, "verdict": args.verdict, "note": " ".join(args.note or [])}
+    else:
+        payload = {"op": op, "agent": args.name}
+    try:
+        via, res = _agents_write(config, payload)
+    except KeyError as exc:
+        print(str(exc).strip("'\""), file=sys.stderr)
+        return 2
+    if via == "inbox":
+        print(json.dumps({"queued_via": "inbox", "file": res, "hint": "the running agent applies it within a cycle"}))
+        return 0
+    if op == "spawn":
+        from polymath.agents.directives import describe
+
+        print(f"spawned {res.name}: {describe(res.kind, res.subject, res.scope.get('qualifier'))} "
+              f"(scope {len(res.scope.get('entities', []))} seed entities, "
+              f"{len(res.scope.get('predicates', []))} relations)")  # fmt: skip
+    elif op == "task":
+        db = _db(config, readonly=True)
+        try:
+            row = db.one("SELECT result FROM agent_tasks WHERE id=?", (res,))
+        finally:
+            db.close()
+        rendered = json.loads(row["result"]).get("rendered") if row else None
+        print(f"task #{res}:\n{rendered or '(queued)'}\n\nrate it: polymath agents feedback {res} correct|wrong")
+    else:
+        print(json.dumps(res, default=str))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="polymath", description="Polymath autonomous learning agent")
     p.add_argument("--config", help="path to polymath.toml (default /etc/polymath/polymath.toml)")
@@ -489,6 +662,27 @@ def build_parser() -> argparse.ArgumentParser:
     rs = sub.add_parser("restore", help="replace the database with a backup (agent stopped)")
     rs.add_argument("backup", help="backup file (path, or name inside the backup directory)")
     rs.set_defaults(func=cmd_restore)
+
+    ag = sub.add_parser("agents", help="the agent society: spawn agents with directives, give tasks, reward them")
+    asub = ag.add_subparsers(dest="agents_op", required=True)
+    sp = asub.add_parser("spawn", help='e.g. "research black holes", "watch news about SpaceX", "predict capitals"')
+    sp.add_argument("directive", nargs="+")
+    sp.add_argument("--name", default=None)
+    al = asub.add_parser("list", help="all agents with level, XP and verified results")
+    al.add_argument("--json", action="store_true")
+    sh = asub.add_parser("show", help="one agent: purpose, learned preferences, recent tasks")
+    sh.add_argument("name")
+    sh.add_argument("--json", action="store_true")
+    tk = asub.add_parser("task", help="give an agent a question or task")
+    tk.add_argument("name")
+    tk.add_argument("text", nargs="+")
+    fb = asub.add_parser("feedback", help="reward or penalise a task: correct | wrong")
+    fb.add_argument("task", type=int)
+    fb.add_argument("verdict", choices=["correct", "wrong"])
+    fb.add_argument("note", nargs="*")
+    for ctl in ("pause", "resume", "retire"):
+        asub.add_parser(ctl, help=f"{ctl} an agent").add_argument("name")
+    ag.set_defaults(func=cmd_agents)
 
     d = sub.add_parser("dashboard", help="serve the dashboard (what polymath-dashboard.service starts)")
     d.add_argument("--host", default=None)

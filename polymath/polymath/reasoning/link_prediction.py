@@ -332,20 +332,23 @@ def fit_weights(
     }
 
 
-def calibrate(
+def sample_questions(
     db: Database,
     predictor: LinkPredictor,
     *,
     size: int = 120,
     seed: int | None = None,
+    where: str = "",
+    params: tuple[Any, ...] = (),
     tick: Callable[[], None] | None = None,
-) -> dict[str, Any]:
-    """Learn method weights from visible facts, each hidden from every method while it is asked."""
+) -> list[tuple[list[int], int, dict[str, dict[int, float]]]]:
+    """Leave-one-out training questions from *visible* facts (optionally restricted by ``where`` on ``t``)."""
     from polymath.evaluation.quiz import make_question, questionable_sql
 
     rng = random.Random(seed)
     p31 = db.scalar("SELECT id FROM predicates WHERE key='P31'")
-    rows = db.query(f"{questionable_sql(holdout=False)} ORDER BY RANDOM() LIMIT ?", (size * 4,))
+    sql = questionable_sql(holdout=False) + (f" AND ({where})" if where else "")
+    rows = db.query(f"{sql} ORDER BY RANDOM() LIMIT ?", (*params, size * 4))
     samples = []
     for t in rows:
         q = make_question(db, t, rng, int(p31) if p31 is not None else None)
@@ -357,6 +360,36 @@ def calibrate(
             tick()  # long-running: keep the systemd watchdog fed
         if len(samples) >= size:
             break
+    return samples
+
+
+def mean_loglik(samples: list[tuple[list[int], int, dict[str, dict[int, float]]]], weights: dict[str, float]) -> float:
+    """Average log-likelihood of the right answers under ``weights`` (higher is better; chance is −log(options))."""
+    if not samples:
+        return 0.0
+    w = np.array([float(weights.get(m, 0.0)) for m in METHODS])
+    total = 0.0
+    for options, answer, ev in samples:
+        mat = np.zeros((len(options), len(METHODS)))
+        for j, m in enumerate(METHODS):
+            if m in ev:
+                mat[:, j] = [math.log(ev[m].get(o, 0.0) + EPS) for o in options]
+        z = mat @ w
+        a = options.index(answer)
+        total += float(z[a] - z.max() - math.log(np.exp(z - z.max()).sum()))
+    return total / len(samples)
+
+
+def calibrate(
+    db: Database,
+    predictor: LinkPredictor,
+    *,
+    size: int = 120,
+    seed: int | None = None,
+    tick: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Learn method weights from visible facts, each hidden from every method while it is asked."""
+    samples = sample_questions(db, predictor, size=size, seed=seed, tick=tick)
     fit = fit_weights(samples)
     db.kv_set("link_weights", fit)
     predictor.weights = dict(fit["weights"])

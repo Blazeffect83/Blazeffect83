@@ -43,6 +43,7 @@ class Components:
 
 
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
+    from polymath.agents import society
     from polymath.body import maintenance
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
@@ -127,6 +128,10 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
+    reg("agents.step", society.step_job, "Agent society: give agents their turns", action="agents")
+    reg("agents.verify", society.verify_job, "Agent society: settle and reward verified tasks", action="agents")
+    reg("agents.evolve", society.evolve_job, "Agent society: fork strong agents, retire weak ones", action="agents")
+    reg("agents.command", society.command_job, "Agent society: apply your commands", action="agents")
     reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
     reg("body.housekeeping", maintenance.housekeeping_job, "Prune old job and cycle records", action="maintain")
     reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
@@ -146,6 +151,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, djobs.planner),
             (300.0, vjobs.planner),
             (600.0, maintenance.planner),
+            (60.0, society.planner),
         ]
         if planners
         else []

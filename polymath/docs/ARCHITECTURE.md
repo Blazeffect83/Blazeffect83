@@ -63,7 +63,30 @@ Each cycle:
 | `reasoning` | source reliability (truth discovery), contradictions, rule learning + forward chaining, link prediction |
 | `drive` | PageRank, topic priorities (curiosity), targeted reading, user-requested learning, the bandit |
 | `evaluation` | held-out facts, quizzes, nightly report |
+| `agents` | the agent society: directives → scopes, skills with verifiable tasks, rewards, per-agent learning, evolution |
 | `interface` | CLI, answering engine, dashboard |
+
+## The agent society
+
+Agents are logical: they share the one process and the one CPU budget, so the Pi is not oversubscribed. Their
+work runs in four jobs, all in the `agents` action group:
+
+- **`agents.step`** (every 2 minutes) runs turns until the slice budget is spent:
+  - it picks an agent by Thompson sampling on verified reward per step;
+  - the agent answers your pending questions;
+  - the agent picks an action with its own arms;
+  - the action records tasks, and immediately verifiable ones are rewarded on the spot.
+- **`agents.verify`** (every 15 minutes) settles delayed tasks: predictions against newly arrived facts,
+  disputes, and reading requests.
+- **`agents.evolve`** (daily) forks, judges and adopts.
+- **`agents.command`** applies your CLI commands, through the inbox while the agent runs.
+
+The state lives in five tables:
+- `agents`: directive, kind, scope, heritable parameters, XP and level, totals;
+- `agent_scope`;
+- `agent_tasks`: every task with its action, state, reward and reason;
+- `agent_rewards`: the ledger;
+- `agent_arms`: per-agent action preferences.
 
 ## Storage layout (`/srv/polymath`)
 

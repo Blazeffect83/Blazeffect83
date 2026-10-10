@@ -40,6 +40,22 @@ polymath why "Black holes"                       # why it is (or is not) working
 polymath status                                  # health, queue, knowledge counts
 ```
 
+### Agents with their own directives
+
+Spawn as many specialised agents as you like. Each one learns on its own and earns rewards **only when its work is
+verified correct**: against hidden facts, against facts that arrive later in the dumps, or against your verdict.
+Rewards add up to XP and levels. Agents that do well get more of the CPU and fork mutated children that compete
+with them. A child that does better passes its traits back to your agent.
+
+```bash
+polymath agents spawn "research black holes"          # also: "watch news about SpaceX", "fact-check populations",
+polymath agents spawn "predict the country of cities" #       "answer questions about chemistry", …
+polymath agents task research-black-holes "What is a quasar?"
+polymath agents feedback 42 correct                   # your verdict is a reward (or a penalty)
+polymath agents list                                  # levels, XP, right / wrong, status
+polymath agents show research-black-holes             # what it learned to prefer, recent tasks
+```
+
 `polymath --help` lists the rest (`report`, `backup`, `restore`, `sources`, `sample`, …).
 
 ## Documentation

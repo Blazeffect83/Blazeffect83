@@ -93,6 +93,22 @@ function table(el, head, rows) {
       : `<tr><td colspan="${head.length}" class="muted">nothing yet</td></tr>`);
 }
 
+function agentsTable(ag) {
+  const rows = ag.agents.filter((a) => a.status !== "retired");
+  const el = $("#t-agents");
+  if (!rows.length) { table(el, ["agent", "directive"], []); }
+  else {
+    el.innerHTML = "<tr><th>agent</th><th>directive</th><th>level</th><th class=num>XP</th><th class=num>net reward</th>" +
+      "<th class=num>right / wrong</th><th>status</th></tr>" + rows.map((a) =>
+      `<tr><td>${esc(a.name)}${a.origin === "evolved" ? ` <span class="muted">gen ${a.generation}</span>` : ""}</td>` +
+      `<td>${esc(a.directive)}</td><td><span class="lvl">${esc(a.level)}</span></td><td class="num">${esc(a.xp)}</td>` +
+      `<td class="num">${esc(a.reward)}</td><td class="num">${esc(a.correct)} / ${esc(a.wrong)}</td><td>${esc(a.status)}</td></tr>`
+    ).join("");
+  }
+  table($("#t-rewards"), ["when", "agent", "reward", "why"], ag.rewards.slice(0, 10).map((r) => [ago(r.at), r.name,
+    (r.amount > 0 ? "+" : "") + Number(r.amount).toFixed(2), r.reason]));
+}
+
 function kpis(o) {
   const q = o.quiz;
   const items = [
@@ -109,7 +125,8 @@ function kpis(o) {
 
 async function refresh() {
   try {
-    const [o, ts, tp] = await Promise.all([get("/api/overview"), get("/api/timeseries"), get("/api/topics")]);
+    const [o, ts, tp, ag] = await Promise.all([get("/api/overview"), get("/api/timeseries"), get("/api/topics"),
+      get("/api/agents")]);
     const hl = $("#health");
     const state = o.health.state || "unknown";
     hl.textContent = o.health.ok ? `running · cycle ${fmt(o.health.cycle)}` : `${state}${o.paused_reason ? ": " + o.paused_reason : ""}`;
@@ -129,6 +146,7 @@ async function refresh() {
     table($("#t-top"), ["topic", "priority", "gap", "importance"], tp.top.map((t) => [t.name, t.priority, t.gap, t.importance]));
     table($("#t-weak"), ["topic", "gap", "importance"], tp.weakest.map((t) => [t.name, t.gap, t.importance]));
     table($("#t-decisions"), ["when", "chose", "why"], tp.decisions.map((d) => [ago(d.at), d.chosen, d.reason]));
+    agentsTable(ag);
     table($("#t-cycles"), ["#", "job", "status", "CPU s", "value"], o.recent_cycles.map((c) => [c.id, c.action, c.status, c.cpu, c.value]));
   } catch (e) {
     $("#health").textContent = "dashboard cannot reach the database";

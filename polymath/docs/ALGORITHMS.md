@@ -159,6 +159,61 @@ English function-word list used by the HTML boilerplate filter.) Where a constan
   - learned source reliability;
   - problems.
 
+## The agent society
+
+You can create any number of agents, each with a plain-English **directive**. The directive is parsed by
+patterns, not a language model, into one of five kinds and a **scope**: the entities, topics, relations and
+keywords it is responsible for.
+
+- **Scope.** It is materialised from:
+  - the seed entity and its neighbours;
+  - the entities linked in documents about the subject or in its topics;
+  - for relation-centred agents, the relation's subjects plus every entity of the relation's dominant type.
+    "predict continents" thus also covers countries that have no continent yet.
+- **Refresh.** The scope is rebuilt every 6 hours as knowledge grows.
+
+Each kind has a repertoire of actions. Every action produces **tasks whose correctness is checked without
+trusting the agent**:
+
+| action | kinds | verified by | reward (✓ / ✗) |
+|---|---|---|---|
+| quiz: a 4-option question on a hidden fact in scope, each fact once | research, predict, verify, answer | the hidden fact, immediately | +1.0 / −0.4 |
+| predict: guess a missing fact, or abstain below `min_conf` | research, predict | the fact arriving later in the dumps (expires after 60 days) | +2.0 / −0.8 |
+| dispute: judge a disputed fact in scope | verify | a hidden copy, or the evidence settling the dispute | +1.5 / −0.6 |
+| read: fetch important unread articles in scope | research, watch, answer | the articles arriving | +0.1 each |
+| scan: report new documents about the subject | watch | the entity linker finding an in-scope entity in them | +0.15 each |
+| calibrate: re-learn its own evidence weights on its scope | research, predict, verify | held-out-style log-likelihood gain over its current weights | up to +1 |
+| answer: your question | all | your 👍 / 👎 | +2.0 / −1.0 |
+
+The penalties are set so that guessing does not pay. A random 4-way quiz answer has expected reward
+0.25 × 1 − 0.75 × 0.4 < 0.
+
+- **Learning to act.**
+  - Each agent keeps its own Thompson-sampling arms over its actions, with Welford mean and variance of reward.
+  - Arms are updated by every settlement, including verdicts that arrive weeks later: the reward is credited
+    to the action that produced the task.
+  - An action that finds nothing to do gets a small negative experience.
+  - Agents doing calibration also learn *their own* link-prediction weights for their scope (specialisation).
+- **Growth.**
+  - XP is the sum of positive rewards. Level = 1 + ⌊log₂(1 + XP/5)⌋.
+  - Each society slice gives turns by Thompson sampling on each agent's verified reward per step, with an
+    optimistic prior for newcomers and a small level bonus. An agent with your questions waiting goes first.
+- **Evolution** (daily):
+  - **Forking.** An agent with enough verified outcomes (30 by default) and positive reward forks a child.
+    The child has mutated heritable parameters:
+    - confidence threshold;
+    - batch size;
+    - scope breadth;
+    - exploration width;
+    - evidence weights.
+  - **Judging the contest.** Parent and child are compared on reward per step with a two-standard-error margin:
+    - A worse child is retired.
+    - A better child passes its parameters to a user-made parent, which keeps its name and history, or
+      replaces an evolved parent.
+  - **Your agents are never retired automatically.** One with persistently negative reward is reported as
+    "struggling".
+  - **Population cap:** `agents.max_agents`.
+
 ## Answering
 
 - **Pattern parse.** Recognises "what is the X of Y", "when was Y born", "where is Y", "who is Y", "Y's X" and "how many".

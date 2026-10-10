@@ -65,3 +65,9 @@ quiz_size = 50
 [dashboard]
 host = "0.0.0.0"
 port = 8765
+
+[agents]
+max_agents = 12                     # active agents (yours + evolved children)
+evolve = true                       # strong agents fork mutated children; weaker children retire
+step_interval = 120.0               # seconds between agent society slices
+min_tasks_to_judge = 30             # verified tasks before an agent can fork or be judged

@@ -43,3 +43,7 @@ label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px
 .muted { color: var(--muted); }
 footer { color: var(--muted); font-size: 12px; text-align: center; padding: 18px; }
 @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } main { padding: 12px; } }
+.small { font-size: 12px; margin-top: 10px; }
+code { background: var(--line); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+h3.sub { font-size: 13px; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+.lvl { display: inline-block; min-width: 26px; text-align: center; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 700; padding: 0 6px; }
