@@ -15,13 +15,15 @@ process (`polymath dashboard`). Both share one SQLite database in WAL mode on th
                  └──────────────────────────────────────┬─────────────────────────────────────────────────────────────┘
                                                         │ SQLite WAL  /srv/polymath/db/polymath.sqlite3
                  polymath-dashboard.service ◄───────────┘ (read-only; the ask box runs the offline answerer)
+                          │ /api/feed (localhost)
+                 polymath feed  — the terminal that opens at login: a live feed of what it learns
 ```
 
 ## The loop (`core/loop.py`)
 
 Each cycle:
 
-1. **OBSERVE.** The body guard reads temperature, load, memory and disk, and pings the Minecraft server. Then:
+1. **OBSERVE.** The body guard reads temperature, load, memory and disk. Then:
    - inbox requests from the CLI or dashboard are applied;
    - due planners run. Planners are cheap, network-free functions that keep recurring work queued.
 2. **DECIDE.** The Thompson-sampling bandit (`drive/bandit.py`) picks an *action group* (read, perceive, learn,
@@ -56,7 +58,7 @@ Each cycle:
 | package | responsibility |
 |---|---|
 | `core` | config, logging (JSON to journald), database and migrations, scheduler, loop, app assembly |
-| `body` | sensors, systemd notify/watchdog, guard (thermal, disk, Minecraft), backups, eviction |
+| `body` | sensors, systemd notify/watchdog, guard (thermal, disk), backups, eviction |
 | `senses` | HTTP client (SSRF-safe, resumable ranges), dump readers, bz2 block seeking, 7z, feeds, crawler, robots.txt |
 | `memory` | documents (lzma bodies), passages + FTS5, near-duplicates, knowledge graph with provenance, topic map, IVF vector index |
 | `perception` | tokenizer, Porter stemmer, Punkt sentences, NPMI phrases, Aho–Corasick, entity linker, infoboxes, TextRank, relation patterns, SGNS embeddings |
@@ -64,7 +66,7 @@ Each cycle:
 | `drive` | PageRank, topic priorities (curiosity), targeted reading, user-requested learning, the bandit |
 | `evaluation` | held-out facts, quizzes, nightly report |
 | `agents` | the agent society: directives → scopes, skills with verifiable tasks, rewards, per-agent learning, evolution |
-| `interface` | CLI, answering engine, dashboard |
+| `interface` | CLI, answering engine, dashboard, live feed |
 
 ## The agent society
 
@@ -87,6 +89,24 @@ The state lives in five tables:
 - `agent_tasks`: every task with its action, state, reward and reason;
 - `agent_rewards`: the ledger;
 - `agent_arms`: per-agent action preferences.
+
+## The live feed (`interface/feed.py`)
+
+The feed needs no event log. Every refresh reads, read-only, the rows added to the agent's own tables since the
+client's cursor:
+- `documents`, `triples` (with their first provenance), `reasoning_runs`;
+- `quiz_answers` and `quizzes`, `agent_rewards` (with the task it was for) and `agents`;
+- `drive.learn` jobs, `reports`, `backups`, and failed `cycles`.
+
+The cursor is the highest id seen in each table. Busy tables are capped: the newest few rows are rendered and
+the rest counted, and id spans over 200k are estimated rather than counted. Facts about things whose name it
+has not read yet (`Q123`) are counted, not shown. Status changes (body mode, agent online/offline, curiosity)
+are turned into feed lines by the client, which compares successive statuses.
+
+The dashboard serves the feed at `/api/feed`. `polymath feed` polls it every 1.5 s, pins a status header with an
+ANSI scroll region, and spreads each batch over the interval so it reads as a stream. `scripts/open-feed.sh`
+opens it at login in the first terminal it finds (lxterminal on Raspberry Pi OS). A lock file stops the XDG and
+compositor autostarts from opening two windows.
 
 ## Storage layout (`/srv/polymath`)
 

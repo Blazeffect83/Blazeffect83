@@ -17,18 +17,18 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 | 6 reasoning | rules and inference on real data | ✅ see §6 |
 | 7 drive | priorities and bandit on real data | ✅ see §6 |
 | 8 evaluation | quiz accuracy above chance on real held-out facts | ✅ see §6 |
-| 9 interface | CLI, cited answers, dashboard, /health semantics | ✅ automated and rendered in Chromium (§7) |
-| 10 body | thermal, disk, Minecraft yield, backups | ✅ automated with injected sensors and a fake Minecraft server |
-| 11 deploy | systemd, autostart, idempotent install | ✅ staged install, `systemd-analyze verify`; **⏳ on-device boot test pending** |
+| 9 interface | CLI, cited answers, dashboard, /health semantics, live feed | ✅ automated, rendered in Chromium (§7) and in an emulated terminal (§10) |
+| 10 body | thermal, disk, backups (the Minecraft player check was removed, §10) | ✅ automated with injected sensors |
+| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; **⏳ on-device boot test pending** |
 
 ## 1. Quality bar
 
-- **Tests:** 232 automated tests pass (`pytest`), including:
+- **Tests:** 308 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
 - **Coverage:** 93 % of statements and branches (`pytest --cov=polymath`).
-- **Lint and types:** `ruff check`, `ruff format --check` and `mypy --strict` (package and scripts) are clean.
+- **Lint and types:** `ruff check`, `ruff format --check` and `mypy --strict` (package, tests and scripts) are clean.
 - **Purity:**
   - `tests/test_purity.py` imports every runtime module and fails on any third-party import other than numpy.
   - The staged install's venv contains exactly `numpy`, `pip`, `polymath`.
@@ -227,16 +227,69 @@ They ran 40 society slices offline. Results after all the fixes below:
 - Evolution needs 30 verified outcomes per agent before it forks or judges, so it did not trigger in a
   40-slice trial.
 
-## 10. Pending — needs the actual Raspberry Pi 5
+## 10. Live feed terminal; Minecraft player check removed
+
+**Live feed (`polymath feed`).** Run for real against a copy of the learned database (98k facts, 6,931
+documents). The real agent loop ran offline jobs: rules, inference, contradictions, source reliability, quiz,
+agent steps and verification, priorities. The real dashboard served `/api/feed`. The feed ran in a pseudo-
+terminal emulated at 120×36 (pyte, a dev-only tool) and was screenshotted in Chromium:
+
+![Live feed](img/feed.png)
+
+What the runs showed, and what was fixed because of it:
+- **Old quiz phrasing.** The quiz's own template read "What is the capital of of Belgorod?" and "What is the
+  follows of 1789?". Questions are now phrased from the predicate label: "What is Belgorod the capital of?",
+  "What does 1789 follow?", "What does China share border with?". Per-predicate quiz accuracy no longer
+  parses the question text back.
+- **Stale header.** The quiz score and rules count in the header lagged up to 2 minutes behind the feed. Small
+  tables are now read on every refresh; only full-table counts are cached (60 s).
+- **Unhelpful rewards.** Agent rewards did not say what was rewarded; they now show the task (question → answer,
+  document, prediction).
+- **Layout.** Rule names carried internal ids ("transitive 2774 rule"), the `inferred` tag ran into the text, and
+  the header did not fit 120 columns. All three are fixed.
+
+Cost, from `scripts/benchmark.py --only feed --scale full` (1M facts, this container):
+
+| poll | result |
+|---|---|
+| nothing new | p50 0.08 ms |
+| after 5,000 new facts and 50 documents | p50 2.3 ms, p95 3.7 ms |
+| first poll, including the full-table counts (repeated once a minute) | 0.30 s |
+
+**Tests.** `tests/test_feed.py` (24 tests) covers:
+- events since a cursor, exactly once;
+- caps and "+N more" counts, and estimates for huge spans;
+- unnamed entities counted, not shown;
+- a cursor ahead of the data (restored backup);
+- every event kind's rendering, the status header, and ASCII fallback;
+- the client loop: waiting and reconnecting, status changes as feed lines, the pinned header's escape
+  sequences, terminal restored on Ctrl+C and on resize;
+- the HTTP source against the real dashboard, plus error answers;
+- the direct source, the CLI, and a registry check that every job kind has a "now:" label.
+
+`tests/test_deploy.py` covers:
+- the launcher in lxterminal, foot, xterm and the Debian x-terminal-emulator;
+- one window per login (lock), `--new` from the menu, and no terminal installed;
+- the in-window prompt if the feed exits;
+- a staged upgrade from the dashboard-kiosk autostart: XDG, labwc and wayfire entries are replaced, retired
+  settings are commented out with a backup, and a second run is idempotent.
+
+**Minecraft player check removed.** The Server List Ping module, the `yield` on players, the `minecraft_*`
+settings and the `vitals.players` column (migration 0012, applied to the real 483 MB database) are gone. An
+older configuration still loads, with a warning, and `install.sh` comments those lines out. `yield` remains for
+low disk space. The CPU and memory limits stay, to keep the desktop and the feed responsive.
+
+## 11. Pending — needs the actual Raspberry Pi 5
 
 These cannot be done in a container and are **not** claimed:
 
 1. `sudo ./install.sh` on Raspberry Pi OS Bookworm with an NVMe drive.
-2. Reboot. The agent, the dashboard and the kiosk window must come up with no manual step.
-3. 24 h soak alongside the PaperMC server:
+2. Reboot. The agent, the dashboard and the live feed terminal must come up with no manual step.
+   Expected: lxterminal opens at login and shows "waiting" until the dashboard answers.
+3. 24 h soak:
    - CPU temperature;
    - throttle and pause events;
-   - yielding while a player is online;
-   - memory under `MemoryMax=3G`.
+   - memory under `MemoryMax=3G`;
+   - the feed terminal staying responsive.
 4. Pull the power mid-run and check that the restart resumes cleanly on the real SD card and NVMe hardware.
 5. Re-run `scripts/benchmark.py` on the Pi.

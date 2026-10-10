@@ -4,8 +4,10 @@
   offline answering engine (still read-only).
 * ``/health`` answers 200 only when the database is open and the agent's
   heartbeat is younger than ``loop.heartbeat_stale`` (60 s) — so systemd, the
-  kiosk and monitoring see a stalled agent as unhealthy.
+  live feed and monitoring see a stalled agent as unhealthy.
 * Strict CSP, small request bodies, per-client rate limit for ``/api/ask``.
+* ``/api/feed`` serves the live learning feed to ``polymath feed`` (the desktop terminal), so the
+  desktop user never needs access to the database.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ class DashboardData:
         self._db: Database | None = None
         self._answerer: Any = None
         self._answerer_at = 0.0
+        self._feed: Any = None
         self._lock = threading.Lock()
 
     def db(self) -> Database:
@@ -182,6 +185,17 @@ class DashboardData:
         ]
         return {"agents": agents_list(db), "rewards": rewards}
 
+    def feed(self, cursor: str | None) -> dict[str, Any]:
+        from polymath.interface.feed import Feed
+
+        db = self.db()
+        with self._lock:
+            if self._feed is None or self._feed.db is not db:
+                self._feed = Feed(db, pulse=heartbeat_path(self.config), stale=self.config.loop.heartbeat_stale)
+            feed = self._feed
+        result: dict[str, Any] = feed.poll(cursor)
+        return result
+
     def knowledge(self, q: str) -> dict[str, Any]:
         from polymath.interface.answer import render_value
         from polymath.memory.graph import KnowledgeGraph
@@ -288,6 +302,9 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._json(200, data.topics())
                 if path == "/api/agents":
                     return self._json(200, data.agents())
+                if path == "/api/feed":
+                    cursor = (parse_qs(url.query).get("cursor") or [""])[0][:400]
+                    return self._json(200, data.feed(cursor or None))
                 if path == "/api/knowledge":
                     q = (parse_qs(url.query).get("q") or [""])[0][:200]
                     return self._json(200, data.knowledge(q) if q.strip() else {"query": "", "entities": []})

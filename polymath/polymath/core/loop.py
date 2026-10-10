@@ -38,7 +38,6 @@ class BodyState:
     intensity: float = 1.0
     reasons: list[str] = field(default_factory=list)
     vitals: Vitals | None = None
-    players_online: int | None = None
     allow: list[str] = field(default_factory=list)  # job kinds that may still run while paused (maintenance)
 
 
@@ -47,7 +46,7 @@ class Body(Protocol):
 
 
 class BasicBody:
-    """Reads vitals only; the full guard (thermal, disk, Minecraft) lives in ``body.guard``."""
+    """Reads vitals only; the full guard (thermal, disk) lives in ``body.guard``."""
 
     def __init__(self, config: Config) -> None:
         self.config = config

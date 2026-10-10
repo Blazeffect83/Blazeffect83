@@ -74,7 +74,7 @@ def _knowledge_summary(db: Database) -> dict[str, Any]:
         q = db.one("SELECT created, n, accuracy, chance FROM quizzes ORDER BY id DESC LIMIT 1")
         out["last_quiz"] = dict(q) if q else None
     if table("vitals"):
-        v = db.one("SELECT at, temp_c, load1, mode, players FROM vitals ORDER BY at DESC LIMIT 1")
+        v = db.one("SELECT at, temp_c, load1, mode FROM vitals ORDER BY at DESC LIMIT 1")
         out["vitals"] = dict(v) if v else None
     return out
 
@@ -392,6 +392,36 @@ def cmd_dashboard(config: Config, args: argparse.Namespace) -> int:
     return serve(config)
 
 
+def dashboard_url(config: Config) -> str:
+    """Where this machine reaches its own dashboard (a wildcard bind address means localhost)."""
+    host = config.dashboard.host
+    if host in {"", "0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{config.dashboard.port}"
+
+
+def cmd_feed(config: Config, args: argparse.Namespace) -> int:
+    from polymath.core.loop import heartbeat_path
+    from polymath.interface import feed
+
+    if args.direct:
+        source = feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config))
+        where = str(config.paths.db_path)
+    else:
+        where = args.url or dashboard_url(config)
+        source = feed.http_source(where)
+    return feed.run(
+        source,
+        interval=args.interval,
+        color=False if args.no_color else None,
+        fancy=False if args.plain else None,
+        once=args.once,
+        where=where,
+    )
+
+
 def cmd_backup(config: Config, args: argparse.Namespace) -> int:
     """Take a verified backup now (or list the existing ones)."""
     from polymath.body import maintenance
@@ -683,6 +713,15 @@ def build_parser() -> argparse.ArgumentParser:
     for ctl in ("pause", "resume", "retire"):
         asub.add_parser(ctl, help=f"{ctl} an agent").add_argument("name")
     ag.set_defaults(func=cmd_agents)
+
+    fd = sub.add_parser("feed", help="live feed of what it is learning (what the desktop terminal shows)")
+    fd.add_argument("--url", default=None, help="dashboard to read from (default: this machine's)")
+    fd.add_argument("--direct", action="store_true", help="read the database directly instead of the dashboard")
+    fd.add_argument("--interval", type=float, default=1.5, help="seconds between polls (default 1.5)")
+    fd.add_argument("--plain", action="store_true", help="plain scrolling lines, no pinned header")
+    fd.add_argument("--no-color", action="store_true", help="no colours (also: NO_COLOR=1)")
+    fd.add_argument("--once", action="store_true", help="print what is new once and exit")
+    fd.set_defaults(func=cmd_feed)
 
     d = sub.add_parser("dashboard", help="serve the dashboard (what polymath-dashboard.service starts)")
     d.add_argument("--host", default=None)

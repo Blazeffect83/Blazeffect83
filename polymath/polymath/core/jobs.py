@@ -48,7 +48,7 @@ class JobContext:
     stop_event: threading.Event
     services: dict[str, Any] = field(default_factory=dict)
     on_tick: Callable[[], None] | None = None
-    intensity: float = 1.0  # 0..1; the body lowers it when hot or when players are online
+    intensity: float = 1.0  # 0..1; the body lowers it when hot or the disk is nearly full
 
     def time_left(self) -> float:
         return self.deadline - time.monotonic()
@@ -77,7 +77,7 @@ class JobSpec:
     description: str
     # Actions the drive may choose between are grouped by ``action`` (defaults to kind).
     action: str = ""
-    heavy: bool = False  # deferred while players are online or the CPU is hot
+    heavy: bool = False  # deferred while the CPU is hot or the disk is nearly full
 
 
 class JobRegistry:

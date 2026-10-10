@@ -312,8 +312,8 @@ def test_api_endpoints(dash):
     beat(cfg)
     db = Database(cfg.paths.db_path)
     db.execute(
-        "INSERT INTO vitals(at, temp_c, load1, mem_mb, disk_free_gb, data_gb, players, mode) "
-        "VALUES(?, 51.5, 0.7, 900, 200, 1.2, 0, 'normal')",
+        "INSERT INTO vitals(at, temp_c, load1, mem_mb, disk_free_gb, data_gb, mode) "
+        "VALUES(?, 51.5, 0.7, 900, 200, 1.2, 'normal')",
         (time.time(),),
     )
     db.execute(

@@ -32,7 +32,6 @@ default_seeds = false
 
 [body]
 thermal_zone = "{tmp_path / "thermal"}"
-minecraft_check = false
 """,
         encoding="utf-8",
     )

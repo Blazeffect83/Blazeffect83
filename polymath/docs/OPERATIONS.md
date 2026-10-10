@@ -34,14 +34,18 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 - writes `/etc/polymath/polymath.toml` (never overwritten once it exists);
 - installs `polymath.service`, `polymath-dashboard.service` and a journald size limit;
 - enables desktop autologin (`raspi-config nonint do_boot_behaviour B4`);
-- adds the dashboard to the desktop user's autostart (XDG, labwc and wayfire);
+- adds the live feed terminal to the desktop user's autostart (XDG, labwc and wayfire), plus menu entries for the
+  live feed and the dashboard. An upgrade replaces the dashboard autostart of earlier versions;
+- comments out the `minecraft_*` settings of earlier versions in an existing configuration (backup:
+  `polymath.toml.bak`). Left in place, they would be ignored with a warning;
 - starts everything and waits for `/health`.
 
 ## 3. Everyday
 
 | | |
 |---|---|
-| dashboard | `http://<pi>:8765/` (on the Pi's screen automatically) |
+| live feed | opens in a terminal at login · `polymath feed` in any terminal · menu: *Polymath live feed* |
+| dashboard | `http://<pi>:8765/` · menu: *Polymath dashboard* |
 | status | `polymath status` · `systemctl status polymath polymath-dashboard` |
 | logs | `journalctl -u polymath -f` (JSON lines; `-o cat` for compact) |
 | nightly report | `/srv/polymath/reports/report-YYYY-MM-DD.md` or `polymath report` |
@@ -50,14 +54,41 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 The CLI reads the same configuration as the service (`/etc/polymath/polymath.toml`). Run it as a user who can
 read `/srv/polymath`, or prefix it with `sudo -u polymath`.
 
-## 4. How it shares the Pi
+### The live feed
+
+`polymath feed` shows what the agent is learning, as it happens:
+
+| tag | what |
+|---|---|
+| `read` | a document arrived: Wikipedia article, paper, book, feed item, crawled page |
+| `fact` / `disputed` | a fact it learned (from Wikidata, an infobox, or read in a sentence, quoted); disputed when sources disagree |
+| `inferred` | a fact it derived with a learned rule (inverse, transitive, symmetric) |
+| `reason` | rules learned (with examples), facts inferred, contradictions checked, how much it trusts each source |
+| `quiz` | a self-test on a hidden fact: ✓ / ✗ with the truth, then the score against chance |
+| `agent` | an agent's verified reward or penalty and what it was for; new and evolved agents |
+| `curious` | the topics it most wants to learn about now |
+| `you` | what you asked it to learn |
+| `body` | throttling, pausing, back to normal, agent offline/online |
+| `report` / `backup` / `error` | nightly report, backups, failed job slices (with retry or give-up) |
+
+Busy streams are capped per refresh (for example 5 facts and 4 documents every 1.5 s), and the rest are counted
+(`+4,312 more facts`), so a Wikidata ingest stays readable. The pinned header shows the state, what it is doing
+now, its knowledge counts, the latest quiz score and the CPU temperature.
+
+The feed reads from the dashboard service (`/api/feed`, localhost), so the desktop user needs no access to
+`/srv/polymath`. Options: `--plain` (no pinned header, for logs or `ssh`), `--no-color`, `--once`,
+`--interval 3`, `--url http://<pi>:8765` (watch from another machine), `--direct` (read the database
+directly, as a user who can). To stop the window opening at login, delete
+`~/.config/autostart/polymath-feed.desktop` and the `open-feed.sh` lines in `~/.config/labwc/autostart` and
+`~/.config/wayfire.ini`.
+
+## 4. How it keeps the Pi healthy
 
 | condition | mode | effect |
 |---|---|---|
 | CPU ≥ 75 °C (until < 72 °C) | throttle | light jobs only, half-length slices |
 | CPU ≥ 82 °C (until < 77 °C) | pause | nothing runs |
-| players online on the Minecraft server | yield | light jobs only, half-length slices |
-| free disk < `disk_min_free_gb` | yield | eviction requested |
+| free disk < `disk_min_free_gb` | yield | light jobs only, half-length slices; eviction requested |
 | free disk < half of that | pause | only eviction runs |
 | data > `disk_budget_gb` | — | eviction requested |
 
@@ -66,8 +97,9 @@ These limits always apply, whatever the mode:
 - numpy is limited to 2 threads;
 - the dashboard is limited to 25 % CPU and 400 MB.
 
-The Minecraft check is the standard Server List Ping to `127.0.0.1:25565`, once a minute. Nothing is installed
-on the server. Change the host and port under `[body]`.
+The limits leave half the CPU and a quarter of the memory to the desktop. To give the agent the whole Pi, raise
+them with a drop-in (`sudo systemctl edit polymath`, for example `CPUQuota=350%` and `MemoryMax=6G` on an 8 GB
+Pi).
 
 ## 5. Backups and restore
 
@@ -116,7 +148,6 @@ wikipedia_lang = "en"
 
 [body]
 disk_budget_gb = 400
-minecraft_port = 25565
 ```
 
 Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
@@ -130,3 +161,6 @@ Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 | `/health` 503 | heartbeat older than 60 s: the agent is stopped, paused for heat, or hung (the watchdog restarts it) |
 | not learning anything new | `polymath status` (dead jobs, queue) and `polymath why` (recent decisions) |
 | too hot | improve cooling, or lower `throttle_celsius` / `pause_celsius` |
+| live feed says "waiting: no answer from http://127.0.0.1:8765" | `systemctl status polymath-dashboard`; it reconnects by itself |
+| no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
+| "ignoring retired configuration key(s)" | delete the `minecraft_*` lines from `/etc/polymath/polymath.toml` (or re-run `install.sh`) |

@@ -45,9 +45,12 @@ if [ -n "$DESKTOP_USER" ]; then
     home="$(getent passwd "$DESKTOP_USER" | cut -d: -f6 || true)"
     [ -n "$home" ] || home="/home/$DESKTOP_USER"
     home="$ROOT$home"
-    say "removing dashboard autostart for $DESKTOP_USER"
-    rm -f "$home/.config/autostart/polymath-dashboard.desktop"
-    [ ! -f "$home/.config/labwc/autostart" ] || sed -i '\|/opt/polymath/src/scripts/open-dashboard.sh|d' \
+    say "removing the live feed autostart and menu entries for $DESKTOP_USER"
+    rm -f "$home/.config/autostart/polymath-feed.desktop" "$home/.config/autostart/polymath-dashboard.desktop" \
+        "$home/.local/share/applications/polymath-feed.desktop" \
+        "$home/.local/share/applications/polymath-dashboard.desktop"
+    [ ! -f "$home/.config/labwc/autostart" ] || sed -i \
+        -e '\|/opt/polymath/src/scripts/open-feed.sh|d' -e '\|/opt/polymath/src/scripts/open-dashboard.sh|d' \
         "$home/.config/labwc/autostart"
     [ ! -f "$home/.config/wayfire.ini" ] || sed -i '/^polymath *= /d' "$home/.config/wayfire.ini"
 fi

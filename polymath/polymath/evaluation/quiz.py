@@ -3,7 +3,8 @@
 * **Hold-out**: a deterministic ~5 % of Wikidata entity facts (chosen by a hash
   of the triple id, so the split never drifts) are marked ``holdout``. Reasoning,
   inference, PageRank and answering never see them.
-* **Questions**: "What is the <predicate> of <subject>?" with the true object
+* **Questions**: phrased from the predicate's label (:func:`phrase_question`) — "What is the capital
+  of France?", "What is Paris the capital of?", "What does 1789 follow?" — with the true object
   and three **sibling distractors** — other objects of the same predicate,
   preferring ones of the same type (shared ``instance of`` class), never ones
   that are also true for the subject. Only facts whose subject and answer have
@@ -58,6 +59,42 @@ def _classes(db: Database, entity: int, p31: int | None) -> set[int]:
     return {int(r["o"]) for r in db.query("SELECT o FROM triples WHERE s=? AND p=? AND o != 0", (entity, p31))}
 
 
+PREPOSITIONS = ("of", "in", "by", "for", "from", "to", "on", "at", "with", "as", "into", "after", "before")
+# Labels that start with a third-person verb ("1789 follows 1788", "China shares border with India")
+VERBS = {
+    "follows": "follow",
+    "replaces": "replace",
+    "contains": "contain",
+    "depicts": "depict",
+    "uses": "use",
+    "owns": "own",
+    "produces": "produce",
+    "includes": "include",
+    "shares": "share",
+    "has": "have",
+}
+
+
+def phrase_question(plabel: str, subject: str) -> str:
+    """A readable question for (subject, predicate, ?) from the predicate's label alone.
+
+    "capital" → "What is the capital of France?"; "capital of" → "What is Paris the capital of?";
+    "followed by" → "What is 1789 followed by?"; "shares border with" → "What does China share border with?"
+    """
+    words = plabel.split()
+    if not words:
+        return f"What is related to {subject}?"
+    first, last = words[0].lower(), words[-1].lower()
+    if first in VERBS:
+        return f"What does {subject} {' '.join([VERBS[first], *words[1:]])}?"
+    if last == "of" and len(words) > 1 and not first.endswith("ed"):  # "capital of" → "the capital of"
+        article = {"instance": "an", "subclass": "a", "member": "a", "part": ""}.get(first, "the")
+        return f"What is {subject} {' '.join([article, *words] if article else words)}?"
+    if last in PREPOSITIONS or (len(words) > 1 and first.endswith("ed")):
+        return f"What is {subject} {' '.join(words)}?"
+    return f"What is the {' '.join(words)} of {subject}?"
+
+
 def make_question(db: Database, triple: Any, rng: random.Random, p31: int | None) -> dict[str, Any] | None:
     s, p, o = int(triple["s"]), int(triple["p"]), int(triple["o"])
     true_for_s = {int(r["o"]) for r in db.query("SELECT o FROM triples WHERE s=? AND p=? AND o != 0", (s, p))}
@@ -91,7 +128,8 @@ def make_question(db: Database, triple: Any, rng: random.Random, p31: int | None
         "predicate": p,
         "answer": o,
         "options": options,
-        "question": f"What is the {plabel} of {labels.get(s, '?')}?",
+        "question": phrase_question(plabel, labels.get(s, "?")),
+        "predicate_label": plabel,
         "labels": [{"entity": x, "label": labels.get(x, "?")} for x in options],
     }
 
@@ -146,7 +184,7 @@ def run_quiz(
         for m, dist in pred.by_method.items():
             top = max(q["options"], key=lambda o: dist.get(o, 0.0))
             alone[m].append(int(top == q["answer"]))
-        by_pred[q["question"].split(" of ")[0].removeprefix("What is the ")].append(ok)
+        by_pred[q["predicate_label"]].append(ok)
         topic = db.scalar(
             "SELECT dt.topic_id FROM entities e JOIN doc_topics dt ON dt.doc_id=e.doc_id WHERE e.id=? "
             "ORDER BY dt.weight DESC LIMIT 1",

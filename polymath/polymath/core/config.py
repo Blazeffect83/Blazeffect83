@@ -3,12 +3,14 @@
 Precedence: built-in defaults → ``/etc/polymath/polymath.toml`` (or the file
 named by ``$POLYMATH_CONFIG`` / ``--config``) → ``POLYMATH_DATA_DIR`` for the
 data directory. Unknown keys are rejected so a typo never silently does
-nothing.
+nothing; keys of retired features (``RETIRED_KEYS``) are ignored with a warning,
+so an upgrade never breaks a configuration file written for an older version.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import tomllib
 import types
@@ -18,6 +20,11 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG_PATH = Path("/etc/polymath/polymath.toml")
+
+# Settings of features that were removed: accepted (and ignored) so older configuration files keep working.
+RETIRED_KEYS: dict[str, frozenset[str]] = {
+    "body": frozenset({"minecraft_host", "minecraft_port", "minecraft_check", "minecraft_poll_seconds"}),
+}
 
 
 class ConfigError(ValueError):
@@ -71,10 +78,6 @@ class BodyConfig:
     disk_min_free_gb: float = 10.0
     backup_keep: int = 7
     backup_hour: int = 3  # local hour for the nightly backup
-    minecraft_host: str = "127.0.0.1"
-    minecraft_port: int = 25565
-    minecraft_check: bool = True
-    minecraft_poll_seconds: float = 60.0
 
 
 @dataclass
@@ -187,6 +190,12 @@ def _coerce(value: Any, tp: Any, where: str) -> Any:
 def _build(cls: type[Any], data: dict[str, Any], where: str) -> Any:
     hints = typing.get_type_hints(cls)
     known = {f.name for f in dataclasses.fields(cls)}
+    retired = set(data) & RETIRED_KEYS.get(where, frozenset()) - known
+    if retired:
+        logging.getLogger("polymath.config").warning(
+            "ignoring retired configuration key(s) %s in [%s]", sorted(retired), where
+        )
+        data = {k: v for k, v in data.items() if k not in retired}
     unknown = set(data) - known
     if unknown:
         raise ConfigError(f"{where or 'config'}: unknown key(s) {sorted(unknown)}")

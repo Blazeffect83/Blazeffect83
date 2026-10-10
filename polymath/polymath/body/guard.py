@@ -1,11 +1,11 @@
-"""The body: keep the Pi healthy and share it politely with the Minecraft server.
+"""The body: keep the Pi healthy (cool, with room on the data disk) while the agent works 24/7.
 
 Modes (strongest wins), recomputed every cycle from cheap sensors:
 
 * **pause** — CPU ≥ ``pause_celsius`` (82 °C), held until it cools 5 °C below;
   or the data disk is almost full (< half of ``disk_min_free_gb``).
-* **yield** — someone is playing on the Minecraft server (Server List Ping), or
-  free space is below ``disk_min_free_gb``: only light jobs run, at half pace.
+* **yield** — free space is below ``disk_min_free_gb``: only light jobs run, at half pace,
+  while eviction makes room.
 * **throttle** — CPU ≥ ``throttle_celsius`` (75 °C), held until 3 °C below: light
   jobs only, slices shortened.
 * **normal**.
@@ -21,7 +21,6 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from polymath.body.minecraft import ServerStatus, ping
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.core.config import Config
 from polymath.core.db import Database
@@ -61,34 +60,19 @@ class Guard:
         db: Database,
         *,
         clock: Callable[[], float] = time.time,
-        pinger: Callable[[str, int], ServerStatus | None] | None = None,
         sensors: Callable[[], Vitals] | None = None,
     ) -> None:
         self.config = config
         self.db = db
         self.clock = clock
-        self.pinger = pinger or (lambda host, port: ping(host, port))
         self.sensors = sensors or (lambda: read_vitals(config.body.thermal_zone, config.paths.data_dir))
         self.thermal = "normal"
-        self._players: int | None = None
-        self._players_at = -1e18
         self._size_gb: float | None = None
         self._size_at = -1e18
         self._vitals_at = -1e18
         self._last_mode = "normal"
 
     # ----------------------------------------------------------------- sensors
-    def players(self) -> int | None:
-        b = self.config.body
-        if not b.minecraft_check:
-            return None
-        now = self.clock()
-        if now - self._players_at >= b.minecraft_poll_seconds:
-            status = self.pinger(b.minecraft_host, b.minecraft_port)
-            self._players = status.online if status is not None else None
-            self._players_at = now
-        return self._players
-
     def data_gb(self) -> float:
         now = self.clock()
         if self._size_gb is None or now - self._size_at >= SIZE_EVERY:
@@ -132,9 +116,6 @@ class Guard:
             want("pause", f"CPU {v.temp_c:.1f} °C: cooling down below {b.pause_celsius - PAUSE_HYSTERESIS:.0f} °C")
         elif thermal == "throttle":
             want("throttle", f"CPU {v.temp_c:.1f} °C ≥ throttle point")
-        players = self.players()
-        if players:
-            want("yield", f"{players} player(s) on the Minecraft server")
         if v.disk_free_gb is not None:
             if v.disk_free_gb < b.disk_min_free_gb / 2:
                 want("pause", f"only {v.disk_free_gb:.1f} GB free on the data disk")
@@ -148,10 +129,10 @@ class Guard:
         if mode != self._last_mode:
             log.info("body mode changed", extra={"from": self._last_mode, "to": mode, "reasons": reasons})
             self._last_mode = mode
-        self._log_vitals(v, data_gb, players, mode)
+        self._log_vitals(v, data_gb, mode)
         # a disk-full pause still lets eviction run (it is what ends the pause); a thermal pause stops everything
         allow = ["body.evict"] if mode == "pause" and disk_critical and thermal != "pause" else []
-        return BodyState(mode=mode, intensity=intensity, reasons=reasons, vitals=v, players_online=players, allow=allow)
+        return BodyState(mode=mode, intensity=intensity, reasons=reasons, vitals=v, allow=allow)
 
     def _request_eviction(self, data_gb: float, free_gb: float | None) -> None:
         from polymath.core.scheduler import Scheduler
@@ -164,14 +145,14 @@ class Guard:
             priority=EVICT_PRIORITY,
         )
 
-    def _log_vitals(self, v: Vitals, data_gb: float, players: int | None, mode: str) -> None:
+    def _log_vitals(self, v: Vitals, data_gb: float, mode: str) -> None:
         now = self.clock()
         if now - self._vitals_at < VITALS_EVERY:
             return
         self._vitals_at = now
         self.db.execute(
-            "INSERT OR REPLACE INTO vitals(at, temp_c, load1, mem_mb, disk_free_gb, data_gb, players, mode) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (now, v.temp_c, v.load1, v.mem_available_mb, v.disk_free_gb, round(data_gb, 3), players, mode),
+            "INSERT OR REPLACE INTO vitals(at, temp_c, load1, mem_mb, disk_free_gb, data_gb, mode) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (now, v.temp_c, v.load1, v.mem_available_mb, v.disk_free_gb, round(data_gb, 3), mode),
         )
         self.db.execute("DELETE FROM vitals WHERE at < ?", (now - 30 * 86400,))

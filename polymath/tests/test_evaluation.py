@@ -9,10 +9,12 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from polymath.core.jobs import JobContext
 from polymath.core.scheduler import Job, Scheduler
 from polymath.evaluation import jobs as ej
-from polymath.evaluation.quiz import OPTIONS, is_holdout, make_question, mark_holdout, run_quiz
+from polymath.evaluation.quiz import OPTIONS, is_holdout, make_question, mark_holdout, phrase_question, run_quiz
 from polymath.evaluation.report import collect, to_markdown, write_report
 from polymath.interface.answer import Answerer
 from polymath.reasoning.link_prediction import LinkPredictor
@@ -55,6 +57,30 @@ def test_mark_holdout_only_wikidata_entity_facts_and_is_incremental(db):
     assert db.kv_get("holdout_cursor") > 0 and mark_holdout(db, 1.0) == 1
 
 
+@pytest.mark.parametrize(
+    ("label", "subject", "question"),
+    [
+        ("capital", "France", "What is the capital of France?"),
+        ("capital of", "Belgorod", "What is Belgorod the capital of?"),
+        ("instance of", "Paris", "What is Paris an instance of?"),
+        ("subclass of", "cat", "What is cat a subclass of?"),
+        ("part of", "Bavaria", "What is Bavaria part of?"),
+        ("followed by", "1789", "What is 1789 followed by?"),
+        (
+            "located in the administrative territorial entity",
+            "Pangkal Pinang",
+            "What is Pangkal Pinang located in the administrative territorial entity?",
+        ),
+        ("follows", "1789", "What does 1789 follow?"),
+        ("shares border with", "China", "What does China share border with?"),
+        ("diplomatic relation", "Portugal", "What is the diplomatic relation of Portugal?"),
+        ("  ", "X", "What is related to X?"),
+    ],
+)
+def test_questions_read_naturally(label, subject, question):
+    assert phrase_question(label, subject) == question
+
+
 def test_question_uses_sibling_distractors_of_the_same_type(db):
     kb = build(db)
     p31 = kb.preds["p31"]
@@ -62,7 +88,7 @@ def test_question_uses_sibling_distractors_of_the_same_type(db):
     q = make_question(db, t, random.Random(1), p31)
     assert q is not None and q["answer"] == kb.cities[3] and len(q["options"]) == OPTIONS
     assert set(q["options"]) <= set(kb.cities)  # siblings: other capitals, all cities
-    assert q["question"] == "What is the capital of Country03?"
+    assert q["question"] == "What is the capital of Country03?" and q["predicate_label"] == "capital"
     assert [x["label"] for x in q["labels"]] == [
         db.scalar("SELECT label FROM entities WHERE id=?", (o,)) for o in q["options"]
     ]

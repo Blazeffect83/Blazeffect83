@@ -17,7 +17,7 @@ Group=polymath
 WorkingDirectory=/srv/polymath
 Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
 Environment=PYTHONUNBUFFERED=1
-# numpy must not grab every core: the Minecraft server needs them.
+# numpy must not grab every core: the desktop and the live feed stay responsive.
 Environment=OPENBLAS_NUM_THREADS=2
 Environment=OMP_NUM_THREADS=2
 ExecStartPre=/opt/polymath/venv/bin/polymath init
@@ -30,7 +30,7 @@ WatchdogSec=120
 Restart=always
 RestartSec=10
 
-# Share the Pi politely with the PaperMC server.
+# Leave half the CPU and a quarter of the memory to the desktop (live feed terminal, browser).
 CPUQuota=200%
 MemoryMax=3G
 MemoryHigh=2600M

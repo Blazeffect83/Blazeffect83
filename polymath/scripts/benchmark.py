@@ -36,7 +36,7 @@ def _config(tmp: Path) -> Any:
     f = tmp / "bench.toml"
     f.write_text(
         f'[paths]\ndata_dir = "{tmp / "data"}"\nrequire_separate_mount = false\n'
-        "[loop]\nidle_sleep = 0.01\n[body]\nminecraft_check = false\n"
+        "[loop]\nidle_sleep = 0.01\n"
         "[senses]\ndefault_feeds = false\ndefault_seeds = false\n"
     )
     return load_config(f, env={})
@@ -543,6 +543,77 @@ def bench_body(tmp: Path, scale: str) -> Result:
     }
 
 
+def bench_feed(tmp: Path, scale: str) -> Result:
+    """The live feed: one poll when nothing is new, one after a burst of new facts, and the cached counts."""
+    import numpy as np
+
+    from polymath.interface.feed import Feed
+    from polymath.memory.documents import Document, DocumentStore
+    from polymath.memory.graph import KnowledgeGraph
+
+    n_ent = 20_000 if scale == "small" else 200_000
+    n_tri = 5 * n_ent
+    cfg = _config(tmp)
+    db = open_database(cfg.paths.db_path)
+    g = KnowledgeGraph(db)
+    store = DocumentStore(db)
+    now = time.time()
+    nprng = np.random.default_rng(5)
+
+    def add_facts(n: int, base: int) -> None:
+        subj = nprng.integers(1, n_ent + 1, n)
+        obj = nprng.integers(1, n_ent + 1, n)
+        prd = nprng.choice(preds, n)
+        rows = [(int(s), int(p), int(o), f'"{base + i}"', now, now) for i, (s, p, o) in enumerate(zip(subj, prd, obj))]
+        db.executemany(
+            "INSERT OR IGNORE INTO triples(s, p, o, value, status, confidence, n_sources, created, updated) "
+            "VALUES(?,?,?,?,'sourced',0.8,1,?,?)",
+            rows,
+        )
+        db.executemany(
+            "INSERT INTO provenance(triple_id, kind, source, detail, created) "
+            "SELECT id, 'wikidata', 'wikidata', '', ? FROM triples WHERE value = ?",
+            [(now, r[3]) for r in rows[:: max(1, n // 50)]],
+        )
+
+    with db.transaction():
+        db.executemany(
+            "INSERT INTO entities(key, label, kind, updated) VALUES(?,?,'item',?)",
+            [(f"Q{i}", f"Entity {i}", now) for i in range(n_ent)],
+        )
+        preds = [g.predicate(f"P{i}", f"pred {i}") for i in range(50)]
+        add_facts(n_tri, 0)
+        for i in range(2000):
+            store.add(Document("web", str(i), f"Doc {i}", f"text of document {i} " * 20, "test"))
+    feed = Feed(db)
+    t0 = time.perf_counter()
+    cursor = feed.poll(None)["cursor"]
+    cold = time.perf_counter() - t0  # first poll: full-table counts included
+    idle = []
+    for _ in range(20):
+        t0 = time.perf_counter()
+        cursor = feed.poll(cursor)["cursor"]
+        idle.append(time.perf_counter() - t0)
+    busy = []
+    for k in range(5):
+        with db.transaction():
+            add_facts(5000, n_tri + 10_000 * (k + 1))
+            for i in range(50):
+                store.add(Document("web", f"new{k}-{i}", f"New {k}-{i}", f"fresh text {k} {i} " * 20, "test"))
+        t0 = time.perf_counter()
+        res = feed.poll(cursor)
+        busy.append(time.perf_counter() - t0)
+        cursor = res["cursor"]
+    db.close()
+    return {
+        "triples": n_tri,
+        "first_poll_with_full_counts_s": round(cold, 3),
+        "poll_nothing_new": _percentiles(idle),
+        "poll_after_5000_new_facts_and_50_docs": _percentiles(busy),
+        "events_in_busy_poll": len(res["events"]),
+    }
+
+
 BENCHES: dict[str, Callable[[Path, str], Result]] = {
     "core": bench_core,
     "senses": bench_senses,
@@ -554,6 +625,7 @@ BENCHES: dict[str, Callable[[Path, str], Result]] = {
     "evaluation": bench_evaluation,
     "dashboard": bench_dashboard,
     "body": bench_body,
+    "feed": bench_feed,
 }
 
 

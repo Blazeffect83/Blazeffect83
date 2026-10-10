@@ -1,4 +1,4 @@
-"""Phase 11: systemd units, idempotent install / uninstall (staged root), dashboard autostart launcher."""
+"""Phase 11: systemd units, idempotent install / uninstall (staged root), live feed terminal and dashboard launchers."""
 
 from __future__ import annotations
 
@@ -42,6 +42,11 @@ def test_dashboard_unit_and_desktop_entry():
     assert u["Unit"]["RequiresMountsFor"] == "/srv/polymath" and u["Service"]["ReadOnlyPaths"] == "/srv/polymath"
     d = unit("polymath-dashboard.desktop")["Desktop Entry"]
     assert d["Type"] == "Application" and d["Exec"] == "/opt/polymath/src/scripts/open-dashboard.sh"
+    assert "X-GNOME-Autostart-enabled" not in d  # a menu entry now; the live feed is what opens at login
+    f = unit("polymath-feed.desktop")["Desktop Entry"]
+    assert f["Exec"] == "/opt/polymath/src/scripts/open-feed.sh" and f["X-GNOME-Autostart-enabled"] == "true"
+    m = unit("polymath-feed-menu.desktop")["Desktop Entry"]
+    assert m["Exec"] == "/opt/polymath/src/scripts/open-feed.sh --new" and m["Name"] == f["Name"]
     j = unit("journald-polymath.conf")["Journal"]
     assert j["SystemMaxUse"] == "300M"
 
@@ -61,12 +66,15 @@ def test_staged_install_is_idempotent_and_uninstall_keeps_data(tmp_path):
         etc / "systemd/journald.conf.d/polymath.conf",
         etc / "polymath/polymath.toml",
         stage / "opt/polymath/src/polymath/core/loop.py",
-        stage / "home/tester/.config/autostart/polymath-dashboard.desktop",
+        stage / "home/tester/.config/autostart/polymath-feed.desktop",
+        stage / "home/tester/.local/share/applications/polymath-feed.desktop",
+        stage / "home/tester/.local/share/applications/polymath-dashboard.desktop",
         stage / "srv/polymath",
     ):
         assert p.exists(), p
-    launcher = stage / "opt/polymath/src/scripts/open-dashboard.sh"
-    assert launcher.stat().st_mode & stat.S_IXUSR
+    for name in ("open-dashboard.sh", "open-feed.sh"):
+        assert (stage / "opt/polymath/src/scripts" / name).stat().st_mode & stat.S_IXUSR
+    assert not (stage / "home/tester/.config/autostart/polymath-dashboard.desktop").exists()
     assert not list((stage / "opt/polymath/src").rglob("__pycache__"))
     conf = etc / "polymath/polymath.toml"
     conf.write_text(conf.read_text() + "\n# my change\n")
@@ -74,15 +82,17 @@ def test_staged_install_is_idempotent_and_uninstall_keeps_data(tmp_path):
     assert "keeping existing configuration" in second.stdout and "# my change" in conf.read_text()
     labwc = (stage / "home/tester/.config/labwc/autostart").read_text()
     wayfire = (stage / "home/tester/.config/wayfire.ini").read_text()
-    assert labwc.count("open-dashboard.sh") == 1 and wayfire.count("polymath =") == 1
+    assert labwc.count("open-feed.sh") == 1 and "open-dashboard" not in labwc
+    assert wayfire.count("polymath =") == 1 and "polymath = /opt/polymath/src/scripts/open-feed.sh" in wayfire
     dry = sh(str(ROOT / "install.sh"), "--root", str(tmp_path / "dry"), "--user", "tester", "--skip-venv", "--dry-run")
     assert "+ install -D" in dry.stdout and not (tmp_path / "dry/etc").exists()  # nothing written
 
     (stage / "srv/polymath/learned.sqlite3").write_text("knowledge")
     sh(str(ROOT / "uninstall.sh"), "--root", str(stage), "--user", "tester")
     assert not (etc / "systemd/system/polymath.service").exists() and not (stage / "opt/polymath").exists()
-    assert not (stage / "home/tester/.config/autostart/polymath-dashboard.desktop").exists()
-    assert "open-dashboard" not in (stage / "home/tester/.config/labwc/autostart").read_text()
+    assert not (stage / "home/tester/.config/autostart/polymath-feed.desktop").exists()
+    assert not list((stage / "home/tester/.local/share/applications").glob("polymath-*"))
+    assert "open-feed" not in (stage / "home/tester/.config/labwc/autostart").read_text()
     assert "polymath =" not in (stage / "home/tester/.config/wayfire.ini").read_text()
     assert (stage / "srv/polymath/learned.sqlite3").exists() and conf.exists()  # learned data is kept
     refused = sh(str(ROOT / "uninstall.sh"), "--root", str(stage), "--purge", check=False)
@@ -147,3 +157,97 @@ def test_open_dashboard_waits_for_the_server_then_opens_an_app_window(tmp_path):
         (tmp_path / "args").unlink()
         subprocess.run([str(ROOT / "scripts/open-dashboard.sh")], env=env, check=True, timeout=30)
         assert not (tmp_path / "args").exists()
+
+
+def test_upgrade_moves_the_dashboard_kiosk_to_the_live_feed_and_retires_minecraft_settings(tmp_path):
+    stage = tmp_path / "stage"
+    home = stage / "home/tester"
+    (home / ".config/autostart").mkdir(parents=True)
+    (home / ".config/labwc").mkdir(parents=True)
+    (home / ".config/autostart/polymath-dashboard.desktop").write_text("[Desktop Entry]\n")
+    (home / ".config/labwc/autostart").write_text("swaybg &\n/opt/polymath/src/scripts/open-dashboard.sh &\n")
+    (home / ".config/wayfire.ini").write_text("[autostart]\npolymath = /opt/polymath/src/scripts/open-dashboard.sh\n")
+    conf = stage / "etc/polymath/polymath.toml"
+    conf.parent.mkdir(parents=True)
+    old = (
+        (ROOT / "config/polymath.toml")
+        .read_text()
+        .replace("[body]\n", '[body]\nminecraft_host = "127.0.0.1"\nminecraft_port = 25565\nminecraft_check = true\n')
+    )
+    conf.write_text(old)
+    out = sh(str(ROOT / "install.sh"), "--root", str(stage), "--user", "tester", "--skip-venv").stdout
+    assert "retired minecraft_* settings" in out
+    assert (conf.parent / "polymath.toml.bak").read_text() == old  # the original is kept
+    text = conf.read_text()
+    assert (
+        "\nminecraft_" not in text and text.count("# retired (the Minecraft player check was removed): minecraft_") == 3
+    )
+    from polymath.core.config import load_config
+
+    load_config(conf, env={})  # still a valid configuration
+    assert not (home / ".config/autostart/polymath-dashboard.desktop").exists()
+    labwc = (home / ".config/labwc/autostart").read_text()
+    assert labwc == "swaybg &\n/opt/polymath/src/scripts/open-feed.sh &\n"
+    assert (
+        home / ".config/wayfire.ini"
+    ).read_text() == "[autostart]\npolymath = /opt/polymath/src/scripts/open-feed.sh\n"
+    again = sh(str(ROOT / "install.sh"), "--root", str(stage), "--user", "tester", "--skip-venv").stdout
+    assert "retired" not in again and (home / ".config/labwc/autostart").read_text() == labwc  # idempotent
+
+
+def feed_env(tmp_path: Path, terminals: tuple[str, ...]) -> dict[str, str]:
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for name in terminals:
+        fake = bindir / name
+        fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {tmp_path}/{name}.args\n')
+        fake.chmod(0o755)
+    return {
+        "PATH": f"{bindir}:/usr/bin:/bin",
+        "XDG_RUNTIME_DIR": str(tmp_path),
+        "HOME": str(tmp_path),
+    }
+
+
+def test_open_feed_prefers_lxterminal_and_opens_one_window(tmp_path):
+    env = feed_env(tmp_path, ("lxterminal", "xterm"))
+    script = str(ROOT / "scripts/open-feed.sh")
+    subprocess.run([script], env=env, check=True, timeout=30)
+    args = (tmp_path / "lxterminal.args").read_text().splitlines()
+    assert args == ["--no-remote", "--title=Polymath — live feed", "--geometry=120x36", "-e", f"{script} --inside"]
+    assert not (tmp_path / "xterm.args").exists()
+    import fcntl
+
+    with open(tmp_path / "polymath-feed.lock", "w") as lock:  # a window is already open (it holds the lock)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        (tmp_path / "lxterminal.args").unlink()
+        subprocess.run([script], env=env, check=True, timeout=30)
+        assert not (tmp_path / "lxterminal.args").exists()  # autostart: nothing more
+        subprocess.run([script, "--new"], env=env, check=True, timeout=30)
+        assert (tmp_path / "lxterminal.args").exists()  # the menu entry always opens a window
+
+
+@pytest.mark.parametrize(
+    ("terminal", "expected"),
+    [
+        ("foot", ["--title=Polymath — live feed", "--window-size-chars=120x36", "{script}", "--inside"]),
+        ("xterm", ["-T", "Polymath — live feed", "-geometry", "120x36", "-fa", "Monospace", "-fs", "11", "-e",
+                   "{script}", "--inside"]),
+        ("x-terminal-emulator", ["-T", "Polymath — live feed", "-e", "{script}", "--inside"]),
+    ],
+)  # fmt: skip
+def test_open_feed_other_terminals(tmp_path, terminal, expected):
+    script = str(ROOT / "scripts/open-feed.sh")
+    subprocess.run([script, "--new"], env=feed_env(tmp_path, (terminal,)), check=True, timeout=30)
+    assert (tmp_path / f"{terminal}.args").read_text().splitlines() == [a.format(script=script) for a in expected]
+
+
+def test_open_feed_without_a_terminal_and_inside_the_window(tmp_path):
+    script = str(ROOT / "scripts/open-feed.sh")
+    none = subprocess.run([script, "--new"], env=feed_env(tmp_path, ()), capture_output=True, text=True, timeout=30)
+    assert none.returncode == 1 and "no terminal emulator found" in none.stderr
+    env = feed_env(tmp_path, ()) | {"POLYMATH_FEED_CMD": "echo feeding"}
+    inside = subprocess.run([script, "--inside"], env=env, input="\n", capture_output=True, text=True, timeout=30)
+    assert inside.returncode == 0 and "feeding" in inside.stdout
+    assert "The live feed stopped (exit status 0). Press Enter to close this window." in inside.stdout
+    assert "\033]0;Polymath — live feed\007" in inside.stdout

@@ -1,13 +1,11 @@
-"""Phase 10: Minecraft ping, thermal / disk / player guard, vitals, backups with rotation and restore, eviction."""
+"""Phase 10: thermal / disk guard, vitals, backups with rotation and restore, eviction, retired settings."""
 
 from __future__ import annotations
 
 import json
 import lzma
 import os
-import socket
 import sqlite3
-import struct
 import threading
 import time
 from collections import namedtuple
@@ -16,7 +14,6 @@ from types import SimpleNamespace
 import pytest
 
 from polymath.body import maintenance as mt
-from polymath.body import minecraft as mc
 from polymath.body.guard import Guard, data_bytes
 from polymath.body.sensors import Vitals
 from polymath.core.app import build_agent
@@ -28,102 +25,6 @@ from polymath.memory.text_index import TextIndex
 from tests.fixtures.typing import some
 
 
-# ------------------------------------------------------------------ Minecraft
-def read_varint(conn):
-    result = 0
-    for shift in range(0, 35, 7):
-        b = conn.recv(1)[0]
-        result |= (b & 0x7F) << shift
-        if not b & 0x80:
-            return result
-    raise ValueError
-
-
-class FakeMinecraft:
-    """Speaks the server side of Server List Ping."""
-
-    def __init__(self, response: bytes | None = None, online: int = 2) -> None:
-        self.sock = socket.socket()
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen()
-        self.port = self.sock.getsockname()[1]
-        self.online = online
-        self.response = response
-        self.handshakes: list[tuple[int, str, int, int]] = []
-        threading.Thread(target=self._serve, daemon=True).start()
-
-    def _serve(self) -> None:
-        while True:
-            try:
-                conn, _ = self.sock.accept()
-            except OSError:
-                return
-            with conn:
-                try:
-                    length = read_varint(conn)
-                    data = b""
-                    while len(data) < length:
-                        data += conn.recv(length - len(data))
-                    pos = 0
-                    pid, pos = mc._decode_varint(data, pos)
-                    proto, pos = mc._decode_varint(data, pos)
-                    n, pos = mc._decode_varint(data, pos)
-                    host = data[pos : pos + n].decode()
-                    pos += n
-                    port = struct.unpack(">H", data[pos : pos + 2])[0]
-                    nxt, _ = mc._decode_varint(data, pos + 2)
-                    self.handshakes.append((pid, host, port, nxt))
-                    assert proto == mc.PROTOCOL_ANY and nxt == 1
-                    read_varint(conn)
-                    conn.recv(1)  # status request: length 1, id 0
-                    if self.response is not None:
-                        conn.sendall(self.response)
-                        continue
-                    body = json.dumps(
-                        {"version": {"name": "Paper 1.21"}, "players": {"online": self.online, "max": 20}}
-                    ).encode()
-                    payload = mc._varint(0) + mc._varint(len(body)) + body
-                    conn.sendall(mc._varint(len(payload)) + payload)
-                except (OSError, IndexError, AssertionError):
-                    continue
-
-    def close(self) -> None:
-        self.sock.close()
-
-
-def test_varint_round_trip():
-    for v in (0, 1, 127, 128, 255, 25565, 2**31 - 1):
-        assert mc._decode_varint(mc._varint(v), 0) == (v, len(mc._varint(v)))
-    assert mc._varint(-1) == b"\xff\xff\xff\xff\x0f"
-    with pytest.raises(ValueError):
-        mc._decode_varint(b"\x80\x80", 0)
-
-
-def test_server_list_ping():
-    srv = FakeMinecraft(online=3)
-    try:
-        st = mc.ping("127.0.0.1", srv.port)
-        assert st == mc.ServerStatus(3, 20, "Paper 1.21")
-        assert srv.handshakes[-1] == (0, "127.0.0.1", srv.port, 1)
-    finally:
-        srv.close()
-    bad = FakeMinecraft(response=mc._varint(5) + b"\x00\x03abc")  # not JSON
-    try:
-        assert mc.ping("127.0.0.1", bad.port) is None
-    finally:
-        bad.close()
-    wrong = FakeMinecraft(response=mc._varint(2) + b"\x01\x00")  # wrong packet id
-    try:
-        assert mc.ping("127.0.0.1", wrong.port) is None
-    finally:
-        wrong.close()
-    closed = socket.socket()
-    closed.bind(("127.0.0.1", 0))
-    port = closed.getsockname()[1]
-    closed.close()
-    assert mc.ping("127.0.0.1", port, timeout=0.5) is None  # server down: nobody to yield to
-
-
 # ---------------------------------------------------------------------- guard
 class Clock:
     def __init__(self) -> None:
@@ -133,21 +34,15 @@ class Clock:
         return self.t
 
 
-def guard_for(config, db, temps, *, free=500.0, players=None):
+def guard_for(config, db, temps, *, free=500.0):
     clock = Clock()
     state = {"temp": temps, "free": free}
-    calls = []
 
     def sensors():
         return Vitals(state["temp"], 0.5, 4, 1000.0, state["free"], 10.0)
 
-    def pinger(host, port):
-        calls.append((host, port))
-        return None if players is None else mc.ServerStatus(players, 20, "x")
-
-    config.body.minecraft_check = players is not None
-    g = Guard(config, db, clock=clock, pinger=pinger, sensors=sensors)
-    return g, clock, state, calls
+    g = Guard(config, db, clock=clock, sensors=sensors)
+    return g, clock, state, None
 
 
 def test_thermal_modes_with_hysteresis(config, db):
@@ -174,18 +69,30 @@ def test_thermal_modes_with_hysteresis(config, db):
     assert g.observe().mode == "normal"  # no sensor: keep the last thermal state
 
 
-def test_players_yield_and_poll_interval(config, db):
-    g, clock, _state, calls = guard_for(config, db, 50.0, players=2)
+def test_retired_minecraft_settings_are_ignored_not_fatal(tmp_path, caplog):
+    """A configuration written for the version with the Minecraft player check still loads after upgrade."""
+    from polymath.core.config import ConfigError, load_config
+
+    f = tmp_path / "old.toml"
+    f.write_text(
+        '[body]\nminecraft_host = "127.0.0.1"\nminecraft_port = 25565\nminecraft_check = true\n'
+        "minecraft_poll_seconds = 60.0\nthrottle_celsius = 70.0\n"
+    )
+    with caplog.at_level("WARNING", logger="polymath.config"):
+        cfg = load_config(f, env={})
+    assert cfg.body.throttle_celsius == 70.0 and not hasattr(cfg.body, "minecraft_check")
+    assert "minecraft_check" in caplog.text
+    f.write_text("[senses]\nminecraft_port = 1\n")  # retired only where it used to live
+    with pytest.raises(ConfigError, match="unknown key"):
+        load_config(f, env={})
+
+
+def test_vitals_no_longer_record_players(config, db):
+    g, *_ = guard_for(config, db, 50.0)
     st = g.observe()
-    assert st.mode == "yield" and st.players_online == 2 and "2 player(s)" in st.reasons[0]
-    clock.t += 10
-    g.observe()
-    assert len(calls) == 1  # cached between polls
-    clock.t += config.body.minecraft_poll_seconds
-    g.observe()
-    assert len(calls) == 2 and calls[0] == (config.body.minecraft_host, config.body.minecraft_port)
-    g0, *_ = guard_for(config, db, 50.0, players=0)
-    assert g0.observe().mode == "normal"
+    assert st.mode == "normal" and not hasattr(st, "players_online")
+    cols = {r["name"] for r in db.query("PRAGMA table_info(vitals)")}
+    assert "players" not in cols and db.scalar("SELECT mode FROM vitals") == "normal"
 
 
 def test_disk_pressure_requests_eviction_and_allows_it_while_paused(config, db):

@@ -24,10 +24,6 @@ disk_budget_gb = 200.0              # total bytes Polymath may use under data_di
 disk_min_free_gb = 10.0
 backup_keep = 7
 backup_hour = 3
-minecraft_host = "127.0.0.1"
-minecraft_port = 25565
-minecraft_check = true              # yield heavy work while players are online
-minecraft_poll_seconds = 60.0
 
 [senses]
 user_agent = "PolymathBot/0.1 (+https://github.com/Blazeffect83; self-hosted learning agent)"

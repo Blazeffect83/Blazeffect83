@@ -9,12 +9,14 @@ implemented here and learns only from data the agent downloads itself.
 - **Runtime dependencies:** Python 3.11+ standard library and **numpy**. That is all (a test enforces it).
 - **Data:** Wikipedia, Wikidata, OpenAlex, PubMed, Project Gutenberg, Stack Exchange dumps, RSS/Atom feeds and
   a polite crawler (robots.txt, ≤ 1 request/s per host). See [docs/SOURCES.md](docs/SOURCES.md).
-- **Shares the Pi:** at most 2 cores and 3 GB, `nice 10`, and it yields whenever someone is playing on the
-  Minecraft server. It throttles at 75 °C and pauses at 82 °C.
+- **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
+  tests itself on and gets rewarded for.
+- **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
+  at 75 °C and pauses at 82 °C.
 - **Survives power loss:** every step commits atomically (SQLite WAL); jobs resume where they stopped.
 - **Answers offline**, with citations and confidences, and says "I don't know yet" instead of guessing.
 
-![Dashboard](docs/img/dashboard.png)
+![Live feed](docs/img/feed.png)
 
 ## Install (Raspberry Pi OS Bookworm, 64-bit)
 
@@ -28,11 +30,13 @@ sudo ./install.sh
 ```
 
 That's it. The agent and dashboard start now and at every boot. The desktop logs in automatically and opens
-the dashboard full-screen. You can also open it from any device on your network: `http://<pi-address>:8765/`.
+a terminal with the **live feed**. The browser dashboard (charts, topics, agents, ask box) is in the menu, and
+on any device on your network at `http://<pi-address>:8765/`.
 
 ## Use
 
 ```bash
+polymath feed                                    # the live feed (what the terminal at login shows)
 polymath ask "What is the capital of France?"   # offline, with sources
 polymath learn "black holes"                     # research a topic as a priority (or give a URL)
 polymath topics --weakest                        # where its knowledge is thinnest

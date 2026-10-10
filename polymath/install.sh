@@ -6,7 +6,8 @@
 #   ./install.sh --root /tmp/stage    stage all files under a directory (no system changes; for testing)
 #
 # Result: polymath.service (the agent) and polymath-dashboard.service run at boot, the desktop logs in
-# automatically and opens the dashboard. Data lives on the NVMe drive mounted at /srv/polymath.
+# automatically and opens a terminal with the live feed of what it is learning. Data lives on the NVMe
+# drive mounted at /srv/polymath.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,6 +120,11 @@ if [ ! -f "$CONF" ]; then
     run install -D -m 0644 "$SRC/config/polymath.toml" "$CONF"
 else
     say "keeping existing configuration $CONF"
+    if grep -qs '^minecraft_' "$CONF"; then
+        say "commenting out retired minecraft_* settings in $CONF (backup: $CONF.bak)"
+        run cp -p "$CONF" "$CONF.bak"
+        run sed -i 's/^\(minecraft_[a-z_]* *=.*\)$/# retired (the Minecraft player check was removed): \1/' "$CONF"
+    fi
 fi
 
 # ------------------------------------------------------------------ data directory
@@ -136,38 +142,53 @@ for unit in polymath.service polymath-dashboard.service; do
     fi
 done
 journald_changed="$(install_file "$SRC/deploy/journald-polymath.conf" "$ROOT/etc/systemd/journald.conf.d/polymath.conf" 0644)"
-run chmod 0755 "$OPT/src/scripts/open-dashboard.sh"
+run chmod 0755 "$OPT/src/scripts/open-dashboard.sh" "$OPT/src/scripts/open-feed.sh"
 
-# ------------------------------------------------------------------ desktop: autologin + dashboard on screen
+# ------------------------------------------------------------------ desktop: autologin + live feed on screen
+FEED_LAUNCHER=/opt/polymath/src/scripts/open-feed.sh
 if [ -n "$DESKTOP_USER" ]; then
     home="$(getent passwd "$DESKTOP_USER" | cut -d: -f6 || true)"
     [ -n "$home" ] || home="/home/$DESKTOP_USER"
     home="$ROOT$home"
-    say "dashboard autostart for desktop user $DESKTOP_USER"
-    install_file "$SRC/deploy/polymath-dashboard.desktop" "$home/.config/autostart/polymath-dashboard.desktop" 0644 \
+    say "live feed terminal at login for desktop user $DESKTOP_USER"
+    install_file "$SRC/deploy/polymath-feed.desktop" "$home/.config/autostart/polymath-feed.desktop" 0644 >/dev/null
+    # menu entries: the live feed (another window) and the dashboard (browser)
+    install_file "$SRC/deploy/polymath-feed-menu.desktop" "$home/.local/share/applications/polymath-feed.desktop" 0644 \
         >/dev/null
-    line="/opt/polymath/src/scripts/open-dashboard.sh &"
+    install_file "$SRC/deploy/polymath-dashboard.desktop" \
+        "$home/.local/share/applications/polymath-dashboard.desktop" 0644 >/dev/null
     labwc="$home/.config/labwc/autostart"
-    if [ "$DRY" = 0 ] && ! grep -qsF "$line" "$labwc"; then
-        mkdir -p "$(dirname "$labwc")"
-        [ -f "$labwc" ] || printf '# user autostart (labwc)\n' >"$labwc"
-        printf '%s\n' "$line" >>"$labwc"
-    fi
     wayfire="$home/.config/wayfire.ini"
-    if [ "$DRY" = 0 ] && ! grep -qs '^polymath *=' "$wayfire"; then
+    if [ "$DRY" = 0 ]; then
+        # upgrade from the dashboard-kiosk autostart of earlier versions
+        rm -f "$home/.config/autostart/polymath-dashboard.desktop"
+        [ ! -f "$labwc" ] || sed -i '\|/opt/polymath/src/scripts/open-dashboard.sh|d' "$labwc"
+        if ! grep -qsF "$FEED_LAUNCHER" "$labwc"; then
+            mkdir -p "$(dirname "$labwc")"
+            [ -f "$labwc" ] || printf '# user autostart (labwc)\n' >"$labwc"
+            printf '%s &\n' "$FEED_LAUNCHER" >>"$labwc"
+        fi
         mkdir -p "$(dirname "$wayfire")"
         touch "$wayfire"
-        if grep -q '^\[autostart\]' "$wayfire"; then
-            sed -i '/^\[autostart\]/a polymath = /opt/polymath/src/scripts/open-dashboard.sh' "$wayfire"
+        if grep -qs '^polymath *=' "$wayfire"; then
+            sed -i "s|^polymath *=.*|polymath = $FEED_LAUNCHER|" "$wayfire"
+        elif grep -q '^\[autostart\]' "$wayfire"; then
+            sed -i "/^\[autostart\]/a polymath = $FEED_LAUNCHER" "$wayfire"
         else
-            printf '\n[autostart]\npolymath = /opt/polymath/src/scripts/open-dashboard.sh\n' >>"$wayfire"
+            printf '\n[autostart]\npolymath = %s\n' "$FEED_LAUNCHER" >>"$wayfire"
         fi
+    else
+        printf '    + add %s to the XDG, labwc and wayfire autostart of %s\n' "$FEED_LAUNCHER" "$DESKTOP_USER"
     fi
     if [ "$SYSTEM" = 1 ] && [ "$DRY" = 0 ]; then
-        chown -R "$DESKTOP_USER": "$home/.config/autostart" "$home/.config/labwc" "$wayfire"
+        chown -R "$DESKTOP_USER": "$home/.config/autostart" "$home/.config/labwc" "$wayfire" \
+            "$home/.local/share/applications"
+        if ! command -v lxterminal >/dev/null 2>&1 && ! command -v x-terminal-emulator >/dev/null 2>&1; then
+            warn "no terminal emulator found: install one (sudo apt install lxterminal) to see the live feed"
+        fi
     fi
 else
-    warn "no desktop user found (pass --user NAME): the dashboard will not open automatically"
+    warn "no desktop user found (pass --user NAME): the live feed will not open automatically"
 fi
 
 # ------------------------------------------------------------------ enable and start
@@ -193,7 +214,8 @@ if [ "$SYSTEM" = 1 ]; then
         done
         if curl -fsS --max-time 2 http://localhost:8765/health; then
             echo
-            say "Polymath is running. Dashboard: http://$(hostname -I | awk '{print $1}'):8765/"
+            say "Polymath is running. Live feed: polymath feed (opens by itself at login)." \
+                "Dashboard: http://$(hostname -I | awk '{print $1}'):8765/"
         else
             warn "the agent has not reported healthy yet; see: journalctl -u polymath -n 50"
         fi
