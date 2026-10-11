@@ -745,7 +745,7 @@ ANSI = {
     "red": "31",
     "green": "32",
     "yellow": "33",
-    "blue": "34",
+    "blue": "94",  # bright blue: plain blue (34) all but vanishes on a dark blue terminal background
     "magenta": "35",
     "cyan": "36",
     "bred": "1;31",
@@ -810,13 +810,19 @@ ASCII_FALLBACK = {
 }
 
 
-def compact(n: int | float) -> str:
+def compact(n: int | float, *, short: bool = False) -> str:
+    """9.87M, 1.20B; and with ``short`` (narrow screens) also 97.6k and 256k."""
     n = float(n)
     if abs(n) >= 1e9:
         return f"{n / 1e9:.2f}B"
     if abs(n) >= 1e6:
         return f"{n / 1e6:.2f}M"
+    if short and abs(n) >= 1e4:
+        return f"{n / 1e3:.1f}k" if abs(n) < 1e5 else f"{n / 1e3:.0f}k"
     return f"{int(n):,}"
+
+
+NARROW = 100  # columns: below this (a small Pi touchscreen) the feed packs its lines tighter
 
 
 def human_bytes(n: int) -> str:
@@ -829,24 +835,29 @@ def _tag(name: str, style: str) -> Seg:
     return (f"{name:<9}" if len(name) < 9 else name + " ", style)
 
 
-def clock(ts: float, *, h24: bool | None = None) -> str:
-    """ " 9:05:12 PM" (12-hour, always 11 characters so the columns line up), or "21:05:12" with POLYMATH_CLOCK=24."""
+def clock(ts: float, *, h24: bool | None = None, narrow: bool = False) -> str:
+    """The time of a feed line: 12-hour, " 9:05:12 PM", or "21:05:12" with ``POLYMATH_CLOCK=24``.
+
+    Every value has the same width, so the columns line up. ``narrow`` (a small screen) drops the seconds of the
+    12-hour clock: " 9:05 PM", as wide as "21:05:12".
+    """
     t = time.localtime(ts)
     if h24 if h24 is not None else os.environ.get("POLYMATH_CLOCK", "12").strip() == "24":
         return time.strftime("%H:%M:%S", t)
-    return f"{t.tm_hour % 12 or 12:>2}:{t.tm_min:02d}:{t.tm_sec:02d} {'AM' if t.tm_hour < 12 else 'PM'}"
+    secs = "" if narrow else f":{t.tm_sec:02d}"
+    return f"{t.tm_hour % 12 or 12:>2}:{t.tm_min:02d}{secs} {'AM' if t.tm_hour < 12 else 'PM'}"
 
 
-def render_event(e: dict[str, Any]) -> list[Seg]:
-    """One event → coloured segments (time, tag, text)."""
-    at = clock(float(e.get("at") or time.time()))
+def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
+    """One event → coloured segments (time, tag, text); ``narrow`` packs it for a small screen."""
+    at = clock(float(e.get("at") or time.time()), narrow=narrow)
     head: list[Seg] = [(at, "dim"), ("  ", "")]
     k = e.get("kind")
     if k == "read":
         return [
             *head,
             _tag("read", "blue"),
-            (f"{e['source']:<14} ", "dim"),
+            (f"{e['source']:<{10 if narrow else 14}} ", "dim"),
             (str(e["title"]), "bold"),
             (f"  · {compact(e['chars'])} chars", "dim"),
         ]
@@ -1039,8 +1050,12 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
     return segs
 
 
-def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[Seg]]:
-    """The pinned header: state, then what it is doing now (its own line), then knowledge counts."""
+def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0) -> list[list[Seg]]:
+    """The pinned header: state, then what it is doing now (its own line), then knowledge counts.
+
+    With a ``width`` below ``NARROW`` the counts use short numbers (97.6k) and the cycle is left out. Whenever the
+    counts do not fit, the least important are dropped (the inferred/disputed detail first, docs and facts last).
+    """
     if st is None or offline:
         return [
             [(" POLYMATH ", "bold"), (" ○ ", "yellow"), (offline or "connecting…", "yellow")],
@@ -1058,35 +1073,48 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "") -> list[list[S
     else:
         dot, label = ("●", "green"), "learning"
     line1: list[Seg] = [(" POLYMATH ", "bold"), (f" {dot[0]} ", dot[1]), (label, dot[1])]
-    if st.get("cycle") is not None:
+    if st.get("cycle") is not None and not 0 < width < NARROW:  # a small screen has no room for it
         line1.append((f"   cycle {int(st['cycle']):,}", "dim"))
     c = st.get("counts") or {}
-    line2: list[Seg] = [
-        (f" {compact(c.get('documents', 0))} docs · {compact(c.get('entities', 0))} things · ", ""),
-        (f"{compact(c.get('facts', 0))} facts", "bold"),
-        (f" ({compact(c.get('inferred', 0))} inferred, {compact(c.get('disputed', 0))} disputed)", "dim"),
-        (f" · {c.get('rules', 0)} rules", ""),
+    short = 0 < width < NARROW
+
+    def n(key: str) -> str:
+        return compact(c.get(key, 0), short=short)
+
+    parts: list[tuple[int, Seg]] = [  # (how important: the lowest is dropped first when space is short, segment)
+        (9, (f" {n('documents')} docs · {n('entities')} things · ", "")),
+        (9, (f"{n('facts')} facts", "bold")),
+        (1, (f" ({n('inferred')} inferred, {n('disputed')} disputed)", "dim")),
+        (4, (f" · {c.get('rules', 0)} rules", "")),
     ]
     q = c.get("quiz")
     if q:
-        line2.append((f" · quiz {float(q['accuracy']):.0%}", ""))
+        parts.append((7, (f" · quiz {float(q['accuracy']):.0%}", "")))
     b = st.get("brain") or {}
     if b.get("drives"):
         total = int(b.get("primary_bytes", 0)) + int(b.get("drive_bytes", 0))
-        line2.append((f" · brain {human_bytes(total)} ({b['drives']} drive{'s' if b['drives'] != 1 else ''})", ""))
+        drives = f" ({b['drives']} drive{'s' if b['drives'] != 1 else ''})"
+        parts.append((6, (f" · brain {human_bytes(total)}{'' if short else drives}", "")))
     if c.get("agents"):
-        line2.append((f" · {c['agents']} agents", ""))
+        parts.append((3, (f" · {c['agents']} agents", "")))
     if st.get("temp_c") is not None:
         hot = float(st["temp_c"]) >= 75
-        line2.append((f" · {st['temp_c']:.0f} °C", "yellow" if hot else "dim"))
-    return [line1, now_line(st), line2]
+        parts.append((8 if hot else 5, (f" · {st['temp_c']:.0f} °C", "yellow" if hot else "dim")))
+    if width:
+        while len(parts) > 2 and sum(len(seg[0]) for _p, seg in parts) > width - 1:
+            parts.remove(min(parts, key=lambda ps: ps[0]))
+    return [line1, now_line(st), [seg for _p, seg in parts]]
 
 
-def badge(installed: Build, st: dict[str, Any] | None) -> list[Seg]:
-    """Top right of the header: the installed version and commit, and whether the agent runs exactly that build."""
+def badge(installed: Build, st: dict[str, Any] | None, *, width: int = 0) -> list[Seg]:
+    """Top right of the header: the installed version and commit, and whether the agent runs exactly that build.
+
+    On a narrow screen (``width`` below ``NARROW``) the date is left out.
+    """
     online = bool(st and st.get("online"))
     if not online or (st or {}).get("build") == installed.key:
-        text = installed.label() + (f" · {installed.date}" if installed.date else "")
+        date = f" · {installed.date}" if installed.date and not 0 < width < NARROW else ""
+        text = installed.label() + date
         return [(text, "dim"), (" ✓", "bgreen")] if online else [(text, "dim")]
     # an update is installed but the agent has not restarted into it yet: say which build it still runs
     running = str((st or {}).get("version") or "").split(" · ")
@@ -1247,9 +1275,43 @@ class Screen:
             self.out.write(self.paint(joined) + "\n")
             self.out.flush()
 
-    def line(self, segs: list[Seg]) -> None:
-        self.out.write(self.paint(segs) + "\n")
+    def line(self, segs: list[Seg], *, indent: int = 0) -> None:
+        """One feed line. With ``indent``, a line too long for the screen wraps (up to ``WRAP_ROWS`` rows), its
+        continuation starting under the text at column ``indent``; otherwise it is cut short with "…"."""
+        rows = self.wrap(segs, indent) if indent and self.fancy else [segs]
+        self.out.write("".join(self.paint(r) + "\n" for r in rows))
         self.out.flush()
+
+    WRAP_ROWS = 3
+
+    def wrap(self, segs: list[Seg], indent: int) -> list[list[Seg]]:
+        """Split segments into rows of at most the screen width, breaking at spaces where possible."""
+        chars = [(ch, style) for text, style in segs for ch in text]
+        rows: list[list[Seg]] = []
+        width, start = self.cols, 0
+        while start < len(chars) and len(rows) < self.WRAP_ROWS:
+            room = width - (indent if rows else 0)
+            end = len(chars)
+            if end - start > room:
+                end = start + room
+                if len(rows) < self.WRAP_ROWS - 1:  # break at the last space, unless that wastes most of the row
+                    space = max((i for i in range(start, end) if chars[i][0] == " "), default=-1)
+                    if space > start + room // 2:
+                        end = space + 1
+                else:
+                    end = len(chars)  # the last row: let paint cut it short with "…"
+            piece = chars[start:end]
+            row: list[Seg] = [(" " * indent, "")] if rows else []
+            for ch, style in piece:
+                if row and row[-1][1] == style:
+                    row[-1] = (row[-1][0] + ch, style)
+                else:
+                    row.append((ch, style))
+            rows.append(row)
+            start = end
+            while rows and start < len(chars) and chars[start][0] == " ":  # no leading spaces on a continuation
+                start += 1
+        return rows or [[]]
 
     def stop(self) -> None:
         if not self.fancy:
@@ -1298,10 +1360,19 @@ def run(
     polls, waiting, backoff = 0, "", interval
     last: dict[str, Any] | None = None
 
+    def width() -> int:
+        return screen.cols if fancy else 0
+
+    def emit(ev: dict[str, Any]) -> None:
+        segs = render_event(ev, narrow=0 < width() < NARROW)
+        wraps = ev.get("kind") not in {"read", "fact"}  # a stream of titles is fine cut short; a message is not
+        screen.line(segs, indent=sum(len(t) for t, _ in segs[:3]) if wraps else 0)
+
     def draw(*, force_plain: bool = False) -> None:
-        lines = status_lines(last, offline=f"waiting: {waiting}" if waiting else "")
+        lines = status_lines(last, offline=f"waiting: {waiting}" if waiting else "", width=width())
         lines[0] = [*face.segments(time.time()), *lines[0]]
-        screen.header(lines, right=badge(installed, None if waiting else last), force_plain=force_plain)
+        right = badge(installed, None if waiting else last, width=width())
+        screen.header(lines, right=right, force_plain=force_plain)
 
     def pause(seconds: float) -> None:
         """Sleep, redrawing the header every animation frame so the face keeps moving."""
@@ -1318,14 +1389,14 @@ def run(
         if fancy:
             draw()
         hello = f"live feed from {where}" if where else "live feed"
-        screen.line(render_event({"kind": "link", "text": f"{hello} · Ctrl+C to stop"}))
+        emit({"kind": "link", "text": f"{hello} · Ctrl+C to stop"})
         while True:
             t0 = clock()
             if t0 - checked_at >= BUILD_CHECK_S:
                 checked_at, installed = t0, build()
                 if on_update is not None and installed.installed and installed.key != mine.key:
-                    screen.line(render_event({"kind": "link", "text": f"updated to {installed.label()}: "
-                                              "reloading the feed", "style": "green"}))  # fmt: skip
+                    emit({"kind": "link", "text": f"updated to {installed.label()}: "
+                                              "reloading the feed", "style": "green"})  # fmt: skip
                     screen.stop()
                     on_update(installed)
                     mine = installed  # on_update returned instead of replacing the process: carry on
@@ -1335,7 +1406,7 @@ def run(
             except FeedUnavailable as exc:
                 if str(exc) != waiting:
                     waiting = str(exc)
-                    screen.line(render_event({"kind": "link", "text": f"waiting: {waiting}", "style": "yellow"}))
+                    emit({"kind": "link", "text": f"waiting: {waiting}", "style": "yellow"})
                 face.update(None, offline=waiting)
                 if fancy:
                     draw()
@@ -1346,7 +1417,7 @@ def run(
                 backoff = min(backoff * 2, 10.0)
                 continue
             if waiting:
-                screen.line(render_event({"kind": "link", "text": "connected", "style": "green"}))
+                emit({"kind": "link", "text": "connected", "style": "green"})
                 waiting, backoff = "", interval
             cursor = str(data.get("cursor") or "") or None
             last = data.get("status") or {}
@@ -1358,7 +1429,7 @@ def run(
             # spread a batch over the interval so it reads like a live feed rather than a burst
             gap = min(0.25, interval / max(1, len(events))) if fancy else 0.0
             for i, ev in enumerate(events):
-                screen.line(render_event(ev))
+                emit(ev)
                 if gap and i < len(events) - 1:
                     sleep(gap)
             polls += 1

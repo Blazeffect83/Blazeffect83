@@ -28,6 +28,7 @@ from polymath.interface.feed import (
 )
 from polymath.memory.documents import Document, DocumentStore
 from polymath.memory.graph import KnowledgeGraph
+from polymath.version import Build
 from tests.conftest import make_config
 from tests.fixtures.kb import build
 from tests.fixtures.typing import some
@@ -535,3 +536,54 @@ def test_the_clock_is_12_hour_and_lines_up(monkeypatch):
     assert seg[0] == ("13:00:05", "dim")
     monkeypatch.delenv("POLYMATH_CLOCK")
     assert feed.render_event({"kind": "note", "at": noon + 3600, "what": "x", "text": "t"})[0] == (" 1:00:05 PM", "dim")
+
+
+def test_a_small_screen_gets_a_header_and_lines_that_fit():
+    """The Pi's small touchscreen (about 72 columns): nothing important is cut off."""
+    st = {"online": True, "state": "running", "cycle": 41233, "mode": "normal", "activity": "reading Wikipedia articles",
+          "temp_c": 58.0, "brain": {"drives": 1, "primary_bytes": 3_500_000_000, "drive_bytes": 0},
+          "counts": {"documents": 97566, "entities": 255734, "facts": 33204, "inferred": 0, "disputed": 0, "rules": 141,
+                     "agents": 12, "quiz": {"accuracy": 0.44, "chance": 0.25}}}  # fmt: skip
+    wide = feed.status_lines(st)
+    assert "cycle 41,233" in text_of(wide[0]) and "97,566 docs" in text_of(wide[2]) and "inferred" in text_of(wide[2])
+    small = feed.status_lines(st, width=72)
+    counts = text_of(small[2])
+    assert "cycle" not in text_of(small[0]) and len(counts) <= 71, counts
+    assert "97.6k docs" in counts and "256k things" in counts and "33.2k facts" in counts and "quiz 44%" in counts
+    assert "inferred" not in counts  # the least important detail made room
+    hot = feed.status_lines(st | {"temp_c": 79.0}, width=60)
+    assert "79 °C" in text_of(hot[2]) and len(text_of(hot[2])) <= 59  # a hot Pi is always shown
+    b = Build("0.4.2", "34dfbb6", "2026-10-11", True)
+    on = {"online": True, "build": b.key}
+    assert text_of(feed.badge(b, on)) == "v0.4.2 · 34dfbb6 · 2026-10-11 ✓"
+    assert text_of(feed.badge(b, on, width=72)) == "v0.4.2 · 34dfbb6 ✓"
+    at = time.mktime((2026, 10, 11, 21, 4, 10, 0, 0, -1))
+    ev = {"kind": "read", "at": at, "source": "wikipedia", "title": "Andromeda Galaxy", "chars": 48200}
+    assert text_of(feed.render_event(ev)).startswith(" 9:04:10 PM  read     wikipedia      Andromeda")
+    assert text_of(feed.render_event(ev, narrow=True)).startswith(" 9:04 PM  read     wikipedia  Andromeda")
+    assert feed.compact(97566, short=True) == "97.6k" and feed.compact(255734, short=True) == "256k"
+    assert feed.compact(9999, short=True) == "9,999" and feed.compact(97566) == "97,566"
+    assert feed.ANSI["blue"] == "94"  # readable on a dark blue terminal
+
+
+def test_long_messages_wrap_under_their_text_on_a_small_screen():
+    out = io.StringIO()
+    scr = Screen(out, color=False, fancy=True)
+    scr.cols = 40
+    segs = [(" 9:04 PM", "dim"), ("  ", ""), ("storage  ", "bgreen"),
+            ("moved the brain onto T9 (3.5 GB, checked); the SD card only boots the Pi now", "bold")]  # fmt: skip
+    rows = scr.wrap(segs, 19)
+    texts = ["".join(t for t, _ in r) for r in rows]
+    assert len(texts) == 3 and all(len(x) <= 40 for x in texts[:2]), texts
+    assert texts[0].startswith(" 9:04 PM  storage  moved the brain") and texts[1].startswith(" " * 19 + "T9 (3.5 GB")
+    assert "".join(x.strip() + " " for x in texts).split() == "".join(t for t, _ in segs).split()  # nothing lost
+    scr.line(segs, indent=19)
+    printed = out.getvalue().splitlines()
+    assert len(printed) == 3 and printed[1].startswith(" " * 19)
+    out.truncate(0)
+    out.seek(0)
+    scr.line(segs)  # no indent: one row, cut short
+    assert len(out.getvalue().splitlines()) == 1 and out.getvalue().rstrip("\n").endswith("…")
+    very_long = [("x", ""), (" word" * 60, "")]
+    assert len(scr.wrap(very_long, 4)) == Screen.WRAP_ROWS  # at most three rows
+    assert scr.wrap([], 4) == [[]]

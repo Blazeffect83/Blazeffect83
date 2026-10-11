@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 489 automated tests pass (`pytest`), including:
+- **Tests:** 491 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -394,6 +394,9 @@ to 4,000 pages changed little (−1.5 %); it is kept at 4,000. A real day's tota
 - (v0.4.2) drive faces and the 12-hour clock: rendered in an emulated 118×14 terminal (pyte, DejaVu Sans Mono)
   with the brain-moved face in the header and times such as ` 9:04:10 PM` lined up; every face glyph is checked
   against the Pi's terminal font by `tests/test_face.py`.
+- (v0.4.3) the feed on the Pi's small touchscreen (a user photo: about 72 columns, a dark blue background) cut
+  off the header and showed the blue "read" tag almost invisibly. Rendered again at 72 columns on a dark blue
+  background: the header fits, messages wrap, and "read" is bright blue (`docs/img/feed-small-screen.png`).
 
 **Not yet done on real hardware.**
 

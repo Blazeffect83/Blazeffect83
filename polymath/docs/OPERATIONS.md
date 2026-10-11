@@ -126,6 +126,15 @@ The feed window uses a larger font (14 pt) than other terminals. Change it with 
 edit `~/.config/polymath-feed/lxterminal/lxterminal.conf` (your other terminals are not affected). The dashboard
 and the `/live` page show the same NOW line as a large banner.
 
+**On a small screen** (under 100 columns, like a Pi touchscreen) the feed packs itself:
+- the header drops the cycle number and the date, and the counts use short numbers (`97.6k docs`). Whatever
+  still does not fit is left out, least important first: the inferred/disputed detail, agents, rules, then the
+  temperature (unless the Pi is hot);
+- times leave out the seconds (` 9:04 PM`);
+- messages wrap under their text instead of being cut off. Long runs of article titles are still cut short.
+
+![The feed on a 72-column screen](img/feed-small-screen.png)
+
 Times use a 12-hour clock (` 9:04:10 PM`), the same in the terminal and on `/live`. For a 24-hour clock, set
 `POLYMATH_CLOCK=24` in the environment of the feed (and of the dashboard service, for `/live`).
 
