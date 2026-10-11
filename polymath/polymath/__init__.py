@@ -6,4 +6,4 @@ only from data the agent collects itself. Runtime dependencies: the Python
 standard library and numpy.
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"

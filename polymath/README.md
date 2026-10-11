@@ -34,7 +34,7 @@ implemented here and learns only from data the agent downloads itself.
   It writes less (idle cycles now write nothing), and when you plug in a drive, the whole brain moves onto it.
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,
   tests itself on and gets rewarded for. A little animated face at the top shows its mood (reading, thinking,
-  proud of a fixed mistake, dozing when idle), and the top right shows the exact version it runs, with ✓ when
+  proud of a fixed mistake, wide-eyed at a new drive, looking around when one is unplugged, dozing when idle), and the top right shows the exact version it runs, with ✓ when
   the agent runs the installed update.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
   at 75 °C and pauses at 82 °C.

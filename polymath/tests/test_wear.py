@@ -528,7 +528,7 @@ def test_feed_and_face_show_wear_and_home_notes():
     f = Face()
     f.update({"online": True, "state": "running", "mode": "normal", "action": "wikipedia.part"})
     f.see(base | {"what": "home"}, 10.0)
-    assert f.mood(10.0) == "celebrate"
+    assert f.mood(10.0) == "newhome"
     g = Face()
     g.update({"online": True, "state": "running", "mode": "normal", "action": "wikipedia.part"})
     g.see(base | {"what": "wear", "status": "read-only"}, 10.0)

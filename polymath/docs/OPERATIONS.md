@@ -126,6 +126,9 @@ The feed window uses a larger font (14 pt) than other terminals. Change it with 
 edit `~/.config/polymath-feed/lxterminal/lxterminal.conf` (your other terminals are not affected). The dashboard
 and the `/live` page show the same NOW line as a large banner.
 
+Times use a 12-hour clock (` 9:04:10 PM`), the same in the terminal and on `/live`. For a 24-hour clock, set
+`POLYMATH_CLOCK=24` in the environment of the feed (and of the dashboard service, for `/live`).
+
 **Version, top right.** `v0.2.0 · ab12cd3 · 2026-10-10 ✓` is the installed version, git commit and commit date;
 `✓` means the running agent was started from exactly that build. `↻ agent still on v0.1.0` means an update is
 installed but the agent has not restarted into it yet (`install.sh` restarts it; `sudo systemctl restart
@@ -147,11 +150,19 @@ itself: it does not contact GitHub to look for newer commits.
 | `[◕ω◕]···` | agents at work |
 | `[•‿•]✎` | writing the digest or the nightly report |
 | `[-‿-]zZ` | waiting for work (`[˘‿˘]zZ` at night) |
-| `[^‿^]✧` | a right answer, a better quiz score, a site approved, a new agent, the digest |
+| `[^‿^]✧` ⇄ `[^ᵕ^]✦` | a right answer, a better quiz score, a site approved, a new agent, the digest |
 | `[◕‿◕]!` | worked out a new fact by reasoning |
-| `[⌐■_■]` | fixed an earlier mistake |
+| `[⌐■_■]✧` | fixed an earlier mistake, a prediction came true, an improvement to itself |
+| `[◕‿◕]↑↑` | improving itself (tuning, checking its rules, its reading strategy) |
 | `[ᵒ_ᵒ]!` / `[¬_¬]?` / `[×_×]!` | a wrong answer / a contradiction or refused site / a failed job |
-| `[^‿^]★` | a milestone (1, 2, 5 × 10ⁿ facts, documents or rules; also a feed line) or a new drive |
+| `[^‿^]★` | a milestone (1, 2, 5 × 10ⁿ facts, documents or rules; also a feed line) |
+| `[◉‿◉]▣✧` | a drive was plugged in and added to the brain (wide-eyed) |
+| `[^ω^]⌂✦` | the whole brain moved into its new home on the SSD (also when that drive comes back) |
+| `[•‿•]→▣` / `[•‿•]▣→` | moving documents onto a drive / bringing them back |
+| `[ᵔ‿ᵔ]↓▣` | the nightly backup, landing on a drive |
+| `[ᵔ‿ᵔ]▣♪` | a drive came back |
+| `[◐_◐]□?` | a drive was unplugged: looking around for it |
+| `[^_^]▣/` | a drive was retired: waving goodbye |
 | `[>_<]` / `[-_-]` / `○[×_×]` | running hot / paused / agent offline |
 
 The spark on its head (`✦`/`✧`) pulses while the agent is alive and it blinks every few seconds. There is no

@@ -12,6 +12,7 @@ There is no language model and nothing random here. The expression comes from th
 It looks like this, followed by the rest of the header::
 
     ✦[◑‿◑]    reading         ✧[◔_◔]... reasoning       ✦[^‿^]✧   a right answer      ○[×_×]    offline
+    ✦[◉‿◉]▣✧  a new drive     ✧[^ω^]⌂✦  moved into it    ✧[◐_◐]□?  a drive went away   ✦[•‿•]→▣  moving documents
 
 Every glyph is single-width and present in DejaVu Sans Mono (the Raspberry Pi OS terminal font); the feed's
 ASCII fallback covers terminals without Unicode.
@@ -57,14 +58,23 @@ MOODS: dict[str, Mood] = {
     "offline": Mood(("×_×",), "red", blink=False),
     "connecting": Mood(("·_·", "·_·", "•_•", "•_•"), "dim", blink=False),
     # reactions
-    "happy": Mood(("^‿^",), "bgreen", ("✧", "", "✦", ""), blink=False),
+    "happy": Mood(("^‿^", "^‿^", "^ᵕ^", "^ᵕ^"), "bgreen", ("✧", "", "✦", ""), blink=False),  # a little bounce
     "aha": Mood(("◕‿◕",), "bcyan", ("!", "")),
-    "proud": Mood(("⌐■_■",), "bgreen", blink=False),
+    "proud": Mood(("⌐■_■",), "bgreen", ("", "✧", "", ""), blink=False),  # sunglasses that glint
     "oops": Mood(("ᵒ_ᵒ",), "red", ("!", "")),
     "doubt": Mood(("¬_¬",), "yellow", ("?",)),
     "error": Mood(("×_×",), "red", ("!", ""), blink=False),
     "celebrate": Mood(("^‿^", "^ω^"), "bmagenta", ("★", "☆"), blink=False),
     "improving": Mood(("◕‿◕",), "bgreen", ("↑", "↑↑", "↑", "")),  # changing something about itself
+    # its drives (▣ is a drive, □ a drive that is missing, ⌂ the brain's home)
+    "moving": Mood(("•‿•",), "cyan", ("→", "→▣", " ▣", "")),  # documents go onto a drive (body.spill)
+    "fetching": Mood(("•‿•",), "cyan", ("▣", "▣→", " →", "")),  # documents come back from a drive (body.recall)
+    "backingup": Mood(("ᵔ‿ᵔ",), "blue", ("↓", "↓▣", " ▣", "")),  # the nightly backup lands on a drive
+    "newdrive": Mood(("◉‿◉", "◉‿◉", "◕‿◕", "◕‿◕"), "bgreen", ("▣", "▣✧", "▣✦", "▣✧"), blink=False),  # plugged in!
+    "newhome": Mood(("^‿^", "^ω^"), "bmagenta", ("⌂", "⌂✧", "⌂✦", "⌂✧"), blink=False),  # the brain moved in
+    "relieved": Mood(("ᵔ‿ᵔ",), "green", ("▣", "▣♪", "▣", "▣♪")),  # a drive came back
+    "missing": Mood(("◐_◐", "◐_◐", "◑_◑", "◑_◑"), "yellow", ("□?", "□", "□?", ""), blink=False),  # looking for it
+    "waving": Mood(("^_^",), "bmagenta", ("▣/", "▣", "▣/", ""), blink=False),  # a retired drive: bye!
 }
 
 # job kind (or its prefix before the dot) → mood while that job runs
@@ -89,7 +99,9 @@ ACTION_MOOD: dict[str, str] = {
     "eval.recap": "writing",
     "agents.verify": "quizzing",
     "drive.learn": "agents",
-    "body.recall": "reading",
+    "body.recall": "fetching",
+    "body.spill": "moving",
+    "body.backup": "backingup",
     "noop": "idle",
 }
 PREFIX_MOOD: dict[str, str] = {
@@ -163,8 +175,10 @@ class Face:
             what, status = event.get("what"), event.get("status")
             if what == "fixed":
                 self.react("proud", now, 8.0, 3)
-            elif what == "home" or (what == "prediction" and status == "confirmed"):
-                self.react("celebrate" if what == "home" else "proud", now, 8.0, 3)
+            elif what == "home":  # the whole brain moved onto a drive
+                self.react("newhome", now, 10.0, 4)
+            elif what == "prediction" and status == "confirmed":
+                self.react("proud", now, 8.0, 3)
             elif what == "didyouknow":
                 self.react("aha", now, 4.0, 1)
             elif what == "wear" and status in {"read-only", "critical"}:
@@ -180,8 +194,18 @@ class Face:
                 self.react("doubt", now, 3.0, 1)
         elif k in {"report", "newagent"} or (k in {"digest", "recap"} and event.get("head")):
             self.react("happy", now, 6.0, 2)
-        elif k == "storage" and event.get("event") == "added":
-            self.react("celebrate", now, 8.0, 3)
+        elif k == "storage":
+            ev, home = event.get("event"), bool((event.get("detail") or {}).get("home"))
+            if ev == "added":
+                self.react("newhome" if home else "newdrive", now, 8.0, 3)
+            elif ev == "online":
+                self.react("newhome" if home else "relieved", now, 5.0, 2)
+            elif ev == "offline":
+                self.react("missing", now, 8.0, 3)
+            elif ev == "retired":
+                self.react("waving", now, 6.0, 2)
+            elif ev == "hint":
+                self.react("doubt", now, 3.0, 1)
         elif k == "milestone":
             self.react("celebrate", now, 10.0, 4)
 

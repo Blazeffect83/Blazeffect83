@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 486 automated tests pass (`pytest`), including:
+- **Tests:** 489 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -391,6 +391,9 @@ to 4,000 pages changed little (−1.5 %); it is kept at 4,000. A real day's tota
   after a laptop reformat to an empty exFAT. Every not-fresh case is left alone: a file or folder of yours, a
   plain text file, Polymath's documents, a retired drive, under 32 GB, more than 1 GB of "maker" files, a drive
   with no serial or model, or the setting off.
+- (v0.4.2) drive faces and the 12-hour clock: rendered in an emulated 118×14 terminal (pyte, DejaVu Sans Mono)
+  with the brain-moved face in the header and times such as ` 9:04:10 PM` lined up; every face glyph is checked
+  against the Pi's terminal font by `tests/test_face.py`.
 
 **Not yet done on real hardware.**
 

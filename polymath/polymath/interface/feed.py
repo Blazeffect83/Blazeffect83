@@ -800,6 +800,13 @@ ASCII_FALLBACK = {
     "↻": "~",
     "↑": "^",
     "▶": ">",
+    "ᵕ": "u",
+    "▣": "#",
+    "□": "o",
+    "◉": "O",
+    "⌂": "^",
+    "♪": "~",
+    "↓": "v",
 }
 
 
@@ -822,9 +829,17 @@ def _tag(name: str, style: str) -> Seg:
     return (f"{name:<9}" if len(name) < 9 else name + " ", style)
 
 
+def clock(ts: float, *, h24: bool | None = None) -> str:
+    """ " 9:05:12 PM" (12-hour, always 11 characters so the columns line up), or "21:05:12" with POLYMATH_CLOCK=24."""
+    t = time.localtime(ts)
+    if h24 if h24 is not None else os.environ.get("POLYMATH_CLOCK", "12").strip() == "24":
+        return time.strftime("%H:%M:%S", t)
+    return f"{t.tm_hour % 12 or 12:>2}:{t.tm_min:02d}:{t.tm_sec:02d} {'AM' if t.tm_hour < 12 else 'PM'}"
+
+
 def render_event(e: dict[str, Any]) -> list[Seg]:
     """One event → coloured segments (time, tag, text)."""
-    at = time.strftime("%H:%M:%S", time.localtime(float(e.get("at") or time.time())))
+    at = clock(float(e.get("at") or time.time()))
     head: list[Seg] = [(at, "dim"), ("  ", "")]
     k = e.get("kind")
     if k == "read":

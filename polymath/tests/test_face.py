@@ -241,7 +241,8 @@ def _cmap(path: Path) -> set[int]:
         ("eval.quiz", "quizzing"),
         ("agents.step", "agents"),
         ("eval.digest", "writing"),
-        ("body.backup", "tidying"),
+        ("body.backup", "backingup"),
+        ("body.housekeeping", "tidying"),
         ("something.new", "thinking"),
         ("noop", "idle"),
         (None, "idle"),
@@ -302,7 +303,16 @@ def test_reactions_last_a_while_and_respect_priority():
         ({"kind": "newagent"}, "happy"),
         ({"kind": "digest", "head": True}, "happy"),
         ({"kind": "digest"}, "reading"),
-        ({"kind": "storage", "event": "added"}, "celebrate"),
+        ({"kind": "storage", "event": "added"}, "newdrive"),
+        ({"kind": "storage", "event": "added", "detail": {"home": True}}, "newhome"),
+        ({"kind": "storage", "event": "online"}, "relieved"),
+        ({"kind": "storage", "event": "online", "detail": {"home": True}}, "newhome"),
+        ({"kind": "storage", "event": "offline"}, "missing"),
+        ({"kind": "storage", "event": "retired"}, "waving"),
+        ({"kind": "storage", "event": "hint"}, "doubt"),
+        ({"kind": "storage", "event": "full"}, "reading"),  # no reaction
+        ({"kind": "note", "what": "home", "status": "moved"}, "newhome"),
+        ({"kind": "note", "what": "prediction", "status": "confirmed"}, "proud"),
         ({"kind": "read"}, "reading"),
     ]
     for ev, mood in cases:
@@ -363,7 +373,7 @@ def test_run_animates_between_polls_and_shows_face_and_badge(monkeypatch):
     assert rc == 0
     assert slept == [0.5, 0.5, 0.5]  # one animation frame at a time between the two polls
     assert text.count("\0337") >= 6  # the header is redrawn every frame
-    assert "[^‿^]" in text  # a right answer makes it happy
+    assert "[^‿^]" in text or "[^ᵕ^]" in text  # a right answer makes it happy (it bounces)
     assert "v0.2.0 · ab12cd3 · 2026-10-10 ✓" in text
 
 
@@ -414,3 +424,14 @@ def test_install_writes_the_build_stamp(tmp_path):
     again = subprocess.run(args, capture_output=True, text=True, check=True, timeout=120).stdout
     assert "build: polymath" not in again  # unchanged: not rewritten
     assert read_build(stage / "opt/polymath/build.json").installed
+
+
+def test_drive_jobs_have_their_own_faces():
+    assert [mood_for_action(a) for a in ("body.spill", "body.recall", "body.backup", "body.evict")] == [
+        "moving", "fetching", "backingup", "tidying"]  # fmt: skip
+    f = Face()
+    f.update(online() | {"action": "body.spill"})
+    frames = [text_of(f.segments(n * FRAME_S)) for n in range(4)]
+    assert any("→▣" in x for x in frames) and all("[•‿•]" in x or "[-‿-]" in x for x in frames)
+    f.see({"kind": "storage", "event": "offline"}, 100.0)
+    assert any("□?" in text_of(f.segments(100.0 + n * FRAME_S)) for n in range(4))

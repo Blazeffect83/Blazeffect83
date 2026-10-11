@@ -520,3 +520,18 @@ def test_dashboard_url(config):
     assert cli.dashboard_url(config) == "http://[::1]:9000"
     config.dashboard.host = "::"
     assert cli.dashboard_url(config) == "http://127.0.0.1:9000"
+
+
+def test_the_clock_is_12_hour_and_lines_up(monkeypatch):
+    noon = time.mktime((2026, 10, 11, 12, 0, 5, 0, 0, -1))
+    assert feed.clock(noon) == "12:00:05 PM"
+    assert feed.clock(noon - 12 * 3600) == "12:00:05 AM"  # midnight
+    assert feed.clock(noon + 9 * 3600 + 65) == " 9:01:10 PM" and feed.clock(noon - 3 * 3600) == " 9:00:05 AM"
+    assert {len(feed.clock(noon + h * 3600)) for h in range(-12, 12)} == {11}  # the columns never shift
+    assert feed.clock(noon + 9 * 3600, h24=True) == "21:00:05"
+    monkeypatch.setenv("POLYMATH_CLOCK", "24")
+    assert feed.clock(noon + 9 * 3600) == "21:00:05"
+    seg = feed.render_event({"kind": "note", "at": noon + 3600, "what": "x", "text": "t"})
+    assert seg[0] == ("13:00:05", "dim")
+    monkeypatch.delenv("POLYMATH_CLOCK")
+    assert feed.render_event({"kind": "note", "at": noon + 3600, "what": "x", "text": "t"})[0] == (" 1:00:05 PM", "dim")
