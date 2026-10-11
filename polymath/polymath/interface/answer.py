@@ -27,6 +27,7 @@ from polymath.memory.graph import Entity, KnowledgeGraph, norm_alias
 from polymath.memory.text_index import TextIndex
 from polymath.perception.entities import EntityLinker
 from polymath.perception.stem import stem
+from polymath.reasoning import temporal
 
 PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (
@@ -163,7 +164,7 @@ def render_value(db: Database, o: int, value: str) -> str:
     v = json.loads(value)
     if isinstance(v, dict):
         if "time" in v:
-            return str(v["time"])
+            return temporal.human_date(str(v["time"]))
         if "amount" in v:
             amt = float(v["amount"])
             num = f"{amt:,.0f}" if amt.is_integer() or abs(amt) >= 1000 else f"{amt:,.4g}"
@@ -290,16 +291,20 @@ class Answerer:
         out: list[Statement] = []
         for p in predicates:
             plabel = str(self.db.scalar("SELECT label FROM predicates WHERE id=?", (p,), default="?"))
-            for t in self.db.query(
+            rows = self.db.query(
                 "SELECT id, o, value, status, confidence FROM triples WHERE s=? AND p=? AND "
                 "holdout=0 ORDER BY status='disputed', confidence DESC LIMIT ?",
-                (entity.id, p, limit),
-            ):
+                (entity.id, p, limit * 3),
+            )
+            when = temporal.of(self.db, [int(t["id"]) for t in rows])
+            for t in temporal.current_first(rows, when)[:limit]:
                 value = render_value(self.db, int(t["o"]), str(t["value"]))
                 kind = {"sourced": "fact", "inferred": "inferred", "disputed": "disputed"}[t["status"]]
+                v = when.get(int(t["id"]), temporal.Validity())
+                verb = "was" if v.ended() else "is"
                 out.append(
                     Statement(
-                        f"The {plabel} of {entity.label} is {value}.",
+                        f"The {plabel} of {entity.label} {verb} {value}{v.suffix()}.",
                         float(t["confidence"]),
                         kind,
                         self._citations(int(t["id"])),
@@ -411,6 +416,11 @@ class Answerer:
         return best
 
     def ask(self, question: str) -> Answer:
+        from polymath import qa
+
+        skilled = qa.answer(self, question)  # comparisons, places, time, causes, kinds, how-to, multi-step
+        if skilled is not None:
+            return skilled
         subj, rel, kind = self.parse(question)
         entity = self.find_entity(subj) if subj else None
         statements: list[Statement] = []

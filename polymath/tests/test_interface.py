@@ -50,7 +50,7 @@ def test_answers_cite_their_sources(db):
     alias = a.ask("What is the capital city of Country04?")  # Wikidata property alias → P36
     assert alias.statements[0].text == "The capital of Country04 is Capitol04."
     born = a.ask("When was Person2 born?")
-    assert born.statements[0].text == "The date of birth of Person2 is 1912-05-03."
+    assert born.statements[0].text == "The date of birth of Person2 is 3 May 1912."
     assert born.statements[0].citations == [Citation("Person2", None, "CC BY-SA 4.0", "wikipedia")]
     pop = a.ask("Country07's population")
     assert pop.statements[0].text == "The population of Country07 is 1,000,007."
@@ -118,7 +118,7 @@ def test_render_value_kinds(db):
     kb = build(db)
     assert render_value(db, kb.cities[0], "") == "Capitol00"
     assert render_value(db, kb.graph.stub("Q239"), "") == "Q239 (an entity whose name I have not read yet)"
-    assert render_value(db, 0, json.dumps({"time": "1969-07-20"})) == "1969-07-20"
+    assert render_value(db, 0, json.dumps({"time": "1969-07-20"})) == "20 July 1969"
     assert render_value(db, 0, json.dumps({"amount": 2.5, "unit": "km"})) == "2.5 km"
     assert render_value(db, 0, json.dumps({"amount": 12, "unit": "Q6256"})) == "12 country"
     assert render_value(db, 0, json.dumps({"text": "hello"})) == "hello"

@@ -23,6 +23,7 @@ import json
 from typing import Any
 
 from polymath.core.db import Database
+from polymath.reasoning import temporal
 
 MARGIN = 0.25
 REL_TOL = 0.05
@@ -98,6 +99,12 @@ def detect(db: Database, functional: set[int], *, limit_groups: int = 200_000) -
         rows = db.query(
             "SELECT id, o, value, status, confidence FROM triples WHERE s=? AND p=? AND holdout=0", (g["s"], g["p"])
         )
+        ended = temporal.ended_ids(db, [int(r["id"]) for r in rows])
+        for r in rows:  # a value that held earlier (Bonn, capital until 1990) does not compete with today's
+            if int(r["id"]) in ended and r["status"] == "disputed":
+                db.execute("UPDATE triples SET status='sourced' WHERE id=?", (r["id"],))
+                stats["settled"] += 1
+        rows = [r for r in rows if int(r["id"]) not in ended]
         # cluster mutually compatible values (precision variants of one date are one value)
         clusters: list[list[Any]] = []
         for r in sorted(rows, key=lambda r: -float(r["confidence"])):

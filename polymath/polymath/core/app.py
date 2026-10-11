@@ -57,19 +57,21 @@ class Components:
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
     from polymath.agents import society
     from polymath.body import maintenance
+    from polymath.drive import capacity, selftune, specialists, strategy
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
-    from polymath.drive import selftune, specialists, strategy
     from polymath.evaluation import jobs as vjobs
     from polymath.evaluation import recap, surprise
     from polymath.interface import knowledge_map
     from polymath.memory import jobs as memjobs
+    from polymath.memory import merge
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
+    from polymath.perception import howto, phrasing, semantic
     from polymath.perception import jobs as pjobs
-    from polymath.perception import phrasing
+    from polymath.qa import places
     from polymath.reasoning import jobs as rjobs
-    from polymath.reasoning import predictions, rule_audit
+    from polymath.reasoning import predictions, rule_audit, sanity
     from polymath.senses import (
         books_qa,
         crawler,
@@ -174,6 +176,11 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("self.strategy", strategy.strategy_job, "Measure what teaches it most; adjust what it reads", action="improve")
     reg("reason.audit", rule_audit.audit_job, "Judge its rules by how their conclusions held up", action="reason")
     reg("perception.phrasing", phrasing.phrasing_job, "Learn how sentences state relations", action="learn")
+    reg("memory.geo", places.geo_job, "Index where things are (coordinates)", action="memorize")
+    reg("memory.merge", merge.merge_job, "Merge duplicate entries for one thing", action="memorize")
+    reg("perception.semantic", semantic.semantic_job, "Read causes and kinds of things from text", action="learn")
+    reg("perception.howto", howto.howto_job, "File step-by-step answers (how-to)", action="learn")
+    reg("reason.sanity", sanity.sanity_job, "Catch facts that cannot be true", action="reason")
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
@@ -199,6 +206,12 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (600.0, strategy.planner),
             (600.0, rule_audit.planner),
             (600.0, phrasing.planner),
+            (600.0, places.planner),
+            (600.0, merge.planner),
+            (600.0, semantic.planner),
+            (600.0, howto.planner),
+            (600.0, sanity.planner),
+            (600.0, capacity.planner),
             (60.0, society.planner),
         ]
         if planners

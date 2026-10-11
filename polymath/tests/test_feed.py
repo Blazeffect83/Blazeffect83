@@ -63,7 +63,7 @@ def test_first_poll_shows_recent_backlog_then_only_new(db):
     assert facts and all(e["how"] in {"Wikidata", "infobox"} for e in facts)
     born = {e["s"]: e for e in facts if e["p"] == "date of birth"}
     assert sorted(born) == [f"Person{j}" for j in range(5)]  # the five newest facts, capped at five
-    assert born["Person4"]["o"] == "1914-05-05" and born["Person4"]["how"] == "infobox"
+    assert born["Person4"]["o"] == "5 May 1914" and born["Person4"]["how"] == "infobox"
     assert born["Person4"]["why"] == "Person4"  # the infobox's article
     again = f.poll(first["cursor"])
     assert again["events"] == [] and again["cursor"] == first["cursor"]

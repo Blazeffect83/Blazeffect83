@@ -156,6 +156,7 @@ def forward_chain(db: Database, *, max_new: int = 50_000, tick: Any = None) -> d
     rules = db.query("SELECT kind, p, q, confidence FROM rules WHERE kind IN ('transitive','inverse','symmetric')")
     if not rules:
         return {"new": 0, "examined": 0}
+    from polymath.reasoning import temporal
     from polymath.reasoning.rule_audit import factor, is_withdrawn, rule_key, trust_of
 
     trust = trust_of(db)  # a rule's conclusions keep the confidence its track record earned (none when demoted)
@@ -209,6 +210,7 @@ def forward_chain(db: Database, *, max_new: int = 50_000, tick: Any = None) -> d
             source="rule",
             detail=f"{rule}: " + " + ".join(f"#{x}" for x in premises),
         )
+        temporal.inherit(db, premises, tid)  # Bonn was capital of Germany until 1990, so the conclusion ends then too
         new += 1
         delta.append((tid, s, p, o, conf))
 

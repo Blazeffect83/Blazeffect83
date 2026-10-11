@@ -17,6 +17,7 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 MAX_DEPTH = 40
 
@@ -102,6 +103,7 @@ class CleanPage:
     templates: list[Template] = field(default_factory=list)
     categories: list[str] = field(default_factory=list)
     sections: list[tuple[int, str]] = field(default_factory=list)  # (offset, heading)
+    tables: list[dict[str, Any]] = field(default_factory=list)  # wikitables: caption, headers, rows of cells
 
 
 def normalize_title(title: str) -> str:
@@ -338,7 +340,8 @@ def _strip_templates(text: str, out_templates: list[Template], depth: int = 0) -
     return "".join(res)
 
 
-def _strip_tables(text: str) -> str:
+def _strip_tables(text: str, tables: list[dict[str, Any]] | None = None) -> str:
+    """Remove tables from the prose; data tables (class "wikitable") are parsed into ``tables`` first."""
     res: list[str] = []
     i = 0
     while True:
@@ -350,9 +353,80 @@ def _strip_tables(text: str) -> str:
         end = _find_close(text, j, "{|", "|}")
         if end < 0:
             break
+        if tables is not None and len(tables) < MAX_TABLES:
+            parsed = parse_table(text[j:end])
+            if parsed is not None:
+                tables.append(parsed)
         i = end
         res.append("\n")
     return "".join(res)
+
+
+MAX_TABLES, MAX_TABLE_ROWS, MAX_TABLE_COLS = 6, 300, 12
+_CELL_LINK = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]")
+_SPAN = re.compile(r"\b(?:rowspan|colspan)\s*=", re.I)
+
+
+def _cell(raw: str) -> dict[str, Any] | None:
+    """One table cell: its text and the article it links to first (attributes like style="…" are dropped)."""
+    if _SPAN.search(raw.split("[[")[0]):
+        return None  # a merged cell: the row no longer lines up with the headers
+    depth, cut = 0, -1
+    for k, ch in enumerate(raw):  # "style=…| content": the first bare "|" ends the attributes
+        if raw.startswith("[[", k):
+            depth += 1
+        elif raw.startswith("]]", k):
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            cut = k
+            break
+    content = raw[cut + 1 :] if cut >= 0 and "=" in raw[:cut] else raw
+    link = _CELL_LINK.search(content)
+    text = _CELL_LINK.sub(lambda m: m.group(2) or m.group(1), content)
+    text = html.unescape(_TAG.sub("", _QUOTES.sub("", _inline(text))))
+    text = re.sub(r"\s+", " ", text).strip()
+    return {"text": text, "link": normalize_title(link.group(1)) if link else None}
+
+
+def parse_table(block: str) -> dict[str, Any] | None:
+    """A wikitable as {caption, headers, rows}; None for layout tables, nested tables or tables without headers."""
+    lines = block.split("\n")
+    if "wikitable" not in lines[0] or block.count("{|") > 1:
+        return None
+    caption = ""
+    headers: list[str] = []
+    rows: list[list[dict[str, Any] | None]] = []
+    row: list[dict[str, Any] | None] = []
+    for line in lines[1:]:
+        line = line.strip()
+        if line.startswith("|+"):
+            caption = (_cell(line[2:]) or {}).get("text", "")
+        elif line.startswith("|-") or line.startswith("|}"):
+            if row:
+                rows.append(row)
+            row = []
+        elif line.startswith("!"):
+            cells = [_cell(c) for c in re.split(r"!!|\|\|", line[1:])]
+            if not rows and not row:
+                headers += [(c or {}).get("text", "") for c in cells]
+            else:
+                row += cells  # a header cell starting a data row (row titles)
+        elif line.startswith("|"):
+            row += [_cell(c) for c in line[1:].split("||")]
+        elif row and line:
+            last = row[-1]
+            if last is not None:
+                last["text"] = (last["text"] + " " + (_cell(line) or {}).get("text", "")).strip()
+        if len(rows) >= MAX_TABLE_ROWS:
+            break
+    if row:
+        rows.append(row)
+    if not headers or len(headers) > MAX_TABLE_COLS:
+        return None
+    good = [r for r in rows if len(r) == len(headers) and all(c is not None for c in r)]
+    if len(good) < 3:
+        return None
+    return {"caption": caption, "headers": headers, "rows": good}
 
 
 def _strip_file_links(text: str) -> tuple[str, list[str]]:
@@ -437,7 +511,8 @@ def clean_wikitext(raw: str) -> CleanPage:
     text = _REF.sub("", text)
     text = _DROP_TAGS.sub("", text)
     text = _strip_templates(text, templates)
-    text = _strip_tables(text)
+    tables: list[dict[str, Any]] = []
+    text = _strip_tables(text, tables)
     text, categories = _strip_file_links(text)
     text = _BEHAVIOR.sub("", text)
     text = _TAG.sub("", text)
@@ -483,7 +558,9 @@ def clean_wikitext(raw: str) -> CleanPage:
         blank = False
     clean = "".join(out).rstrip()
     links = [(a, b, t) for a, b, t in links if b <= len(clean) and clean[a:b].strip()]
-    return CleanPage(text=clean, links=links, templates=templates, categories=categories, sections=sections)
+    return CleanPage(
+        text=clean, links=links, templates=templates, categories=categories, sections=sections, tables=tables
+    )
 
 
 def _normalise_segment(s: str, links: list[tuple[int, int, str]]) -> tuple[str, list[tuple[int, int, str]]]:

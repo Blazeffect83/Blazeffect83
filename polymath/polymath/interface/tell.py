@@ -29,6 +29,7 @@ from typing import Any
 from polymath.core.db import Database
 from polymath.interface.answer import Answerer, Citation, render_value
 from polymath.memory.graph import Entity
+from polymath.reasoning import temporal
 
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]  # fmt: skip
@@ -189,7 +190,17 @@ class Teller:
                 continue
             out.append(Fact(int(r["id"]), str(r["key"]), str(r["label"]), value, str(r["status"]),
                             float(r["confidence"]), int(r["o"]), str(r["value"]), int(r["p"])))  # fmt: skip
-        return out
+        when = temporal.of(self.db, [f.triple for f in out])
+        current = {f.pid for f in out if not when.get(f.triple, temporal.Validity()).ended()}
+        kept = []
+        for f in out:  # what held earlier is left out when the current value is known: Berlin, not Bonn
+            v = when.get(f.triple)
+            if v is not None and v.ended():
+                if f.pid in current:
+                    continue
+                f.value += v.suffix()
+            kept.append(f)
+        return kept
 
     def phrasings(self) -> dict[int, str]:
         """Phrasings learned from reading (perception.phrasing), per predicate id."""

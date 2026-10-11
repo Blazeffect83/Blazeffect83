@@ -69,6 +69,7 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | SD card wear | `polymath wear` |
 | on your phone | `http://<pi>:8765/live`: the face and the live feed |
 | knowledge map | on the dashboard: topics clustered by what they share, sized by documents. ▶ plays the time-lapse; click a topic to ask about it |
+| ask harder questions | `polymath ask "Is Brazil bigger than Angola?"` · "How far is Paris from Berlin?" · "Who was alive at the same time as Mozart?" · "What causes malaria?" · "Can penguins fly?" · "How do I …?" · "Who is the head of government of the capital of France?" |
 | what it changed about itself | `polymath changes` (`--all` adds trials that changed nothing; `--json`), the dashboard panel *How it improved itself*, "improved" lines in the feed |
 | overrule a tuned setting | `polymath changes --reset NAME` (or `all`): back to the default and pinned · `polymath changes --allow NAME` (or `all`) lets it tune again |
 
@@ -268,6 +269,15 @@ wikipedia_lang = "en"
 [body]
 disk_budget_gb = 400
 ```
+
+**A second Wikipedia language** (`second_language = "es"` under `[senses]`; also `de`, `fr`, `it`, `pt`): about one
+Wikipedia part in five is then read from that language, only for its infoboxes and tables, to back up or contest
+facts. It is on automatically in big-brain mode.
+
+**Big-brain mode** turns on by itself when the brain has a large drive (a budget of 400 GB or more, for example the
+brain on your 1 TB SSD). It raises settings you have not set yourself: word vectors for 400,000 words, 40 OpenAlex and
+PubMed files, 3,000 books, 15 Stack Exchange sites and Spanish Wikipedia as a second language. The changelog says
+when it switches. Any of these set in `polymath.toml` stays as you set it.
 
 Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 

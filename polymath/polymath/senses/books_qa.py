@@ -12,6 +12,7 @@ from xml.etree import ElementTree as ET
 
 from polymath.core.jobs import JobContext, JobOutcome, PermanentError
 from polymath.memory.documents import Document, DocumentStore
+from polymath.perception.howto import steps_from_html, steps_from_text
 from polymath.senses.crawler import Frontier, host_of
 from polymath.senses.dumpfiles import raw_path, run_records
 from polymath.senses.html_text import extract
@@ -159,7 +160,9 @@ def se_document(row: ET.Element, host: str, titles: dict[str, str]) -> Document 
         score = 0
     if score < 0:
         return None
-    body = extract(a.get("Body", ""), f"https://{host}/").text
+    raw_body = a.get("Body", "")
+    body = extract(raw_body, f"https://{host}/").text
+    steps = (steps_from_html(raw_body) or steps_from_text(body)) if ptype == "2" else []
     pid = a.get("Id", "")
     if ptype == "1":
         title = a.get("Title", "")
@@ -194,6 +197,7 @@ def se_document(row: ET.Element, host: str, titles: dict[str, str]) -> Document 
             "tags": tags,
             "parent": a.get("ParentId"),
             "accepted": a.get("AcceptedAnswerId"),
+            **({"steps": steps} if steps else {}),
         },
     )
 

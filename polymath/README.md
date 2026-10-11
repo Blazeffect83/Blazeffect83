@@ -46,6 +46,19 @@ implemented here and learns only from data the agent downloads itself.
   - it reads more of what teaches it most and learns how to phrase sentences from what it reads.
 
   Every change is logged with its numbers: `polymath changes`, the dashboard, the feed.
+- **Reasons, not just looks up** (v0.5), every answer with its sources:
+  - multi-step questions: "Who is the head of government of the capital of France?";
+  - numbers and units: "Is Mount Everest taller than K2?" (feet and metres compared properly), "How many times
+    bigger is Brazil than Portugal?", population density;
+  - places: distances, "Which is further north?", "What is near the Eiffel Tower?";
+  - time: facts with dates (Germany's capital was Bonn *until 1990*), ages, "Which came first?", who lived at the
+    same time, what happened in a year;
+  - why: what causes something and what it leads to; kinds of things and what they can do, with exceptions ("Can
+    penguins fly?"); how-to steps from Stack Exchange.
+
+  It also catches facts that cannot be true (died before being born, a city bigger than its country, numbers far
+  outside their normal range), merges duplicate entries, reads Wikipedia's data tables, cross-checks a second
+  Wikipedia language, and switches to big-brain mode on a large drive.
 - **Answers offline**, with citations and confidences, and says "I don't know yet" instead of guessing.
 
 ![Live feed](docs/img/feed.png)
@@ -74,6 +87,7 @@ on any device on your network at `http://<pi-address>:8765/`.
 ```bash
 polymath feed                                    # the live feed (what the terminal at login shows)
 polymath ask "What is the capital of France?"   # offline, with sources
+polymath ask "Is Brazil bigger than Angola?"     # comparisons, distances, ages, causes, kinds, how-to, chains
 polymath learn "black holes"                     # research a topic as a priority (or give a URL)
 polymath topics --weakest                        # where its knowledge is thinnest
 polymath why "Black holes"                       # why it is (or is not) working on something

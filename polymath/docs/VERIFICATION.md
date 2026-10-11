@@ -23,7 +23,7 @@ roughly 2–4× slower per core on the numpy-heavy parts.
 
 ## 1. Quality bar
 
-- **Tests:** 491 automated tests pass (`pytest`), including:
+- **Tests:** 521 automated tests pass (`pytest`), including:
   - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
   - staged install and uninstall;
   - a real HTTP dashboard server.
@@ -464,6 +464,45 @@ Also on this copy:
 - Rule audit: 141 rules in 1.8–2.4 s.
 - Dashboard panel rendered in headless Chromium at 1280 and 390 px (`docs/img/self-improvement.png`).
 
+## 12e. Reasoning skills and cleaner knowledge (v0.5.0)
+
+Run on a copy of the real learning database (97,822 facts, 93,677 sentence pairs read). That copy holds Wikidata
+facts for a few hundred things only (410 coordinates, 174 birth dates, 317 areas), so questions were asked about
+things it has facts for. Answers, as returned (times on the development container):
+
+| question | answer |
+|---|---|
+| Is Brazil bigger than Angola? | Yes. Brazil (8,515,767 km²) is bigger than Angola (1,246,700 km²), by 7,269,067 km² (85%); compared by area. |
+| How many times bigger is Brazil than Portugal? | Brazil is about 92.3 times the area of Portugal (8,515,767 km² against 92,225 km²). |
+| What is the population density of Portugal? | About 112 people per km² (291 per sq mi): a population of 10,347,892 on 92,225 km². |
+| Is Lisbon higher than Helsinki? | Yes. Lisbon (100 m) is higher than Helsinki (17 m), by 83 m (83%); compared by elevation above sea level. |
+| How far is Germany from Portugal? | about 2,028 km (1,260 miles) apart, as the crow flies |
+| Which is further north, Portugal or Angola? | Portugal (latitude 38.70° N against 12.35° S) |
+| How old was Albrecht Dürer when he died? | died at about 56 (born 21 May 1471, died 6 April 1528) |
+| Who was alive at the same time as Albrecht Dürer? | Nicolaus Copernicus (1473–1543), Andrea del Sarto (1486–1530), … (0.24 s) |
+| Which came first, Plato or George Washington? | Plato: date of birth 428 BC, about 2,160 years before George Washington |
+| Who is the head of government of the capital of Portugal? | The capital of Portugal is Lisbon. The head of government of Lisbon is Q9697231 (a name not read yet). |
+| What caused World War II? | I know 18 causes of World War II, but have not read their names yet. |
+
+Problems the first version showed on this copy, all fixed before release:
+- **Wrong thing of several with one name** ("Paris (mythology)", "Penguin Books"): names now resolve to the thing that
+  has the facts the question needs, then the best-known.
+- **A bad merge** ("Poseidon" into Neptune through an alias): only a name or article title counts now; 66 merges
+  dropped to 10 ("Olympic games" into Olympic Games, "Fungi" into fungi …).
+- **Noisy causes and kinds** ("algorithm causes logic", "acid is a proton", "Huxley is an English"): weak cues removed,
+  the second thing must end its noun phrase, people are not given kinds, and a claim needs two sentences before it is
+  used. 31 causes from the copy's sentences dropped to 20 stored, none used until confirmed by a second sentence.
+- **Raw ids and dates**: kinds and causes known only by id are counted, not printed ("Q17444909"); dates read "428 BC"
+  and "21 May 1471" everywhere answers show them.
+- **Impossible facts** on the copy: 3, all between two Wikidata facts and therefore only noted ("Quintus Curtius Rufus:
+  died 50 before being born 100", a circa date; "Chilean Antarctic Territory is bigger than Chile").
+- **Dated facts** need Wikidata to be read again: this copy (and your Pi's current graph) was read before start and end
+  times were kept, so "the capital of Germany is Bonn" remains until the next monthly Wikidata dump is read.
+
+Tables, the second language, how-to steps and the end-to-end Spanish pipeline are covered by tests with synthetic
+articles and answers; the copy holds no table data, Spanish articles or answers with steps (all are read from new
+documents).
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -480,7 +519,9 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
-0. v0.4.0 on the Pi's larger graph over a week: tuning trials and their rollbacks, rule demotions, specialists
+0. v0.5.0 on the Pi's full graph: the reasoning skills on many more things, dated facts after the next Wikidata read,
+   tables, Spanish Wikipedia and big-brain mode on the 1 TB SSD.
+1. v0.4.0 on the Pi's larger graph over a week: tuning trials and their rollbacks, rule demotions, specialists
    spawned and retired, reading weights, learned phrasings (`polymath changes --all`).
 
 1. The test suite and `scripts/benchmark.py` on the Pi 4. A first run was cut off by a usage limit; the rerun is

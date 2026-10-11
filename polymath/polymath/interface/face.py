@@ -98,6 +98,8 @@ ACTION_MOOD: dict[str, str] = {
     "eval.report": "writing",
     "eval.recap": "writing",
     "agents.verify": "quizzing",
+    "reason.sanity": "vetting",  # squinting at facts that cannot be true
+    "memory.merge": "tidying",
     "drive.learn": "agents",
     "body.recall": "fetching",
     "body.spill": "moving",

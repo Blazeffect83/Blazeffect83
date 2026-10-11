@@ -13,6 +13,7 @@ from polymath.core.jobs import JobContext, JobOutcome
 from polymath.memory.documents import DocumentStore, StoredDocument
 from polymath.memory.graph import KnowledgeGraph, norm_alias
 from polymath.perception import phrases as ph
+from polymath.perception import semantic
 from polymath.perception.entities import (
     AliasIndex,
     EntityLinker,
@@ -24,6 +25,7 @@ from polymath.perception.entities import (
 from polymath.perception.infobox import extract_infobox_triples
 from polymath.perception.relations import learn_and_extract, normalize_middle
 from polymath.perception.sentences import PunktModel, SentenceSplitter, train_model
+from polymath.perception.tables import table_facts
 from polymath.perception.textrank import keywords, summarize
 from polymath.perception.tokenize import words
 
@@ -31,8 +33,19 @@ BATCH = 25
 MAX_CONTEXTS_PER_DOC = 30
 
 
-def resolve_title(db: Database, graph: KnowledgeGraph, title: str, *, create: bool = True) -> int | None:
-    """Entity for a Wikipedia title, following redirects; unseen articles get a placeholder."""
+def resolve_title(
+    db: Database, graph: KnowledgeGraph, title: str, *, create: bool = True, lang: str = "en"
+) -> int | None:
+    """Entity for a Wikipedia title, following redirects; unseen articles get a placeholder.
+
+    A title in another language is found through Wikidata's links between languages (``wiki_sitelinks``) and never
+    creates anything.
+    """
+    if lang != "en":
+        target = db.scalar("SELECT target FROM wiki_redirects WHERE lang=? AND title=?", (lang, title)) or title
+        qid = db.scalar("SELECT qid FROM wiki_sitelinks WHERE lang=? AND title=?", (lang, target))
+        ent = graph.by_key(str(qid)) if qid else None
+        return ent.id if ent is not None and ent.kind != "stub" else None
     target = db.scalar("SELECT target FROM wiki_redirects WHERE lang='en' AND title=?", (title,)) or title
     ent = graph.by_wiki_title(target)
     if ent is not None:
@@ -55,7 +68,7 @@ def anchor_job(ctx: JobContext) -> JobOutcome:
     """Job ``perception.anchors``: harvest Wikipedia links (aliases, priors, co-links), profiles and infoboxes."""
     store: DocumentStore = ctx.services["docs"]
     graph = KnowledgeGraph(ctx.db)
-    stats = {"docs": 0, "anchors": 0, "infobox_facts": 0}
+    stats = {"docs": 0, "anchors": 0, "infobox_facts": 0, "table_facts": 0}
     first = True
     while first or not ctx.should_stop():
         first = False
@@ -68,6 +81,21 @@ def anchor_job(ctx: JobContext) -> JobOutcome:
         for r in rows:
             doc = store.get(int(r["id"]))
             if doc is None:
+                continue
+            lang = doc.lang or "en"
+            if lang != "en":  # a second language: its infoboxes and tables cross-check what it knows
+                me_id = resolve_title(ctx.db, graph, doc.title, lang=lang)
+                foreign = lambda t, lang=lang: resolve_title(ctx.db, graph, t, lang=lang)  # noqa: E731
+                if me_id is not None:
+                    stats["infobox_facts"] += extract_infobox_triples(
+                        ctx.db, graph, me_id, doc.id, doc.extra.get("infoboxes", []), foreign, prefix=f"{lang}:"
+                    )
+                stats["table_facts"] += table_facts(
+                    ctx.db, graph, doc.id, doc.title, doc.extra.get("tables", []), foreign, prefix=f"{lang}:"
+                )
+                # stage 3: not read as English text (the linker, phrases and embeddings are English)
+                ctx.db.execute("UPDATE documents SET stage=3 WHERE id=?", (doc.id,))
+                stats["docs"] += 1
                 continue
             stats["anchors"] += harvest_anchors(ctx.db, graph, doc)
             me = graph.by_wiki_title(doc.title)
@@ -84,6 +112,10 @@ def anchor_job(ctx: JobContext) -> JobOutcome:
                     doc.extra.get("infoboxes", []),
                     lambda t: resolve_title(ctx.db, graph, t),
                 )
+            stats["table_facts"] += table_facts(
+                ctx.db, graph, doc.id, doc.title, doc.extra.get("tables", []),
+                lambda t: resolve_title(ctx.db, graph, t, create=False),
+            )  # fmt: skip
             ctx.db.execute("UPDATE documents SET stage=1 WHERE id=?", (doc.id,))
             stats["docs"] += 1
             if ctx.should_stop():
@@ -248,6 +280,7 @@ def read_document(
     n_ctx = 0
     now = time.time()
     rows = []
+    props: list[tuple[int, str, int, int, str]] = []
     li = 0
     for sa, sb in spans:
         sent_links = []
@@ -256,6 +289,11 @@ def read_document(
                 sent_links.append(links[li])
             li += 1
         learner.add_sentence(words(text[sa:sb]))
+        if sent_links:  # "birds can fly", "penguins cannot fly": what a kind of thing can or cannot do
+            a0, b0, e0 = sent_links[0]
+            got = semantic.category_props(text[sa:sb], (a0 - sa, b0 - sa, e0))
+            if got is not None and semantic.is_class(db, got[0]):
+                props.append((got[0], got[1], got[2], doc.id, text[sa:sb]))
         for i in range(len(sent_links)):
             for j in (i + 1, i + 2):
                 if j >= len(sent_links) or n_ctx >= MAX_CONTEXTS_PER_DOC:
@@ -284,6 +322,7 @@ def read_document(
         "VALUES(?,?,?,?,?,?,?,?)",
         rows,
     )
+    semantic.store_props(db, props)
     sentences = [text[a:b] for a, b in spans[:400]]
     meta = dict(doc.meta)
     meta["keywords"] = keywords(text[:50_000], stops, top=10)

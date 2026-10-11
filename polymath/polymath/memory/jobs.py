@@ -42,6 +42,10 @@ def index_documents(ctx: JobContext) -> JobOutcome:
                 )
                 stats["near_duplicates"] += 1
                 continue
+            if (doc.lang or "en") != "en":  # a second language: read for its infoboxes and tables only
+                ctx.db.execute("UPDATE documents SET state='indexed', simhash=? WHERE id=?", (sh, doc.id))
+                stats["indexed"] += 1
+                continue
             stats["chunks"] += tindex.index(doc.id, doc.title, doc.text)
             near.add(doc.id, sig)
             topics.assign_from_meta(doc.id, doc.source, doc.meta)
@@ -71,21 +75,28 @@ def index_documents(ctx: JobContext) -> JobOutcome:
 PROPERTY_META = {"P31", "P279", "P1647", "P1696", "P461"}  # instance of, subclass, subproperty, inverse, opposite
 
 
-def _claims_to_triples(graph: KnowledgeGraph, eid: int, claims: dict[str, list[Any]]) -> int:
+def _claims_to_triples(graph: KnowledgeGraph, eid: int, claims: dict[str, Any]) -> int:
+    """Claims → sourced triples; their time qualifiers (``_when``) say when each fact holds (``fact_time``)."""
+    from polymath.reasoning import temporal
+
+    when = claims.get("_when") or {}
     n = 0
     for pid, values in claims.items():
         if pid.startswith("_"):
             continue
         p = graph.predicate(pid)
-        for v in values:
+        times = {int(w[0]): w[1:] for w in when.get(pid, [])}
+        for i, v in enumerate(values):
             if isinstance(v, str) and v[:1] in {"Q", "P"} and v[1:].isdigit():
-                _tid, added = graph.add_triple(
+                tid, added = graph.add_triple(
                     eid, p, o=graph.stub(v), confidence=0.9, kind="wikidata", source="wikidata", detail=pid
                 )
             else:
-                _tid, added = graph.add_triple(
+                tid, added = graph.add_triple(
                     eid, p, value=v, confidence=0.9, kind="wikidata", source="wikidata", detail=pid
                 )
+            if i in times:
+                temporal.record(graph.db, tid, *times[i])
             n += added
     return n
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polymath"
-version = "0.4.3"
+version = "0.5.0"
 description = "From-scratch autonomous learning agent for Raspberry Pi 5 (stdlib + numpy only)"
 requires-python = ">=3.11"
 dependencies = ["numpy>=1.24"]

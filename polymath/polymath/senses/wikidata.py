@@ -35,6 +35,8 @@ SKIP_DATATYPES = {
 }
 MAX_PROPS = 80
 MAX_VALUES = 25
+TIME_QUALIFIERS = {"P580": "from", "P582": "to", "P585": "at"}  # start time, end time, point in time
+SITELINK_LANGS = ("es", "de", "fr", "it", "pt")  # titles kept for reading a second Wikipedia language
 
 
 def resolve_dump(client: HttpClient, *, base: str | None = None, tries: int = 8) -> tuple[str, int]:
@@ -95,6 +97,15 @@ def convert_value(snak: dict[str, Any]) -> Any:
     return None
 
 
+def _qualifier_time(statement: dict[str, Any], pid: str) -> str | None:
+    """A statement's time qualifier (start time, end time, point in time) as YYYY[-MM[-DD]]."""
+    for snak in (statement.get("qualifiers") or {}).get(pid) or []:
+        v = convert_value(snak)
+        if isinstance(v, dict) and v.get("time"):
+            return str(v["time"])
+    return None
+
+
 def parse_entity(line: bytes) -> dict[str, Any] | None:
     line = line.strip()
     if line.endswith(b","):
@@ -112,21 +123,36 @@ def parse_entity(line: bytes) -> dict[str, Any] | None:
         return None
     desc = ((e.get("descriptions") or {}).get("en") or {}).get("value")
     aliases = [a.get("value") for a in (e.get("aliases") or {}).get("en", []) if a.get("value")][:30]
-    claims: dict[str, list[Any]] = {}
+    claims: dict[str, Any] = {}
+    when: dict[str, list[list[Any]]] = {}  # pid → [[value index, from, to, at], …]
     for pid, statements in (e.get("claims") or {}).items():
         if len(claims) >= MAX_PROPS:
             break
         ranked = [s for s in statements if s.get("rank") != "deprecated"]
         preferred = [s for s in ranked if s.get("rank") == "preferred"]
-        values = []
-        for st in preferred or ranked:
+        # the preferred (current) values, plus earlier values that say when they ended: Bonn, capital until 1990
+        chosen = [s for s in ranked if s in preferred or _qualifier_time(s, "P582")] if preferred else ranked
+        values: list[Any] = []
+        for st in chosen:
             val = convert_value(st.get("mainsnak") or {})
-            if val is not None and val not in values:
-                values.append(val)
+            if val is None or val in values:
+                continue
+            times = [_qualifier_time(st, q) for q in TIME_QUALIFIERS]
+            if any(times):
+                when.setdefault(pid, []).append([len(values), *times])
+            values.append(val)
             if len(values) >= MAX_VALUES:
                 break
         if values:
             claims[pid] = values
+    if when:
+        claims["_when"] = when
+    links = e.get("sitelinks") or {}
+    sitelinks = {
+        lang: links[f"{lang}wiki"]["title"] for lang in SITELINK_LANGS if (links.get(f"{lang}wiki") or {}).get("title")
+    }
+    if sitelinks:
+        claims["_sitelinks"] = sitelinks
     enwiki = ((e.get("sitelinks") or {}).get("enwiki") or {}).get("title")
     return {
         "qid": e["id"],
@@ -160,6 +186,10 @@ def store_entity(ctx: JobContext, ent: dict[str, Any]) -> bool:
             time.time(),
         ),
     )
+    for lang, title in (claims.get("_sitelinks") or {}).items():
+        ctx.db.execute(
+            "INSERT OR REPLACE INTO wiki_sitelinks(lang, title, qid) VALUES(?,?,?)", (lang, title, ent["qid"])
+        )
     return bool(cur.rowcount)
 
 

@@ -78,16 +78,28 @@ def parse_value(raw: str) -> list[tuple[str, Any]]:
 
 
 def extract_infobox_triples(
-    db: Database, graph: KnowledgeGraph, subject: int, doc_id: int, infoboxes: list[dict[str, Any]], resolve_title: Any
+    db: Database,
+    graph: KnowledgeGraph,
+    subject: int,
+    doc_id: int,
+    infoboxes: list[dict[str, Any]],
+    resolve_title: Any,
+    *,
+    prefix: str = "",
 ) -> int:
-    """Add triples for every usable infobox field; returns the number of new evidence rows."""
+    """Add triples for every usable infobox field; returns the number of new evidence rows.
+
+    With a language ``prefix`` ("es:"), a field whose Wikidata meaning is established (``aligned_property``) adds
+    its value as evidence for that Wikidata relation, so a second Wikipedia confirms (or contests) what it knows.
+    """
     n = 0
     for box in infoboxes:
         for raw_key, raw_val in (box.get("params") or {}).items():
-            key = param_key(raw_key)
-            if not key or SKIP_KEYS.match(key) or not str(raw_val).strip():
+            key = prefix + param_key(raw_key)
+            if not key or SKIP_KEYS.match(key.removeprefix(prefix)) or not str(raw_val).strip():
                 continue
-            pid = graph.predicate(f"infobox:{key}", key.replace("_", " "))
+            mapped = aligned_property(db, key) if prefix else None
+            pid = graph.predicate(mapped) if mapped else graph.predicate(f"infobox:{key}", key.replace("_", " "))
             for kind, val in parse_value(str(raw_val)):
                 if kind == "entity":
                     obj = resolve_title(val)

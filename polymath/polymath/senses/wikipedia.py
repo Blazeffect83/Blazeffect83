@@ -53,7 +53,7 @@ DISAMBIG_TEMPLATES = {
     "road disambiguation",
     "ship index",
 }
-INFOBOX_PREFIX = ("infobox", "taxobox", "speciesbox", "automatic taxobox", "chembox", "drugbox")
+INFOBOX_PREFIX = ("infobox", "taxobox", "speciesbox", "automatic taxobox", "chembox", "drugbox", "ficha")  # ficha: es
 
 
 @dataclass
@@ -170,7 +170,7 @@ def page_to_document(page: Page, lang: str) -> Document | None:
             "disambiguation": disambig,
             "short_description": short_desc,
         },
-        extra={"infoboxes": infoboxes[:3], "sections": clean.sections},
+        extra={"infoboxes": infoboxes[:3], "sections": clean.sections, "tables": clean.tables},
     )
 
 

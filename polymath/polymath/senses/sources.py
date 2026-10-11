@@ -117,19 +117,25 @@ def plan_sources(ctx: JobContext) -> JobOutcome:
     def plan_wikipedia() -> int:
         if _active(db, "wikipedia.part"):
             return 0
-        parts = wikipedia.resolve_multistream(client, cfg.wikipedia_lang)
         seen = _done_keys(db, "wikipedia.part:")
-        for part in parts:
-            key = f"wikipedia.part:{part.name}"
-            if key not in seen:
-                s.enqueue(
-                    "wikipedia.part",
-                    {"dump_url": part.dump_url, "index_url": part.index_url, "size": part.size, "lang": part.lang},
-                    key=key,
-                    priority=2.0 * w["wikipedia"],
-                )
-                return 1
-        return 0
+        langs = [cfg.wikipedia_lang] + ([cfg.second_language] if cfg.second_language else [])
+        todo: list[tuple[float, Any]] = []
+        for i, lang in enumerate(langs):
+            parts = wikipedia.resolve_multistream(client, lang)
+            done = sum(f"wikipedia.part:{p.name}" in seen for p in parts)
+            nxt = next((p for p in parts if f"wikipedia.part:{p.name}" not in seen), None)
+            if nxt is not None:  # the second language gets about one part in five
+                todo.append(((done + 1) * (4.0 if i else 1.0), nxt))
+        if not todo:
+            return 0
+        part = min(todo, key=lambda t: t[0])[1]
+        s.enqueue(
+            "wikipedia.part",
+            {"dump_url": part.dump_url, "index_url": part.index_url, "size": part.size, "lang": part.lang},
+            key=f"wikipedia.part:{part.name}",
+            priority=2.0 * w["wikipedia"],
+        )
+        return 1
 
     def plan_wikidata() -> int:
         if _active(db, "wikidata.dump"):

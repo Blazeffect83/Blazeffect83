@@ -127,6 +127,38 @@ English function-word list used by the HTML boilerplate filter.) Where a constan
 
   **The weights are learned**, by maximum likelihood, from quizzes on *visible* facts. Each asked fact is hidden from every method while it is asked (leave-one-out); this is recalibrated daily.
 
+## Reasoning skills (v0.5)
+
+- **Units** (`reasoning/units.py`): Wikidata unit Q-ids and infobox unit text map to a base unit per dimension
+  (length, area, mass, time, volume, speed; temperature with its offset). Comparisons happen only within one
+  dimension; ratios and differences are shown back in readable units.
+- **Comparisons** (`qa/numbers.py`): an adjective selects relations in order of preference (taller → height,
+  elevation…; bigger → area, population, mass, length), and the first relation both things have in the same dimension
+  decides. "Older" compares the date each began (birth, inception, publication, point in time, start, discovery).
+- **Geography** (`qa/places.py`): great-circle distance by the haversine formula (Earth radius 6,371.0088 km);
+  east/west compares longitudes the short way round (across the date line); "near" scans a latitude/longitude box
+  around the place (50 km) in the `geo` table and sorts by true distance.
+- **Time** (`reasoning/temporal.py`, `qa/when.py`): dates compare as (year, month, day) with BC years negative. A fact is
+  ended when its end time is before today. Contemporaries: lifespans that overlap by at least a year, among the
+  best-known people.
+- **Multi-step** (`qa/chains.py`): "the R1 of the R2 of X" is resolved from the inside out, trying every " of " split
+  (relations whose names contain "of", like "head of government", work); every hop takes the current, best-supported
+  value. "Which C <verb> <phrase>" finds things of kind C (or a subclass) linked to the phrase's thing either way,
+  ranked by word overlap of relation and verb and by the phrasings learned from reading.
+- **Causes and kinds from text** (`perception/semantic.py`): strong cue phrases between two linked things (causes,
+  leads to, results in, caused by, due to, prevents; is a, such as, and other — Hearst patterns). The second thing
+  must end its noun phrase, a kind must be a known class and not said of a person, and a claim is used only once two
+  sentences agree.
+- **Inheritance with exceptions** (`qa/kinds.py`): breadth-first up instance of / subclass of / "is a kind of" (depth
+  6). For "can X do V", the nearest kind with a statement about V decides (votes weighted by how often it was read);
+  a farther statement that disagrees is reported as the exception.
+- **Impossible facts** (`reasoning/sanity.py`): fixed rules (death before birth, lifespan over 122 years, dates in
+  the future, a child born before its parent was 10, a part larger than the place it lies in) and learned ranges
+  (log scale, median ± 8 × 1.4826 × MAD per relation and unit, from up to 20,000 values; negatives where 99 % are
+  positive). The weaker side (lower confidence; text before Wikidata) is disputed; Wikidata against Wikidata is noted.
+- **Duplicates** (`memory/merge.py`): a placeholder merges into a Wikidata item on redirect evidence, or when exactly
+  one item has its title as name or article title and no shared date disagrees.
+
 ## Self-improvement
 
 - **Self-tuning** (`drive/selftune.py`).

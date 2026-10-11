@@ -123,12 +123,15 @@ def conclusions(db: Database, key: tuple[str, int, int]) -> list[Any]:
 
 def contradicted(db: Database, t: Any, functional: set[int]) -> int | None:
     """The id of a sourced, visible fact that contradicts conclusion ``t`` (None if nothing does)."""
-    if int(t["p"]) not in functional:
-        return None
+    if int(t["p"]) not in functional or db.scalar(
+        "SELECT 1 FROM fact_time WHERE triple_id = ? AND valid_to IS NOT NULL", (int(t["id"]),)
+    ):
+        return None  # a conclusion about the past (Bonn, capital until 1990) is not refuted by today's value
     r = db.one(
         "SELECT x.id FROM triples x WHERE x.s = ? AND x.p = ? AND x.o != ? AND x.o != 0 AND x.holdout = 0 "
         "AND x.status = 'sourced' AND EXISTS (SELECT 1 FROM provenance w WHERE w.triple_id = x.id "
-        "AND w.kind != 'rule') LIMIT 1",
+        "AND w.kind != 'rule') AND NOT EXISTS (SELECT 1 FROM fact_time f WHERE f.triple_id = x.id "
+        "AND f.valid_to IS NOT NULL) LIMIT 1",
         (int(t["s"]), int(t["p"]), int(t["o"])),
     )
     return None if r is None else int(r["id"])

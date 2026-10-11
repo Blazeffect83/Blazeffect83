@@ -802,3 +802,20 @@ def test_targeted_reading_by_title(config, db, web, monkeypatch):
         ctx_for(config, db, "wikipedia.titles", payload, {"http": client(), "docs": store}, checkpoint=out.checkpoint)
     )
     assert again.result["stored"] == 0  # streams already read are skipped on resume
+
+
+def test_a_second_language_gets_about_one_part_in_five(config, db, monkeypatch):
+    config.senses.second_language = "es"
+    parts = {lang: [wikipedia.DumpPart(lang, "20260901", f"https://d/{lang}{i}", f"https://i/{lang}{i}", 10,
+                                       f"{lang}wiki-part{i}.bz2") for i in range(6)] for lang in ("en", "es")}  # fmt: skip
+    monkeypatch.setattr(wikipedia, "resolve_multistream", lambda client, lang, **_: parts[lang])
+    comps = build_components(config, db)
+    order = []
+    for _ in range(9):
+        out = sources.plan_sources(ctx_for(config, db, "sources.plan", {}, comps.services))
+        assert out.result["planned"]["wikipedia"] == 1
+        row = db.one("SELECT id, key FROM jobs WHERE kind = 'wikipedia.part' AND state = 'queued'")
+        order.append(str(row["key"]).split(":")[1][:2])
+        db.execute("UPDATE jobs SET state = 'done' WHERE id = ?", (row["id"],))
+    # English first, Spanish every fifth part or so; once English has no parts left, Spanish continues
+    assert order == ["en", "en", "en", "en", "es", "en", "en", "es", "es"], order

@@ -99,6 +99,8 @@ class SensesConfig:
     max_redirects: int = 5
     allow_private_networks: bool = False  # tests only; never enable in production
     wikipedia_lang: str = "en"
+    # a second Wikipedia whose infoboxes and tables cross-check facts ("es", "de", "fr", "it", "pt"; "" for none)
+    second_language: str = ""
     wikipedia_parts: int = 1  # how many multistream part files to schedule
     wikidata_max_bytes: int = 0  # 0 = read the whole dump (it resumes across restarts)
     openalex_files: int = 2
@@ -201,6 +203,10 @@ class Config:
             raise ConfigError("body.backup_keep must be between 1 and 365")
         if self.learning.embedding_dim not in range(16, 513):
             raise ConfigError("learning.embedding_dim must be between 16 and 512")
+        if self.senses.second_language not in {"", "es", "de", "fr", "it", "pt"}:
+            raise ConfigError("senses.second_language must be one of es, de, fr, it, pt (or empty)")
+        if self.senses.second_language == self.senses.wikipedia_lang:
+            raise ConfigError("senses.second_language must differ from senses.wikipedia_lang")
         if not 1 <= self.agents.max_agents <= 100:
             raise ConfigError("agents.max_agents must be between 1 and 100")
         if not 0 <= self.learning.digest_hour <= 23:
@@ -286,8 +292,57 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
     if env.get("POLYMATH_DATA_DIR"):
         cfg.paths.data_dir = Path(env["POLYMATH_DATA_DIR"])
     apply_home(cfg)
+    apply_capacity(cfg, data)
     cfg.validate()
     return cfg
+
+
+# Big-brain mode: with a large drive (its budget at least BIG_BRAIN_GB) it reads and keeps much more. Only settings
+# left at their defaults are raised; anything set in polymath.toml stays as set.
+BIG_BRAIN_GB = 400.0
+BIG_BRAIN: dict[tuple[str, str], Any] = {
+    ("learning", "embedding_vocab_max"): 400_000,
+    ("senses", "openalex_files"): 40,
+    ("senses", "pubmed_files"): 40,
+    ("senses", "gutenberg_books"): 3000,
+    ("senses", "stackexchange_sites"): [
+        "ai",
+        "datascience",
+        "cs",
+        "physics",
+        "chemistry",
+        "biology",
+        "astronomy",
+        "history",
+        "earthscience",
+        "diy",
+        "cooking",
+        "gardening",
+        "travel",
+        "english",
+        "philosophy",
+    ],
+    ("senses", "second_language"): "es",
+}
+
+
+def brain_tier(cfg: Config) -> str:
+    return "big" if cfg.body.disk_budget_gb >= BIG_BRAIN_GB else "normal"
+
+
+def apply_capacity(cfg: Config, data: dict[str, Any] | None = None) -> list[str]:
+    """Raise default settings in big-brain mode; returns the settings changed ("section.key")."""
+    if brain_tier(cfg) != "big":
+        return []
+    changed = []
+    for (section, key), value in BIG_BRAIN.items():
+        if key in ((data or {}).get(section) or {}):
+            continue  # set by the user
+        part = getattr(cfg, section)
+        if getattr(part, key) != value:
+            setattr(part, key, value)
+            changed.append(f"{section}.{key}")
+    return changed
 
 
 HOME_FILE = "home-drive.json"  # in data_dir when the brain lives on a drive (written by the storage helper)

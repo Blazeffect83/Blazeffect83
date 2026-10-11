@@ -170,6 +170,41 @@ code when the installed build changes.
   - time-lapse: rebuilt from document read times with adaptive steps (hours to weeks, at most 96 frames), and
     raised to daily snapshots so evictions do not erase history.
 
+## Reasoning skills and cleaner knowledge (v0.5)
+
+**Question skills** (`polymath/qa/`). `Answerer.ask` offers each question to the skills first, most specific
+first: `numbers`, `places`, `when`, `causes`, `howto`, `kinds`, `chains`. Each matches its own question shapes with
+regular expressions and answers from the graph with citations, or returns None so the general answerer handles the
+question as before. Names are resolved by `qa.common.strict_entity`: an exact name (or its singular), and of several
+things with that name the one that has the facts the question needs (coordinates for distances, dates for ages),
+then the most facts, an article, and PageRank.
+
+| part | module | job (every) | tables |
+|---|---|---|---|
+| dated facts | `reasoning/temporal.py`, `senses/wikidata.py` | (ingestion) | `fact_time` |
+| impossible facts | `reasoning/sanity.py` | `reason.sanity` (3 h) | `sanity`, `value_ranges` |
+| coordinates | `qa/places.py` | `memory.geo` (1 h) | `geo` |
+| causes and kinds from text | `perception/semantic.py` | `perception.semantic` (1 h) | triples `text:causes`, `text:prevents`, `text:is_a` |
+| what kinds can do | `perception/semantic.py` (while reading) | `perception.read` | `category_props` |
+| how-to steps | `perception/howto.py` | `perception.howto` (6 h) | `howto`, `howto_fts` |
+| data tables | `senses/wikitext.py`, `perception/tables.py` | `perception.anchors` | triples `table:<header>` |
+| second language | `senses/sources.py`, `perception/jobs.py` | `wikipedia.part`, `perception.anchors` | `wiki_sitelinks` |
+| duplicates | `memory/merge.py` | `memory.merge` (12 h) | `entity_merges` |
+| big-brain mode | `core/config.py` (`apply_capacity`), `drive/capacity.py` | (planner) | kv `brain_tier` |
+
+- **Time.** `parse_entity` keeps start time, end time and point in time per statement (`claims["_when"]`), and
+  earlier values that ended (a normal-rank statement with an end time next to a preferred one). `_claims_to_triples`
+  stores them in `fact_time`. `forward_chain` gives a conclusion the validity of its premises. `contradictions.detect`
+  and `rule_audit.contradicted` skip ended facts. `Answerer.facts` and `Teller.facts_of` put current values first and
+  show ended ones as "was … (1949–1990)", or drop them when a current value exists.
+- **Second language.** A document in another language (`documents.lang`) is indexed without an entity, a topic or the
+  text index. `perception.anchors` resolves its title and links through `wiki_sitelinks` (Wikidata), extracts its
+  infobox under `infobox:<lang>:<key>`, maps aligned keys onto the Wikidata property (a second source for the same
+  fact), reads its tables, and sets `stage = 3`, so it is never read as English text and never trains the embeddings.
+- **Scale.** The sanity rules and the coordinate index scan fixed windows of triple ids per run (200,000 and
+  500,000), so a run costs the same on a 100-million-fact graph. Contemporaries and events search the 200,000
+  best-known entities (`entities_pagerank` index).
+
 ## Self-improvement (v0.4)
 
 It improves itself from what it measures, never by rewriting its code: only settings, rule trust, its reading
