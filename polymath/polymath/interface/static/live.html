@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<title>Polymath live</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="live">
+<header class="live-head">
+  <div class="live-face" id="face" aria-live="off">[·_·]</div>
+  <div class="live-info">
+    <div class="live-title"><strong>POLYMATH</strong> <span id="state" class="s-yellow">connecting…</span></div>
+    <div id="counts" class="muted small-line"></div>
+  </div>
+  <div id="badge" class="badge muted"></div>
+</header>
+<div class="now-banner" id="now-banner"><span class="now-tag">NOW</span><span id="now">connecting…</span></div>
+<main class="live-main">
+  <ol id="feed" class="live-feed" aria-live="polite"></ol>
+</main>
+<footer class="live-foot"><a href="/">dashboard</a> · learned on this machine, no AI services</footer>
+<script src="/static/face.js"></script>
+<script src="/static/live.js"></script>
+</body>
+</html>

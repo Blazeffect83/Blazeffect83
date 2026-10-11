@@ -1,0 +1,543 @@
+# Verification record
+
+What was measured, on what, and what is still pending. Nothing here is estimated: every number came from
+a run of the code in this repository. Unless stated otherwise, the machine was the **development container**:
+x86_64, 4 vCPU, Python 3.11, through an HTTPS proxy. That is **not a Raspberry Pi**. Expect the Pi 5 to be
+roughly 2–4× slower per core on the numpy-heavy parts.
+
+## Status by phase
+
+| phase | acceptance criterion (from the build spec) | result |
+|---|---|---|
+| 1 loop | 100 no-op cycles; kill -9 mid-run, restart, effects exactly once | ✅ automated (`test_core.py`), plus a real kill -9 run |
+| 2 senses | ≥ 1,000 items from each source over the real internet, license on every item | ✅ see §2 |
+| 3 memory | ≥ 10k docs; FTS and graph latency | ✅ synthetic 10k docs (benchmark) and real 7.4k-doc learning copy |
+| 4 perception | linker precision ≥ 0.85 on 200 hand-labelled held-out sentences | ✅ 0.856, see §4 (labelled by the AI developer) |
+| 5 embeddings | IVF at 1M vectors; SGNS throughput | ✅ see §5 |
+| 6 reasoning | rules and inference on real data | ✅ see §6 |
+| 7 drive | priorities and bandit on real data | ✅ see §6 |
+| 8 evaluation | quiz accuracy above chance on real held-out facts | ✅ see §6 |
+| 9 interface | CLI, cited answers, dashboard, /health semantics, live feed | ✅ automated, rendered in Chromium (§7) and in an emulated terminal (§10) |
+| 10 body | thermal, disk, backups (the Minecraft player check was removed, §10) | ✅ automated with injected sensors |
+| 11 deploy | systemd, live feed terminal at login, idempotent install | ✅ staged install and upgrade, `systemd-analyze verify`; ✅ installed and rebooted on a real Raspberry Pi 4 (§13) |
+
+## 1. Quality bar
+
+- **Tests:** 521 automated tests pass (`pytest`), including:
+  - an **offline end-to-end run** of every source through the real agent loop, against a local fixture web server;
+  - staged install and uninstall;
+  - a real HTTP dashboard server.
+- **Coverage:** 94 % of statements and branches (`pytest --cov=polymath`).
+- **Lint and types:** `ruff check`, `ruff format --check` and `mypy --strict` (package, tests and scripts) are clean.
+- **Purity:**
+  - `tests/test_purity.py` imports every runtime module and fails on any third-party import other than numpy.
+  - The staged install's venv contains exactly `numpy`, `pip`, `polymath`.
+
+## 2. Real-internet sample (phase 2)
+
+`polymath sample --n 1000` against the live sources, on a fresh database. Every item has license metadata.
+
+| source | items | with license | distinct license strings |
+|---|---:|---:|---:|
+| wikipedia | 1,000 | 1,000 | 1 |
+| wikidata | 1,000 | 1,000 | 1 |
+| openalex | 1,000 | 1,000 | 8 |
+| pubmed | 1,000 | 1,000 | 1 |
+| gutenberg | 1,000 | 1,000 | 1 |
+| stackexchange | 1,000 | 1,000 | 2 |
+| feed | 2,112 | 2,112 | 7 |
+| web (crawler) | 1,000 | 1,000 | 4 |
+
+The crawl ran at ≤ 1 request/s per host, honouring robots.txt. No job ended dead.
+
+## 4. Entity linker on held-out real text (phase 4)
+
+- **Sample.** 200 sentences drawn at random from **non-Wikipedia** documents in the learning copy: feeds, web
+  pages, OpenAlex, PubMed, Stack Exchange, Gutenberg. The linker trains on Wikipedia anchors only, so none of
+  this text was seen in training.
+- **Run.** The trained model, on the real alias automaton, linked every sentence.
+- **Labels.** Each of the 362 predicted links was labelled correct or incorrect **by the AI developer (Claude)**,
+  not by an independent human annotator. A link counts as correct only if the article is the mention's
+  referent in context. Partial spans of a longer name count as wrong; for example, "Woodland" in
+  "Woodland Trust".
+- **Result.** **Precision 0.856 (310 / 362).**
+
+| source | precision |
+|---|---|
+| feeds | 0.920 |
+| PubMed | 0.927 |
+| web | 0.850 |
+| Stack Exchange | 0.800 |
+| OpenAlex | 0.761 |
+| Gutenberg | 1 / 3 |
+
+- **Most common error:** a word inside a longer compound or proper name ("sodium-glucose co-transporter",
+  "calcium-channel blockers", "Python Software Foundation"), then generic words ("modulation", "rubric").
+- **Data:** `tests/fixtures/linker_eval_200.jsonl`. A test pins the count and precision.
+- **Recall** is not measured here. On held-out Wikipedia anchors the linker's own validation gives precision
+  0.909 and recall 0.875.
+
+## 5. Benchmarks
+
+`python scripts/benchmark.py --scale full`, development container. See `the benchmark output` for the raw JSON.
+
+| area | measurement | result |
+|---|---|---|
+| loop | no-op cycle overhead, 20k jobs queued | 2.949 ms (339.1 cycles/s) |
+| loop | enqueue | 83,999/s |
+| senses | wikitext → clean text | 156.9 pages/s (2.63 MB/s) |
+| senses | bz2 block decode (own block reader) vs stdlib stream | 108.52 vs 51.78 MB/s |
+| senses | HTML main-text extraction | 3,267.9 pages/s |
+| senses | 7z (LZMA) decode | 1,436.5 MB/s |
+| memory | index 10,000 docs → 71,147 passages | 465.9 docs/s |
+| memory | full-text top-10 | p50 6.93 ms, p95 28.74 ms |
+| memory | graph neighbours (top 50), 997,931 triples | p50 0.19 ms, p95 0.36 ms |
+| perception | tokenize / sentence split | 4.6 / 4.5 M chars/s |
+| perception | Porter stemmer | 148,613 words/s |
+| perception | Aho–Corasick, 200,000 patterns | build 0.38 s; 771,371 tokens/s |
+| embeddings | SGNS training | 271,176 pairs/s (dim 128) |
+| embeddings | IVF, 1,000,000 vectors, 1000 lists | build 10.0 s; top-10 p50 3.56 ms, p95 7.08 ms; recall@10 0.955 |
+| reasoning | forward chaining (transitive, 49,999 facts) | 349,616 inferred in 24.35 s (14,360/s) |
+| reasoning | truth discovery, 50k facts | 0.72 s |
+| drive | PageRank, 2,000,000 nodes / 10,000,000 edges | 1.86 s |
+| drive | bandit decision | p50 0.05 ms |
+| evaluation | link prediction per quiz question (fixture) | 2.6 ms |
+| dashboard | /api/overview, POST /api/ask | p50 1.68 ms, 1.55 ms |
+| body | guard observe | p50 0.02 ms |
+| body | backup (590.4 MB DB): copy + quick_check + xz | 35.37 s (16.7 MB/s) |
+
+The corpora are synthetic Zipf-distributed text and power-law graphs, so the sizes match the spec. The IVF data is clustered. The container was also running the live Wikidata property read, so treat these as conservative.
+
+## 6. Learning on real data (phases 6–8)
+
+This was run on the **learning copy**: the real phase-2 sample, reprocessed offline by the real agent loop
+(`scripts/learn_offline.py --full`), plus the live Wikidata property bootstrap.
+
+| what | result |
+|---|---|
+| documents read and indexed | 6,931 (443 near-duplicates set aside) |
+| entities / aliases | 162,768 / 184,053 |
+| sourced facts (Wikidata + infoboxes) | 76,790 (13,266 from infoboxes) |
+| Wikidata property records read | 13,315 of 13,930 located; 15,098 of 15,101 predicates named |
+| rules learned | 210 inverse, 13 transitive, 6 symmetric (declared by the properties), 41 domain (statistics) |
+| facts inferred by forward chaining | 19,917 |
+| disputed facts | 1,115 |
+| entity linker, Wikipedia-anchor validation | precision 0.909, recall 0.875 |
+| **self-quiz on held-out facts** | **22 / 27 = 81.5 %** (95 % Wilson CI 63–92 %), chance 25 %; P(≥ 22 by chance) ≈ 1e-9 |
+| quiz answers by deciding evidence | related facts 18/19, embedding 3/4, no evidence 1/4 |
+| learned evidence weights (leave-one-out on 100 visible facts) | related 0.61, embedding 0.51, text 0.02, association 0.00, graph 3.0 (prior; a hidden fact never counts directly) |
+| calibration fit | log-likelihood −0.57 vs −1.39 for chance; 83 % training accuracy |
+
+**Reading the quiz honestly.**
+- **Sample size.** It is only 27 questions. The phase-2 sample holds 1,000 Wikidata items, and only held-out
+  facts whose subject *and* answer have names can be asked. On the Pi, reading the full dump makes this grow
+  by orders of magnitude.
+- **Where the answers come from.** Most correct answers come from *other* facts the agent knows, for example
+  an inverse relation or a part-of chain. That is reasoning over its own graph, not text understanding.
+- **Before the fix.** The earlier run, before the property bootstrap and the link predictor, scored **12/50 =
+  24 %**, which is chance. That run is kept in the database as quiz #1.
+
+**Curiosity on real data.** Topic priorities are non-zero once PageRank precedes them. The top topics were
+the Gutenberg bookshelf "Novels" (0.97), "Days of August", "Days of April" (Wikipedia date categories) and
+"American Literature". Each one shows its gap × importance × novelty breakdown in `polymath why`.
+
+**Answers on real data** (no network):
+- "When was Albert Einstein born?" → 1879-03-14, citing the Wikipedia article.
+- "What is the population of Brazil?" → 214,211,951, citing Wikidata.
+- "What is the capital of Belgium?" → "Q239 (an entity whose name I have not read yet)". Brussels' record is
+  not in the 1,000-item sample, and the agent says so instead of guessing.
+
+## 7. Dashboard in a real browser
+
+- **Render.** Headless Chromium (Playwright) loaded the dashboard against the real learning database, asked a
+  question and looked up an entity. The result is the screenshot `docs/img/dashboard.png`.
+- **Console.** No errors. The first render found a real bug: the strict CSP blocked inline `style=` attributes
+  in chart legends. It was fixed by using CSSOM instead.
+- **Phone width.** At 390 px there is no horizontal overflow.
+
+## 8. What was fixed because of these runs
+
+Real data and real browsers found bugs the fixtures did not:
+
+- **Quiz at chance.**
+  - Cause: the 1,000-item Wikidata sample contains no property records, so every predicate was a bare `P31`.
+  - Fix: the property bootstrap. It read 13,930 property pages located through the multistream index, about
+    4 minutes for the index and 85 minutes for the pages.
+  - Also: the link predictor with learned weights.
+- **Property metadata (inverse, transitive) never became facts.** The rule learner had been tested with
+  hand-built triples.
+- **Topic priorities all zero.** Priorities were computed before PageRank.
+- **The web sample stopped at 982.** Its stop condition counted near-duplicates.
+- **`/api/ask` deadlocked.** It took a non-reentrant lock twice.
+- **The backup API spun forever.** It ran inside the agent's own write transaction; it now reads through a
+  separate connection.
+- **`/health` would report a busy agent as dead.** During a long job the database heartbeat cannot commit;
+  a heartbeat pulse file now covers it.
+- **An answer passage matched "francs" for "France".** A passage must now use the entity's own name.
+- **Production defaults would read only 2 GB of Wikidata and have no feeds or seeds.** Fixed.
+
+## 9. Agent society on real data
+
+Six agents were spawned on the learning copy from plain directives:
+- "research computer science"
+- "predict the country of cities"
+- "fact-check borders"
+- "watch neural networks"
+- "become an expert on Italy"
+- "predict administrative regions"
+
+They ran 40 society slices offline. Results after all the fixes below:
+
+| agent | level | XP | verified right / wrong |
+|---|---:|---:|---:|
+| verify-borders | 3 | 15.0 | 15 / 2 |
+| predict-country | 2 | 8.2 | 8 / 2 |
+| predict-administrative-regions | 2 | 6.4 | 6 / 1 |
+| research-computer-science | 2 | 5.1 | 5 / 0 |
+| research-italy | 2 | 5.0 | 5 / 0 |
+| watch-neural-networks | 1 | 0.0 | — (nothing new is read offline) |
+
+- **Accuracy.** Together the agents scored **39 verified-correct against 5 wrong answers on hidden facts
+  (89 %; chance is 25 %)**, with no false penalties.
+- **Learned preferences.** Every agent's arms learned to prefer the action that earned verified rewards.
+  Actions with nothing to do in this offline sample (reading, open predictions, disputes) learned slightly
+  negative values.
+
+**What the trials found and fixed.** Every round was run on real data until it was clean:
+
+- **The fact-checker lost every dispute verdict.**
+  - Cause 1: its verifier compared a choice with *one* hidden copy, but relations such as "shares border
+    with" have several true values.
+  - Cause 2, upstream in Phase 6: contradiction detection had disputed values that Wikidata itself lists
+    together, such as the 23 countries of the English language and the 20 locations of World War II. A
+    dispute now needs two sources that disagree, which settled **1,113 of 1,115 disputes** on the learning
+    copy and restored those correct facts.
+- **Open predictions guessed nonsense** ("the country of ASCII → Germany", "Chicago member of UNASUR").
+  - Agents now predict a relation only for subjects whose type usually has it (≥ 30 % of the type).
+  - Candidate answers come from what that type's members actually have.
+  - Reflexive regularities are learned: the "country" of a country is itself, so China → China and
+    Germany → Germany.
+- **A watch agent reported old documents.** It now reports only what arrives after it is spawned.
+- **"countries" was singularised as "countrie".** Fixed.
+
+**What is not yet measured.**
+- Open predictions pay out only when the dumps later deliver the fact, and no new data arrives in an offline
+  run, so their accuracy is still unknown. The mechanism is covered by tests: confirmed → +2.0,
+  contradicted → −0.8, unsettled after 60 days → expires unrewarded.
+- Evolution needs 30 verified outcomes per agent before it forks or judges, so it did not trigger in a
+  40-slice trial.
+
+## 10. Live feed terminal; Minecraft player check removed
+
+**Live feed (`polymath feed`).** Run for real against a copy of the learned database (98k facts, 6,931
+documents). The real agent loop ran offline jobs: rules, inference, contradictions, source reliability, quiz,
+agent steps and verification, priorities. The real dashboard served `/api/feed`. The feed ran in a pseudo-
+terminal emulated at 120×36 (pyte, a dev-only tool) and was screenshotted in Chromium:
+
+![Live feed](img/feed.png)
+
+What the runs showed, and what was fixed because of it:
+- **Old quiz phrasing.** The quiz's own template read "What is the capital of of Belgorod?" and "What is the
+  follows of 1789?". Questions are now phrased from the predicate label: "What is Belgorod the capital of?",
+  "What does 1789 follow?", "What does China share border with?". Per-predicate quiz accuracy no longer
+  parses the question text back.
+- **Stale header.** The quiz score and rules count in the header lagged up to 2 minutes behind the feed. Small
+  tables are now read on every refresh; only full-table counts are cached (60 s).
+- **Unhelpful rewards.** Agent rewards did not say what was rewarded; they now show the task (question → answer,
+  document, prediction).
+- **Layout.** Rule names carried internal ids ("transitive 2774 rule"), the `inferred` tag ran into the text, and
+  the header did not fit 120 columns. All three are fixed.
+
+Cost, from `scripts/benchmark.py --only feed --scale full` (1M facts, this container):
+
+| poll | result |
+|---|---|
+| nothing new | p50 0.08 ms |
+| after 5,000 new facts and 50 documents | p50 2.3 ms, p95 3.7 ms |
+| first poll, including the full-table counts (repeated once a minute) | 0.30 s |
+
+**Tests.** `tests/test_feed.py` (24 tests) covers:
+- events since a cursor, exactly once;
+- caps and "+N more" counts, and estimates for huge spans;
+- unnamed entities counted, not shown;
+- a cursor ahead of the data (restored backup);
+- every event kind's rendering, the status header, and ASCII fallback;
+- the client loop: waiting and reconnecting, status changes as feed lines, the pinned header's escape
+  sequences, terminal restored on Ctrl+C and on resize;
+- the HTTP source against the real dashboard, plus error answers;
+- the direct source, the CLI, and a registry check that every job kind has a "now:" label.
+
+`tests/test_deploy.py` covers:
+- the launcher in lxterminal, foot, xterm and the Debian x-terminal-emulator;
+- one window per login (lock), `--new` from the menu, and no terminal installed;
+- the in-window prompt if the feed exits;
+- a staged upgrade from the dashboard-kiosk autostart: XDG, labwc and wayfire entries are replaced, retired
+  settings are commented out with a backup, and a second run is idempotent.
+
+**Minecraft player check removed.** The Server List Ping module, the `yield` on players, the `minecraft_*`
+settings and the `vitals.players` column (migration 0012, applied to the real 483 MB database) are gone. An
+older configuration still loads, with a warning, and `install.sh` comments those lines out. `yield` remains for
+low disk space. The CPU and memory limits stay, to keep the desktop and the feed responsive.
+
+## 11. Storage pool and SD-card mode
+
+**Real block devices.** The real helper (`polymath storage attach/detach`) ran against loop devices in the
+development container, with the real `blkid`, `sfdisk`, `mkfs.ext4`, `mount` and `umount`:
+
+| case | result |
+|---|---|
+| brand-new blank 2 GB device | formatted ext4 `POLYMATH`, mounted under the pool, `polymath-brain/` mode 0750, manifest written; dedicated, 1.92 GB of brain space |
+| device with random data and no signature | refused: "holds data Polymath does not recognise; not touching it" |
+| FAT drive holding a user's files | the container kernel has no vfat driver, so the mount failed; reported, and the mount folder removed. To verify on the Pi |
+| blank partition on a partitioned disk | the container cannot create partition device nodes. To verify on the Pi |
+| agent side on the mounted drive | body written to a pack, fsynced, read back identical; downloads and backups placed on the drive |
+| unplug (`detach`) | lazy unmount; the agent sees the drive go away, and reads return "unavailable", not an error |
+
+**Tests.**
+- `tests/test_storage.py` (26 tests) covers:
+  - discovery and pack records: crc, wrong id, missing pack, rollover;
+  - spill: least valuable first, unperceived documents stay; reads straight from a drive; passages and updates
+    while a drive is away; spill stopping when drives are full; eviction spilling first;
+  - retire: bodies back, brain folder removed, never re-adopted; recall without room evicts;
+  - placement of downloads and backups; arrival, departure and return events in the feed; the guard asking for
+    spills; the CLI;
+  - the helper's rules against a fake `blkid`/`lsblk`/`mount`: system disk, internal and virtual devices, swap,
+    LUKS, partitioned disks, missing UUID, ignored and retired drives, foreign-owned mounts, too little room,
+    mount and format failures, eject and detach.
+- `tests/test_deploy.py` covers the udev rule, `polymath-volume@.service`, and a staged `--allow-sd-card`
+  install: an SD-sized budget of 2–15 GB, idempotent, and removed by uninstall.
+
+**Bugs found while building it.**
+- A logging field named `name` collided with Python's LogRecord. It would have crashed the agent the moment a
+  drive was plugged in, with INFO logging on. Renamed, with a regression test.
+- The process-wide pool from one configuration could steer placement for another. Placement now uses only the
+  pool of its own configuration.
+
+## 12. Open-web learning, the daily digest, learning from mistakes
+
+**The gate, against the real internet** (development container, real HTTP client):
+
+| what | result |
+|---|---|
+| safety lists | all six downloaded and loaded in 44 s: StevenBlack 157,912, URLhaus 398, UT1 adult 4,592,050, UT1 phishing 240,482, UT1 malware 240,482, UT1 gambling 47,804. About 5.0 M hashes, 88 MB; downloads deleted afterwards |
+| nasa.gov, nih.gov | approved (heavily cited, valid HTTPS, robots.txt allows) |
+| smithsonianmag.com | probation (20 citations) |
+| pornhub.com / bet365.com | refused: on UT1 adult / UT1 gambling; **never contacted** |
+| self-signed / expired / wrong-host / untrusted-root certificates (badssl.com) | refused: "no valid HTTPS certificate" |
+| a valid certificate on the same test site | approved |
+
+**Tests.**
+- `tests/test_openweb.py` (21 tests):
+  - citation counting; list loading (hosts files, plain lists, UT1 archives in slices, reload replacing a list);
+    subdomain blocking; unsafe names;
+  - the gate failing closed until the lists load, and every verdict (blocklist, name, certificate, private
+    address, unreachable then retried, robots, redirect away), with refused sites never contacted;
+  - the daily cap and the probation quota; trust judging (a site contradicting Wikidata dropped, an agreeing one
+    approved);
+  - mistakes read about, re-tested, fixed or given up after 3 tries; agents' mistakes collected; the digest
+    content, its feed lines, the CLI and the dashboard.
+- The offline end-to-end test now downloads and loads a safety list through the real agent loop, and checks that
+  Wikipedia articles record the sites they cite.
+
+**Bugs these tests caught.**
+- A newly approved site stayed blocked for up to a minute, because the crawler refreshed before the verdict was
+  saved.
+- Single-valued relations were judged from all facts, so a lying site's own claims could make a relation look
+  multi-valued and dodge the check. They are now judged from Wikidata only.
+- The "offline" end-to-end test started downloading the real safety lists; tests now use local lists only.
+
+## 12b. Feed face and version badge
+
+- Rendered in a real pseudo-terminal (120 columns, emulated with pyte) for every mood. That is the image in
+  OPERATIONS §"The live feed". The badge stays whole on the right while long activity text is shortened.
+- Every face glyph was checked against the cmap of DejaVu Sans Mono, the Raspberry Pi OS terminal font
+  (`tests/test_face.py`). All of them are present and none is double-width.
+- `tests/test_face.py` (34 tests) covers:
+  - reading `build.json` and `.git` (loose, packed, detached and worktree refs);
+  - the heartbeat carrying the build, and `polymath version` / `status` / `--version`;
+  - badge states, header layout, and milestones;
+  - mood per job kind, reaction timing and priority, and the animation (scanning eyes, spinner, thought dots,
+    blink, constant width);
+  - the feed redrawing between polls and reloading into a new installed build (but not for a development
+    checkout);
+  - `install.sh` writing the stamp once.
+- Not yet seen on the Pi itself: the font check used the same DejaVu Sans Mono that Raspberry Pi OS ships.
+
+## 12c. SD card guard, the brain's home, tell, predictions, surprise, recap, map, live page (v0.3.0)
+
+**Writes per cycle.** `/proc/self/io` `write_bytes` for 1,500 cycles each, against the previous version on the
+same database:
+
+| cycle | before | after |
+|---|---|---|
+| idle (nothing to do, every 2 s) | 4.2 kB | 0 kB (heartbeat only on change or every 30 s) |
+| a job slice (no-op job) | 103.5 kB | 77.1 kB (−25 %: busy heartbeat every 10 s, redundant `jobs_kind` index dropped) |
+
+An idle agent used to write about 360 MB a day just for its heartbeat. Raising `wal_autocheckpoint` from 1,000
+to 4,000 pages changed little (−1.5 %); it is kept at 4,000. A real day's total on the Pi will come from
+`polymath wear`.
+
+**Moving the brain onto a drive.** Tested with a fake `blkid`/`lsblk`/`mount`/`systemctl` (`tests/test_wear.py`):
+- a blank SSD is formatted, then the agent is stopped and the data copied and verified (file count, bytes,
+  SQLite `quick_check`, and the copied database still holds events written before the move);
+- the SD copy is moved aside, the marker is left, the drive is bind-mounted and the agent started;
+- boot re-mounts the brain, unplugging stops the agent, and eject refuses while the agent runs;
+- a failed copy or a corrupt database copy leaves the brain on the SD card;
+- shared, small, Windows-formatted, and NVMe-already cases do not move;
+- `storage format` refuses a drive with files unless `--erase-files`, and always refuses one holding spilled
+  documents.
+- (v0.4.1) a fresh exFAT shop SSD with the maker's installers on it is formatted and becomes the brain's home;
+  then the same drive is never formatted again: not on replug, not after a failed (power-cut) format, and not
+  after a laptop reformat to an empty exFAT. Every not-fresh case is left alone: a file or folder of yours, a
+  plain text file, Polymath's documents, a retired drive, under 32 GB, more than 1 GB of "maker" files, a drive
+  with no serial or model, or the setting off.
+- (v0.4.2) drive faces and the 12-hour clock: rendered in an emulated 118×14 terminal (pyte, DejaVu Sans Mono)
+  with the brain-moved face in the header and times such as ` 9:04:10 PM` lined up; every face glyph is checked
+  against the Pi's terminal font by `tests/test_face.py`.
+- (v0.4.3) the feed on the Pi's small touchscreen (a user photo: about 72 columns, a dark blue background) cut
+  off the header and showed the blue "read" tag almost invisibly. Rendered again at 72 columns on a dark blue
+  background: the header fits, messages wrap, and "read" is bright blue (`docs/img/feed-small-screen.png`).
+
+**Not yet done on real hardware.**
+
+**Tell.** On the earlier real learning copy (97,822 facts):
+
+| entity | its paragraph |
+|---|---|
+| Portugal | "Portugal is a country in Southwestern Europe. Its capital is Lisbon. Its official language is Portuguese. It has a population of about 10.3 million. It covers 92,225 km². It was founded on 25 July 1139…" |
+| Albrecht Dürer | "Dürer was born in Free Imperial City of Nuremberg on 21 May 1471 and died … on 6 April 1528…" |
+
+Problems found by reading real output, and fixed before shipping:
+- units printed as ids ("Q712226");
+- codes and identifiers shown as facts;
+- "a"/"the" errors;
+- people not recognised because the class "human" had not been read yet.
+
+**Predictions.** A backtest on the same copy hid real single-valued facts from every evidence source and let the
+predictor guess among the relation's usual answers. It got **25 of 27 right, against 23 % chance**, and abstained
+on 33 where no evidence spoke. Earlier runs, with junk relations still included, gave 20/32 and 8/17, so it
+depends on the relation mix. On the copy's real gaps it made no guesses: there was no evidence, and it does not
+guess blind. The Pi's much larger graph is where it will be measured.
+
+**Did you know.**
+- Speed: 300 new facts per run in 0–4 s, after capping hidden-fact predictions at 40 per run (the first
+  version took over a minute).
+- Problems found by reading real output, and fixed:
+  - many-valued relations (borders, diplomatic relations) produced nonsense surprises;
+  - areas were compared across units;
+  - series values were repeated;
+  - Wikidata's own bookkeeping entities appeared.
+- What it says now: "Sierra Leone has the smallest life expectancy of the 33 similar things it knows: 51.84
+  years."
+
+**Knowledge map.** 120 topics, 339 edges and 19 clusters on the real copy, in 0.5–0.8 s. Literature, medicine
+and studies of people, science, and neural networks form visible clusters.
+
+**Dashboard and live page.** Rendered in headless Chromium against the real copy: no console errors.
+- the map, with hover and click-to-ask: `docs/img/knowledge-map.png`;
+- "Tell me about Germany" in the ask box;
+- the week in review and the predictions panels: `docs/img/dashboard-panels.png`;
+- `/live` on a 390-pixel phone viewport: `docs/img/live-phone.png`.
+
+## 12d. Self-improvement (v0.4.0)
+
+Run on a copy of the same real learning database (97,822 facts; 141 transitive, inverse and symmetric rules; 2 self-tests with 77 answers).
+The first version ran on it and showed four problems; each was fixed and the run repeated.
+
+| part | first version on real data | after the fix |
+|---|---|---|
+| self-tuning | one trial ran 130 s, 112 s and 42 s in a single slice, starving every other job | trials run in normal slices (5 s budget: longest slice 6.6 s; 7–19 slices), resumable from JSON checkpoints |
+| link-predictor settings | gain exactly 0: the combiner gives the association clue weight 0, so no setting of it could show | judged on the association clue itself: 0.3–0.4 s per trial. It found the clue badly overconfident (log-likelihood −8.6 against −1.39 for chance) and adopted **`link.features` 40 → 20** (−8.24 → −7.43 on 60 questions), now under watch |
+| rule trust | "participant in ↔ participant" demoted, 8 of 8 "refuted", because sparse data made "participant" look single-valued | strict single-value test (≥ 50 subjects, ≥ 95 % one value): not demoted. 1 conclusion withdrawn ("drug or therapy used for treatment → inverse property → therapeutic area") |
+| withdrawn conclusions | would be re-derived by the next inference pass | remembered in `withdrawn`: a full re-run of inference from cursor 0 (34,704 facts, 604 new conclusions, 0.9 s) re-derived **0** of them |
+| reading strategy | papers, books, Q&A, feeds and the web all at weight 0.5: they add few facts and the median was 0 | value counts documents linked to known things (½ point each), median over sources that taught anything: OpenAlex 0.98, PubMed 1.04, Gutenberg 0.98, Stack Exchange 1.0, feeds 0.95, web 1.0; Wikipedia and Wikidata 2 |
+
+Also on this copy:
+- `link.subjects` 400 vs 200 scored identically: on this graph no object has enough subjects for the limit to
+  bind. `predict.min_confidence` 0.3 vs 0.4 also tied: no guess falls between them. Both trials were correctly
+  rejected and not shown in the feed.
+- No specialist was spawned: overall accuracy 44 %, and no relation had ≥ 12 answers in 14 days below the bar.
+  Spawning, retiring and the cool-down are covered by tests only.
+- Phrasing learned one sentence form, "X was born in Y" (birth place); the pattern table of this copy is small.
+- Germany still reads "capital Bonn (worked out by reasoning)": the contradicting fact (Berlin) is a hidden quiz
+  fact here, and hidden facts never count against a rule, by design.
+- Rule audit: 141 rules in 1.8–2.4 s.
+- Dashboard panel rendered in headless Chromium at 1280 and 390 px (`docs/img/self-improvement.png`).
+
+## 12e. Reasoning skills and cleaner knowledge (v0.5.0)
+
+Run on a copy of the real learning database (97,822 facts, 93,677 sentence pairs read). That copy holds Wikidata
+facts for a few hundred things only (410 coordinates, 174 birth dates, 317 areas), so questions were asked about
+things it has facts for. Answers, as returned (times on the development container):
+
+| question | answer |
+|---|---|
+| Is Brazil bigger than Angola? | Yes. Brazil (8,515,767 km²) is bigger than Angola (1,246,700 km²), by 7,269,067 km² (85%); compared by area. |
+| How many times bigger is Brazil than Portugal? | Brazil is about 92.3 times the area of Portugal (8,515,767 km² against 92,225 km²). |
+| What is the population density of Portugal? | About 112 people per km² (291 per sq mi): a population of 10,347,892 on 92,225 km². |
+| Is Lisbon higher than Helsinki? | Yes. Lisbon (100 m) is higher than Helsinki (17 m), by 83 m (83%); compared by elevation above sea level. |
+| How far is Germany from Portugal? | about 2,028 km (1,260 miles) apart, as the crow flies |
+| Which is further north, Portugal or Angola? | Portugal (latitude 38.70° N against 12.35° S) |
+| How old was Albrecht Dürer when he died? | died at about 56 (born 21 May 1471, died 6 April 1528) |
+| Who was alive at the same time as Albrecht Dürer? | Nicolaus Copernicus (1473–1543), Andrea del Sarto (1486–1530), … (0.24 s) |
+| Which came first, Plato or George Washington? | Plato: date of birth 428 BC, about 2,160 years before George Washington |
+| Who is the head of government of the capital of Portugal? | The capital of Portugal is Lisbon. The head of government of Lisbon is Q9697231 (a name not read yet). |
+| What caused World War II? | I know 18 causes of World War II, but have not read their names yet. |
+
+Problems the first version showed on this copy, all fixed before release:
+- **Wrong thing of several with one name** ("Paris (mythology)", "Penguin Books"): names now resolve to the thing that
+  has the facts the question needs, then the best-known.
+- **A bad merge** ("Poseidon" into Neptune through an alias): only a name or article title counts now; 66 merges
+  dropped to 10 ("Olympic games" into Olympic Games, "Fungi" into fungi …).
+- **Noisy causes and kinds** ("algorithm causes logic", "acid is a proton", "Huxley is an English"): weak cues removed,
+  the second thing must end its noun phrase, people are not given kinds, and a claim needs two sentences before it is
+  used. 31 causes from the copy's sentences dropped to 20 stored, none used until confirmed by a second sentence.
+- **Raw ids and dates**: kinds and causes known only by id are counted, not printed ("Q17444909"); dates read "428 BC"
+  and "21 May 1471" everywhere answers show them.
+- **Impossible facts** on the copy: 3, all between two Wikidata facts and therefore only noted ("Quintus Curtius Rufus:
+  died 50 before being born 100", a circa date; "Chilean Antarctic Territory is bigger than Chile").
+- **Dated facts** need Wikidata to be read again: this copy (and your Pi's current graph) was read before start and end
+  times were kept, so "the capital of Germany is Bonn" remains until the next monthly Wikidata dump is read.
+
+Tables, the second language, how-to steps and the end-to-end Spanish pipeline are covered by tests with synthetic
+articles and answers; the copy holds no table data, Spanish articles or answers with steps (all are read from new
+documents).
+
+## 13. Raspberry Pi 4 on-device results
+
+The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
+SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original spec named.
+
+| step | result | source |
+|---|---|---|
+| preflight | 41.8 °C, never throttled (`throttled=0x0`); labwc desktop; lxterminal present | Pi session, read-only commands |
+| `sudo ./install.sh --allow-sd-card` | completed. It created the `polymath` user, the venv, and the config with `require_separate_mount = false` and a 15.0 GB brain budget; it set up the feed autostart and desktop autologin, and enabled both services. `/health` then returned `{"ok": true, "state": "running", "cycle": 4}` | the user's terminal output |
+| `polymath` on PATH | missing after the first install, so `/usr/local/bin/polymath` was added (aebacb0) | found on the Pi |
+| reboot | "running after reboot, all is well": the agent and the desktop feed came back with no manual step | reported by the user |
+
+## 14. Still pending on the Pi
+
+Not claimed until measured:
+
+0. v0.5.0 on the Pi's full graph: the reasoning skills on many more things, dated facts after the next Wikidata read,
+   tables, Spanish Wikipedia and big-brain mode on the 1 TB SSD.
+1. v0.4.0 on the Pi's larger graph over a week: tuning trials and their rollbacks, rule demotions, specialists
+   spawned and retired, reading weights, learned phrasings (`polymath changes --all`).
+
+1. The test suite and `scripts/benchmark.py` on the Pi 4. A first run was cut off by a usage limit; the rerun is
+   in progress.
+2. 24 h soak:
+   - CPU temperature;
+   - throttle and pause events;
+   - memory under `MemoryMax=3G`;
+   - the feed terminal staying responsive.
+3. Pull the power mid-run and check that the restart resumes cleanly on the SD card.
+4. Plug in a real USB drive: blank, one with files, and FAT. Check the feed's `storage` line, `polymath storage
+   list`, spilling under pressure, unplug and replug, and `polymath storage retire`.
+5. **The 1 TB SSD**:
+   - the brain moves onto it (or `storage format` first, if it comes exFAT);
+   - reboot with it plugged in;
+   - boot without it: the agent waits;
+   - plug it in: the agent starts;
+   - `polymath wear` before and after.
+6. A day of `polymath wear` on the SD card, to replace the estimate with a measured daily rate.

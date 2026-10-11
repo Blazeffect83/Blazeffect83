@@ -1,0 +1,91 @@
+# Polymath configuration. Installed to /etc/polymath/polymath.toml.
+# Every key is optional; the values below are the defaults.
+
+log_level = "INFO"
+
+[paths]
+data_dir = "/srv/polymath"          # NVMe mount (or the SD card with install.sh --allow-sd-card)
+require_separate_mount = true       # refuse to start if data_dir is on the root (SD) filesystem
+
+[loop]
+job_time_budget = 15.0              # seconds per job slice (keeps the 120 s watchdog fed)
+idle_sleep = 2.0
+max_crashes = 3                     # process deaths inside one job before it is dead-lettered
+retry_base = 30.0                   # exponential backoff base (seconds)
+retry_cap = 21600.0
+heartbeat_stale = 60.0
+planners = true                     # plan source/learning work autonomously
+
+[body]
+thermal_zone = "/sys/class/thermal/thermal_zone0/temp"
+throttle_celsius = 75.0
+pause_celsius = 82.0
+disk_budget_gb = 200.0              # total bytes Polymath may use under data_dir
+disk_min_free_gb = 10.0
+backup_keep = 7
+backup_hour = 3
+
+[senses]
+user_agent = "PolymathBot/0.1 (+https://github.com/Blazeffect83; self-hosted learning agent)"
+contact = ""                        # e-mail added to the User-Agent (recommended by Wikimedia)
+crawl_rate = 1.0                    # requests/second per host; hard ceiling 1.0
+crawl_max_bytes = 5000000
+download_chunk = 1048576
+timeout = 30.0
+max_redirects = 5
+allow_private_networks = false
+wikipedia_lang = "en"
+wikipedia_parts = 1
+wikidata_max_bytes = 0              # 0 = the whole dump
+openalex_files = 2
+open_web = true                     # learn from sites Wikipedia cites, each vetted before its first visit:
+                                    # safety lists (adult/malware/phishing/gambling), valid HTTPS, robots.txt,
+                                    # enough citations; then probation until its facts check out
+open_web_min_citations = 3
+open_web_trusted_citations = 50
+open_web_sites_per_day = 200
+open_web_probation_pages = 20
+pubmed_files = 2
+gutenberg_books = 200
+stackexchange_sites = ["ai", "datascience", "cs"]
+feeds = []
+seeds = []
+crawl_allow_domains = []           # empty: the seeds' own hosts
+default_feeds = true               # no feeds above → the built-in list of public feeds
+default_seeds = true               # no seeds above → the built-in reference sites
+
+[learning]
+embedding_dim = 128
+embedding_window = 5
+embedding_negatives = 5
+embedding_min_count = 5
+embedding_vocab_max = 200000
+index_nlist = 0
+index_nprobe = 32
+holdout_fraction = 0.05
+quiz_size = 50
+digest_hour = 7                     # the daily "what I learned today" digest (local time)
+relearn_delay_hours = 3.0           # after a wrong self-test answer: read about it, re-test this much later
+relearn_attempts = 3
+
+[dashboard]
+host = "0.0.0.0"
+port = 8765
+
+[agents]
+max_agents = 12                     # active agents (yours + evolved children)
+evolve = true                       # strong agents fork mutated children; weaker children retire
+step_interval = 120.0               # seconds between agent society slices
+min_tasks_to_judge = 30             # verified tasks before an agent can fork or be judged
+
+[storage]
+# Drives you plug in (USB SSD/HDD/stick, NVMe) are added to the brain automatically: mounted under
+# mount_root, used for document bodies, downloads and backups. Existing files on them are never touched.
+mount_root = "/mnt/polymath"
+adopt = true                        # add every drive that is plugged in (never the system disk)
+format_blank_disks = true           # a drive with nothing at all on it is formatted (ext4, label POLYMATH)
+format_fresh_drives = true          # a new shop drive (exFAT/NTFS, only the maker's files) is formatted once, ever
+shared_drive_share = 0.5            # on a drive that already holds files, use this share of its free space
+reserve_fraction = 0.1              # always leave this share of every drive free
+spill_at = 0.75                     # move document bodies to drives once the main disk is this full
+ignore = []                         # filesystem UUIDs never to adopt (see `polymath storage list`)

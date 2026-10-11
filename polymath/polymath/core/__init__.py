@@ -1,0 +1,1 @@
+"""Polymath core package."""

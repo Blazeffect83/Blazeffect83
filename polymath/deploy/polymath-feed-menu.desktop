@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Polymath live feed
+Comment=Watch what Polymath is learning, live, in a terminal
+Exec=/opt/polymath/src/scripts/open-feed.sh --new
+Icon=/opt/polymath/src/polymath/interface/static/icon.svg
+Terminal=false
+Categories=Science;Education;
