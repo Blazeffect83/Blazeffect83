@@ -1,0 +1,11 @@
+# Every minute (and 45 s after boot): is the brain's drive there? (polymath storage heal; it does nothing when it is)
+[Unit]
+Description=Polymath storage: check the brain's drive every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

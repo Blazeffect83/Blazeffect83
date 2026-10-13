@@ -174,6 +174,13 @@ class StorageConfig:
     # with room is plugged in, so the SD card only boots the Pi (see body.volumes.Helper.move_home).
     move_home: bool = True
     home_min_gb: float = 32.0  # a drive needs at least this much room (and 3× the brain) to become home
+    # Bring the brain's drive back by itself when it is missing or dead (`polymath storage heal`, every minute):
+    # drop a dead mount, soft-reset a USB drive that reports 0 bytes, and as a last resort cut the USB ports'
+    # power for a moment (a replug; for enclosures with a capacitor that do not power-cycle on a reboot)
+    heal: bool = True
+    heal_power_cycle: bool = True
+    heal_hubs: list[str] = field(default_factory=lambda: ["2", "1-1"])  # Pi 4: USB 3 hub, then the USB 2 hub
+    heal_power_off_s: float = 20.0  # long enough for a capacitor-backed enclosure (DockCase) to really switch off
 
 
 @dataclass

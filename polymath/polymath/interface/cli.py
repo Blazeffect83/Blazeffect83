@@ -85,6 +85,24 @@ def wait_for_storage(
     return False
 
 
+def report_heal_actions(db: Database, config: Config) -> int:
+    """What the drive helper did to bring the brain back (`polymath storage heal`) goes to the caretaker's inbox,
+    once each. Returns how many were reported."""
+    from polymath.body.heal import read_public
+    from polymath.core import issues
+
+    record = read_public(config) or {}
+    seen = float(db.kv_get("heal_seen_at") or 0.0)
+    new = [a for a in record.get("actions") or [] if float(a.get("at") or 0) > seen]
+    with db.transaction():
+        for a in new:
+            issues.report(db, "storage", f"heal:{a.get('action')}:{a.get('at')}", f"the drive helper brought the "
+                          f"brain's drive back: {a.get('detail')}", severity="warn", now=float(a["at"]))  # fmt: skip
+        if new:
+            db.kv_set("heal_seen_at", max(float(a["at"]) for a in new))
+    return len(new)
+
+
 def cmd_run(config: Config, args: argparse.Namespace) -> int:
     import signal
 
@@ -98,6 +116,7 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
     agent = build_agent(config)
+    report_heal_actions(agent.db, config)
     if time.time() - t0 > WAIT_CHECK_S:  # it had to wait: the caretaker's inbox keeps the record
         from polymath.core import issues
         from polymath.core.netstate import _duration
@@ -594,6 +613,13 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         print(f"`polymath storage {op}` mounts and unmounts drives: run it with sudo", file=sys.stderr)
         return 2
     helper = Helper(config)
+    if op == "heal":
+        from polymath.body.heal import Healer
+        from polymath.body.volumes import SERVICES
+
+        result = Healer(config, helper.run, services=SERVICES, mounts_at=helper.mounts_at).heal()
+        print(json.dumps(result))
+        return 0
     if op == "format":
         out = helper.format_empty(args.volume, erase_files=args.erase_files)
     else:
@@ -1206,6 +1232,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("detach", "release an unplugged device (sudo; systemd runs this)"),
     ):
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
+    stsub.add_parser("heal", help="bring the brain's drive back if it is missing or dead (sudo; a timer runs this)")
     stf = stsub.add_parser("format", help="reformat an EMPTY drive for Linux so the brain can move onto it (sudo)")
     stf.add_argument("volume", help="drive id from `polymath storage list`")
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")

@@ -334,6 +334,8 @@ class FakeSystem:
                    "label": d.get("probe", {}).get("LABEL")}  # fmt: skip
             if d.get("children"):
                 dev["children"] = d["children"]
+            if "size" in d:
+                dev["size"] = d["size"]
             return subprocess.CompletedProcess(args, 0, json.dumps({"blockdevices": [dev]}), "")
         if cmd == "findmnt":
             src = "/dev/mmcblk0p2" if args[-1] in {"/", str(self.root / "data")} else ""
@@ -521,3 +523,14 @@ def test_helper_formats_a_fresh_shop_drive_once_or_leaves_it_when_busy(helper, c
     out = h.attach("/dev/sda1")  # with the brain move off, the formatted drive is simply added as dedicated
     assert out.action == "formatted" and "dedicated drive" in out.detail and " …" in out.detail, out
     assert fake.ran("mkfs.ext4")[0][-1] == "/dev/sda1"
+
+
+def test_a_drive_reporting_zero_bytes_is_never_formatted(helper):
+    """`sda 0B usb` (the enclosure answers, the drive does not) reads as nothing: never "blank", never formatted."""
+    h, fake = helper
+    fake.add("/dev/sdd", size=0)
+    out = h.attach("/dev/sdd")
+    assert out.action == "skipped" and "reports 0 bytes" in out.detail
+    assert not fake.ran("mkfs.ext4") and not fake.ran("sfdisk")
+    h.edges = lambda dev: (b"", b"")
+    assert not h.is_blank("/dev/sdd")  # an empty read is no proof of blankness

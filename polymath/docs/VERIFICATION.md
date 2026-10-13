@@ -593,6 +593,26 @@ Tests: `test_a_dead_brain_mount_is_replaced_not_trusted`, `test_a_dead_mount_cou
 `test_storage_lost_mid_run_stops_the_agent_for_a_clean_restart`, `test_doctor_names_a_dead_mount`,
 `test_installer_carries_on_past_a_dead_brain_mount`.
 
+## 12i. Bringing the drive back by itself (v0.5.5)
+
+**What the Pi showed:** the SSD sits in a DockCase enclosure, whose capacitor gives it a safe power-off. On a
+reboot the enclosure does not power-cycle, and afterwards the drive was missing or showed `sda 0B usb` until it
+was replugged.
+
+**Added: `body/heal.py`** (`polymath storage heal`, every minute from `polymath-heal.timer`):
+- brain states `healthy`, `local`, `missing` and `dead`;
+- a dead mount is dropped and the drive is retriggered;
+- a soft USB reset (the sysfs `authorized` switch of the device the 0-byte disk hangs off), at most every 2 min;
+- a USB power cut with `uhubctl` (Pi 4 hubs `2` and `1-1`, 20 s off) after 90 s missing, at most every 15 min and 6
+  a day;
+- its record goes to `/var/lib/polymath/heal.json` and `/run/polymath/heal.json`. The agent reports each action
+  to the caretaker's inbox when it starts, and `doctor` shows the last 24 h.
+
+**Also fixed:** a 0-byte device was "blank" by an empty read. It is now skipped outright and never formatted.
+
+Tests: `tests/test_heal.py` (9) and `test_a_drive_reporting_zero_bytes_is_never_formatted`. On the Pi, the
+power cut itself is not yet measured (uhubctl on the Pi 4's VL805 hub).
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

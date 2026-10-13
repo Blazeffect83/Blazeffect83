@@ -233,6 +233,19 @@ dashboard as soon as it answers.
 - **Before v0.5.2**, both services stopped and stayed stopped: the feed showed only "no answer".
 - **The dashboard always starts**, even without the brain, and says why.
 
+**It brings the brain's drive back by itself** (v0.5.5):
+- `polymath-heal.timer` runs `polymath storage heal` 45 s after boot and then every minute. While the brain is
+  healthy it does nothing.
+- When the brain is missing or dead, it escalates:
+  1. a dead mount is dropped and the drive is asked for again;
+  2. a USB drive reporting 0 bytes gets a soft reset of just that device;
+  3. still missing after 90 s, the USB ports' power is cut for 20 s and restored (`uhubctl`). That is a real
+     replug, for enclosures like the DockCase whose capacitor keeps the drive in "safe off" across a reboot. At
+     most once every 15 minutes and 6 times a day.
+- Every action goes to the caretaker's inbox and to `polymath doctor`. Settings: `[storage] heal`,
+  `heal_power_cycle`, `heal_hubs`, `heal_power_off_s`.
+- A drive reporting 0 bytes is never treated as blank and never formatted.
+
 **Every problem is recorded** (`core/issues.py`, the caretaker's inbox):
 - what gets recorded: jobs that give up, body pauses (heat, full disk, read-only card), restart loops, unclean
   stops, time spent without the brain's drive, and a fallback snapshot that cannot be written;

@@ -49,6 +49,9 @@ implemented here and learns only from data the agent downloads itself.
     instead and tells you the one command that fixes it.
   - **The brain's drive unplugged or dropped out:** nothing goes dark. The feed says which drive is missing,
     and Polymath starts by itself the moment it is back (v0.5.2).
+  - **It brings its drive back by itself:** a dead connection, a drive reporting 0 bytes, or an enclosure stuck
+    in its safe-off state after a reboot: it resets the drive, and as a last resort cuts and restores the USB
+    power, like a replug (v0.5.5).
   - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
   - `polymath doctor` checks every part and says exactly what to do. Services restart forever, waiting longer
     between attempts.

@@ -182,6 +182,17 @@ def run_checks(
                             "if the brain lives on your SSD: is it plugged in, and does `lsblk` show it? "
                             "Then: journalctl -u 'polymath-volume@*' -n 30"))  # fmt: skip
 
+    from polymath.body.heal import read_public
+
+    healed = [a for a in ((read_public(config) or {}).get("actions") or []) if time.time() - float(a.get("at") or 0)
+              < 86400]  # fmt: skip
+    if healed:
+        last = healed[-1]
+        when = time.strftime("%H:%M", time.localtime(float(last["at"])))
+        detail = f"brought the brain's drive back {len(healed)} time(s) in the last 24 h; last at {when}: "
+        fix = "it works, but the drive keeps dropping out: give it a powered USB hub or its own power"
+        checks.append(Check("drive helper", WARN, detail + str(last.get("detail")), fix))
+
     # disk room
     try:
         free = shutil.disk_usage(data).free / 1e9

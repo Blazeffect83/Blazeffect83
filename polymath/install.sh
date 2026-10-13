@@ -85,7 +85,7 @@ if [ "$SYSTEM" = 1 ]; then
         run useradd --system --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin polymath
     fi
     missing=()
-    for pkg in python3-venv curl fdisk e2fsprogs; do
+    for pkg in python3-venv curl fdisk e2fsprogs uhubctl; do  # uhubctl: `storage heal` can replug the brain's drive
         dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
     done
     if [ ${#missing[@]} -gt 0 ]; then
@@ -195,6 +195,11 @@ journald_changed="$(install_file "$SRC/deploy/journald-polymath.conf" "$ROOT/etc
 if [ -n "$(install_file "$SRC/deploy/polymath-volume@.service" "$ROOT/etc/systemd/system/polymath-volume@.service" 0644)" ]; then
     units_changed=1
 fi
+for unit in polymath-heal.service polymath-heal.timer; do  # brings the brain's drive back if it goes missing
+    if [ -n "$(install_file "$SRC/deploy/$unit" "$ROOT/etc/systemd/system/$unit" 0644)" ]; then
+        units_changed=1
+    fi
+done
 udev_changed="$(install_file "$SRC/deploy/90-polymath-storage.rules" "$ROOT/etc/udev/rules.d/90-polymath-storage.rules" 0644)"
 run mkdir -p "$ROOT$MOUNT_ROOT"
 run chmod 0755 "$ROOT$MOUNT_ROOT"
@@ -259,6 +264,7 @@ if [ "$SYSTEM" = 1 ]; then
     [ -z "$journald_changed" ] || run systemctl restart systemd-journald
     [ "$units_changed" = 0 ] || run systemctl daemon-reload
     run systemctl enable polymath.service polymath-dashboard.service
+    run systemctl enable --now polymath-heal.timer
     if [ -n "$udev_changed" ] || [ "$units_changed" = 1 ]; then
         run udevadm control --reload-rules
     fi

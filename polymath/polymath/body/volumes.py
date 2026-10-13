@@ -264,9 +264,12 @@ class Helper:
         tmp.replace(self.registry)
 
     def is_blank(self, dev: str) -> bool:
+        """Only zeros at both ends. Nothing read is not "blank" (a drive that does not answer reads as nothing)."""
         try:
             head, tail = self.edges(dev)
         except OSError:
+            return False
+        if not head or not tail:
             return False
         return not head.strip(b"\0") and not tail.strip(b"\0")
 
@@ -297,6 +300,9 @@ class Helper:
         inf = self.info(dev)
         if self.disk_of(dev) in self.system_disks():
             return Outcome("skipped", f"{dev} is on the system disk")
+        if "size" in inf and not int(inf.get("size") or 0):  # `sda 0B usb`: the enclosure answers, the drive does not
+            return Outcome("skipped", f"{dev} reports 0 bytes: the drive in it is not answering (never formatted, "
+                           "never used); `polymath storage heal` resets it")  # fmt: skip
         pr = self.probe(dev)
         if pr.get("UUID") and pr["UUID"] in ignored_ids(self.config):
             return Outcome("skipped", f"{dev} is on the ignore list", pr["UUID"])
