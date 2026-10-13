@@ -117,6 +117,17 @@ class CycleRecord:
 Planner = Callable[["Agent"], None]
 
 
+def storage_lost(exc: BaseException) -> bool:
+    """The brain's storage went away under a running agent (a drive drop-out): a disk I/O error from SQLite, or an
+    OS error of a dead mount. Retrying cannot help; restarting into ``wait_for_storage`` can."""
+    import errno
+    import sqlite3
+
+    if isinstance(exc, sqlite3.OperationalError):
+        return "disk i/o error" in str(exc).lower()
+    return isinstance(exc, OSError) and exc.errno in {errno.EIO, errno.ENOTCONN, errno.ESTALE, errno.ENODEV}
+
+
 def heartbeat_path(config: Config) -> Path:
     return config.paths.data_dir / "heartbeat"
 
@@ -160,6 +171,7 @@ class Agent:
         self._hb_state = ""
         self.build = read_build()  # the code this process runs; the feed compares it with what is installed
         self.network_kinds = registry.network_kinds()
+        self.storage_lost = False  # set when the brain's drive stopped answering mid-run (see storage_lost)
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -361,6 +373,12 @@ class Agent:
             log.warning("job failed permanently", extra={"job": job.id, "kind": job.kind, "error": str(exc)})
         except Exception as exc:
             rec.error = f"{type(exc).__name__}: {exc}"
+            if storage_lost(exc):  # the brain's drive stopped answering: nothing can be written; restart into waiting
+                log.critical("the brain's storage stopped answering; stopping so the agent restarts and waits for "
+                             "its drive", extra={"error": rec.error})  # fmt: skip
+                self.storage_lost = True
+                self.stop()
+                return self._finish(rec, started, t0, c0)
             if netstate.is_network_error(exc) and self._responses() == responses:
                 return self._network_down(job, rec, started, t0, c0)
             with self.db.transaction():

@@ -174,10 +174,12 @@ elif [ "$ALLOW_SD" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ data directory
-run mkdir -p "$ROOT$DATA"
+# a brain drive that dropped out leaves a dead mount here (Input/output error): warn and carry on, so the code and
+# services still update; the agent then waits for its drive and `polymath doctor` says what to do
+run mkdir -p "$ROOT$DATA" || warn "cannot use $DATA right now (the brain's drive may have dropped out): reboot, then run this installer again"
 if [ "$SYSTEM" = 1 ]; then
-    run chown polymath:polymath "$ROOT$DATA"
-    run chmod 0750 "$ROOT$DATA"
+    run chown polymath:polymath "$ROOT$DATA" || warn "cannot change the owner of $DATA (the brain's drive may have dropped out): reboot, then run this installer again"
+    run chmod 0750 "$ROOT$DATA" || true
 fi
 
 # ------------------------------------------------------------------ systemd units and journald limits

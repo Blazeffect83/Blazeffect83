@@ -306,6 +306,7 @@ def test_a_new_ssd_becomes_the_brains_home(home_helper, config, db, tmp_path):
         f"40 25 8:17 /polymath-brain/home {data} rw - ext4 /dev/sdb1 rw\n"
         f"36 25 8:17 / {config.storage.mount_root / 'new-uuid-1'} rw - ext4 /dev/sdb1 rw\n"
     )
+    (data / HOME_FILE).write_text((home / HOME_FILE).read_text())  # what the live bind mount shows there
     assert "already mounted" in h.attach("/dev/sdb1").detail
     assert h.eject("new-uuid-1").action == "skipped"  # it holds the brain while the agent runs
     fake.calls.clear()
@@ -738,3 +739,33 @@ def test_formatting_on_request_is_remembered_too(home_helper, config, tmp_path):
     (tmp_path / "mountinfo").write_text(f"36 25 8:1 / {mnt} rw - exfat /dev/sda1 rw\n")
     h.format_empty("EX-9", erase_files=True)
     assert h.formatted_drives()["serial:S1"]["by"] == "polymath storage format"
+
+
+def test_a_dead_brain_mount_is_replaced_not_trusted(home_helper, config, tmp_path):
+    """After a USB reset the SSD comes back as a new device, but the brain's old bind mount still points at the
+    dead one (Input/output error). The helper drops it and mounts the drive as it is now."""
+    h, fake = home_helper
+    data = config.paths.data_dir
+    mnt = config.storage.mount_root / "26ffc49f"
+    brain = mnt / storage_pool.BRAIN
+    (brain / vols.HOME).mkdir(parents=True)
+    (brain / vols.HOME / HOME_FILE).write_text("{}")
+    # the brain is "mounted" from the dead device, the drive itself from the live one
+    (tmp_path / "mountinfo").write_text(
+        f"40 25 8:17 /polymath-brain/home {data} rw - ext4 /dev/sda1 rw\n36 25 8:33 / {mnt} rw - ext4 /dev/sdb1 rw\n"
+    )
+    fake.calls.clear()
+    out = h.mount_home(brain, {"home": True}, vols.Outcome("attached", "d", "26ffc49f"))
+    assert out.action == "home"
+    assert fake.calls[0] == ["systemctl", "stop", *vols.SERVICES]
+    assert ["umount", "-l", str(data)] in fake.calls
+    assert ["mount", "--bind", str(brain / vols.HOME), str(data)] in fake.calls
+    assert fake.calls[-1] == ["systemctl", "restart", *vols.SERVICES]
+    # a healthy brain mount from the drive that is there now is left alone
+    (data / HOME_FILE).write_text("{}")
+    (tmp_path / "mountinfo").write_text(
+        f"40 25 8:33 /polymath-brain/home {data} rw - ext4 /dev/sdb1 rw\n36 25 8:33 / {mnt} rw - ext4 /dev/sdb1 rw\n"
+    )
+    fake.calls.clear()
+    assert "already mounted" in h.mount_home(brain, {"home": True}, vols.Outcome("attached", "d", "x")).detail
+    assert not fake.calls

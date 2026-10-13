@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 from dataclasses import dataclass, field
 from typing import Any
@@ -22,7 +23,23 @@ class BrainDriveMissing(StorageError):
     """The brain moved onto a drive that is not mounted right now (unplugged, or not mounted yet at boot)."""
 
 
+DEAD_MOUNT_ERRNOS = {errno.EIO, errno.ENOTCONN, errno.ESTALE, errno.ENODEV, errno.ENXIO}
+
+
 def check_storage(config: Config) -> None:
+    try:
+        _check_storage(config)
+    except OSError as exc:
+        if exc.errno not in DEAD_MOUNT_ERRNOS:
+            raise
+        raise BrainDriveMissing(
+            f"the brain's storage at {config.paths.data_dir} is not answering ({exc.strerror}): its drive dropped "
+            "out and the old connection is dead. A reboot clears it; Polymath then mounts the drive and starts by "
+            "itself."
+        ) from exc
+
+
+def _check_storage(config: Config) -> None:
     data_dir = config.paths.data_dir
     moved = data_dir / MOVED_FILE
     if moved.exists():  # the brain moved to a drive, and what is mounted here is the SD card's old directory

@@ -901,3 +901,63 @@ def test_a_usb_drive_reporting_zero_bytes_is_named(tmp_path, monkeypatch):
     cli.wait_for_storage(cfg, notifier=Notifier({}), stop=stop, sleep=once)
     reason = json.loads(snapshot.path_for(cfg).read_text())["status"]["paused_reason"]
     assert "/dev/sda answers but reports 0 bytes" in reason and "blue USB 3 port" in reason
+
+
+# ------------------------------------------------------------------------------------------- v0.5.4: a dead mount
+def test_a_dead_mount_counts_as_a_missing_drive(config, monkeypatch):
+    import errno as errno_
+
+    from polymath.core import app
+
+    def dead(_cfg: Any) -> None:
+        raise OSError(errno_.EIO, "Input/output error")
+
+    monkeypatch.setattr(app, "_check_storage", dead)
+    with pytest.raises(app.BrainDriveMissing, match="not answering \\(Input/output error\\)"):
+        app.check_storage(config)
+
+    def denied(_cfg: Any) -> None:
+        raise OSError(errno_.EACCES, "Permission denied")
+
+    monkeypatch.setattr(app, "_check_storage", denied)
+    with pytest.raises(PermissionError):  # anything else is a real error, not a missing drive
+        app.check_storage(config)
+
+
+def test_storage_lost_mid_run_stops_the_agent_for_a_clean_restart(config, db):
+    import errno as errno_
+
+    from polymath.core.loop import storage_lost
+
+    assert storage_lost(sqlite3.OperationalError("disk I/O error"))
+    assert storage_lost(OSError(errno_.EIO, "Input/output error"))
+    assert not storage_lost(sqlite3.OperationalError("no such table: x"))
+    assert not storage_lost(OSError(errno_.ENOSPC, "No space left on device"))
+    reg = JobRegistry()
+
+    def gone(ctx: Any) -> JobOutcome:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    reg.register("read.thing", gone, "the drive vanishes under it")
+    agent = Agent(config, db, reg, notifier=Notifier({}))
+    agent.start()
+    jid, _ = agent.scheduler.enqueue("read.thing", {}, key="g1")
+    agent.cycle()
+    assert agent.storage_lost and agent.stop_event.is_set()
+    assert db.scalar("SELECT attempts FROM jobs WHERE id = ?", (jid,)) == 0  # no retry spent on a dead drive
+
+
+def test_doctor_names_a_dead_mount(tmp_path, monkeypatch):
+    cfg = make_config(tmp_path)
+
+    def dead(path: Path) -> bool:
+        raise doctor.DeadStorage(5, "Input/output error")
+
+    monkeypatch.setattr(doctor, "_exists", dead)
+    c = doctor.brain_check(cfg.paths.data_dir)
+    assert c.level == doctor.BAD and "Input/output error" in c.detail and "sudo reboot" in c.fix
+
+
+def test_installer_carries_on_past_a_dead_brain_mount():
+    script = (ROOT / "install.sh").read_text()
+    assert 'run chown polymath:polymath "$ROOT$DATA" || warn' in script

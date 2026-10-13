@@ -33,15 +33,46 @@ class Check:
     fix: str = ""
 
 
+class DeadStorage(OSError):
+    """The path's storage does not answer (Input/output error and the like): a drive that dropped out."""
+
+
 def _exists(path: Path) -> bool | None:
-    """Whether ``path`` exists; None when you may not look (``Path.exists`` raises for that)."""
+    """Whether ``path`` exists; None when you may not look (``Path.exists`` raises for that). Raises
+    ``DeadStorage`` when the storage itself does not answer."""
+    from polymath.core.app import DEAD_MOUNT_ERRNOS
+
     try:
         path.stat()
     except FileNotFoundError:
         return False
-    except OSError:
+    except OSError as exc:
+        if exc.errno in DEAD_MOUNT_ERRNOS:
+            raise DeadStorage(exc.errno, exc.strerror) from exc
         return None
     return True
+
+
+def brain_check(data: Path) -> Check:
+    """Where the brain is, as far as you may look; a dead mount (the drive dropped out) is named."""
+    try:
+        moved, home = _exists(data / MOVED_FILE), _exists(data / HOME_FILE)
+    except DeadStorage as exc:
+        return Check("brain", BAD, f"its storage at {data} does not answer ({exc.strerror}): the drive dropped out "
+                     "and the old connection is dead", "sudo reboot   (Polymath then mounts the drive and starts by "
+                     "itself)")  # fmt: skip
+    if moved is None or home is None:  # the brain belongs to the polymath user: you may not look inside
+        return Check("brain", OK, f"at {data} (its files belong to the polymath user)")
+    if moved and not home:
+        try:
+            name = json.loads((data / MOVED_FILE).read_text(encoding="utf-8")).get("name") or "its drive"
+        except (OSError, ValueError):
+            name = "its drive"
+        return Check("brain", BAD, f"the brain lives on {name}, which is not mounted",
+                     "plug the drive in (or replug it): Polymath mounts it and starts by itself")  # fmt: skip
+    if home:
+        return Check("brain", OK, f"on its drive, mounted at {data}")
+    return Check("brain", OK, f"at {data}")
 
 
 def http_health(url: str, timeout: float = 6.0) -> tuple[str, float, dict[str, Any] | None]:
@@ -78,20 +109,7 @@ def run_checks(
     restart_agent = "sudo systemctl restart polymath   (details: journalctl -u polymath -n 60)"
 
     # where the brain lives
-    moved, home = _exists(data / MOVED_FILE), _exists(data / HOME_FILE)
-    if moved is None or home is None:  # the brain belongs to the polymath user: you may not look inside
-        checks.append(Check("brain", OK, f"at {data} (its files belong to the polymath user)"))
-    elif moved and not home:
-        try:
-            name = json.loads((data / MOVED_FILE).read_text(encoding="utf-8")).get("name") or "its drive"
-        except (OSError, ValueError):
-            name = "its drive"
-        checks.append(Check("brain", BAD, f"the brain lives on {name}, which is not mounted",
-                            "plug the drive in (or replug it): Polymath mounts it and starts by itself"))  # fmt: skip
-    elif home:
-        checks.append(Check("brain", OK, f"on its drive, mounted at {data}"))
-    else:
-        checks.append(Check("brain", OK, f"at {data}"))
+    checks.append(brain_check(data))
 
     # the agent, through its own snapshot (needs nothing but /run)
     st, age = snapshot.read_status(snapshot.path_for(config))

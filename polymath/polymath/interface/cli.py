@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -106,9 +107,10 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
         issues.report(agent.db, "storage", "brain_missing", why)
     agent.install_signal_handlers()
     ran = agent.run(max_cycles=args.max_cycles, until_idle=args.until_idle)
-    agent.db.close()
-    print(json.dumps({"job_cycles": ran, "last_cycle": agent.cycle_no}))
-    return 0
+    with contextlib.suppress(Exception):  # a dead drive cannot even close cleanly
+        agent.db.close()
+    print(json.dumps({"job_cycles": ran, "last_cycle": agent.cycle_no, "storage_lost": agent.storage_lost}))
+    return 75 if agent.storage_lost else 0  # EX_TEMPFAIL: systemd restarts it, and it waits for its drive
 
 
 def status_dict(db: Database) -> dict[str, Any]:

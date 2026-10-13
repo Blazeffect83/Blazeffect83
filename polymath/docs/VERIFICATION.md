@@ -568,6 +568,31 @@ device path) and names it in `polymath doctor` and in the waiting message, with 
 
 The 564 tests pass; ruff, ruff format and mypy --strict are clean.
 
+## 12h. A dead brain mount after a USB reset (v0.5.4)
+
+**What happened on the Pi:**
+- `sudo usbreset 31db:9210` brought the SSD back (`lsblk` showed its full size).
+- The installer then failed with "changing ownership of '/srv/polymath': Input/output error".
+- `polymath doctor` showed the agent down and "the dashboard cannot open the database", while the drive itself
+  was mounted again.
+
+**Why:** the frozen SSD never left the bus, so `detach` never ran. After the reset it came back as a new
+device and was mounted again, but `/srv/polymath` stayed bound to the dead connection, and `mount_home` trusted
+it ("already mounted").
+
+**Fixed:**
+- `mount_home` checks that the existing brain mount answers and comes from the drive that is there now;
+  otherwise it stops the services, drops the dead mount and binds the live drive.
+- `check_storage` turns a dead-mount error (EIO, ENOTCONN, ESTALE, ENODEV, ENXIO) into `BrainDriveMissing`, so the
+  agent waits visibly.
+- A disk I/O error under a running agent stops it, with no retries spent, so systemd restarts it into waiting.
+- `doctor` names a dead mount and says `sudo reboot`.
+- `install.sh` warns and carries on instead of aborting.
+
+Tests: `test_a_dead_brain_mount_is_replaced_not_trusted`, `test_a_dead_mount_counts_as_a_missing_drive`,
+`test_storage_lost_mid_run_stops_the_agent_for_a_clean_restart`, `test_doctor_names_a_dead_mount`,
+`test_installer_carries_on_past_a_dead_brain_mount`.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

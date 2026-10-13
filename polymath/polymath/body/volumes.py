@@ -162,6 +162,15 @@ class Outcome:
         return {"action": self.action, "detail": self.detail, "volume": self.volume}
 
 
+def _answers(path: Path) -> bool:
+    """Can ``path`` be read? False on a dead mount (Input/output error) as on a missing file."""
+    try:
+        path.stat()
+    except OSError:
+        return False
+    return True
+
+
 class Helper:
     def __init__(
         self,
@@ -611,8 +620,17 @@ class Helper:
         data, home = self.config.paths.data_dir, brain / HOME
         if not (home / HOME_FILE).exists():
             return Outcome(out.action, f"{out.detail}; it should hold the brain, but {home} is missing", out.volume)
-        if any(mp == str(data) for mp, _src in self.mounts_at(data)):
-            return Outcome(out.action, f"{out.detail}; it holds the brain (already mounted)", out.volume)
+        existing = [src for mp, src in self.mounts_at(data) if mp == str(data)]
+        if existing:
+            current = [src for _mp, src in self.mounts_at(brain.parent)]
+            if _answers(data / HOME_FILE) and (not current or existing[-1] in current):
+                return Outcome(out.action, f"{out.detail}; it holds the brain (already mounted)", out.volume)
+            # the brain's mount points at a connection that died (a USB reset or drop-out that never unplugged):
+            # drop it, then mount the drive as it is now
+            log.warning("replacing a dead brain mount", extra={"data": str(data), "was": existing[-1]})
+            self.run(["systemctl", "stop", *SERVICES])
+            for _src in existing:
+                self.run(["umount", "-l", str(data)])
         r = self.run(["mount", "--bind", str(home), str(data)])
         if r.returncode != 0:
             return Outcome(out.action, f"{out.detail}; mounting the brain failed: {r.stderr.strip()}", out.volume)
