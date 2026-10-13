@@ -442,8 +442,8 @@ def test_resilient_source_all_down():
                                 hint="polymath doctor")  # fmt: skip
     with pytest.raises(feed.FeedUnavailable) as exc:
         src(None)
-    assert str(exc.value) == ("dashboard is down; db: database is down; snap: snapshot is down "
-                              "· fix: polymath doctor")  # fmt: skip
+    assert str(exc.value) == ("nothing answers: the agent and the dashboard look stopped · run: polymath doctor · "
+                              "dashboard is down; db: database is down; snap: snapshot is down")  # fmt: skip
 
 
 def test_cli_feed_uses_the_snapshot_when_dashboard_and_database_are_unreadable(tmp_path, capsys, monkeypatch):
@@ -487,6 +487,10 @@ def test_net_notes_render_and_move_the_face():
     assert face.mood(time.time()) == "studying"
     face.see({"kind": "note", "what": "net", "status": "online"}, now=100.0)
     assert face.mood(101.0) == "happy"
+    face.see({"kind": "note", "what": "home", "status": "missing"}, now=200.0)
+    assert face.mood(201.0) == "missing"  # worried, not celebrating
+    face.see({"kind": "note", "what": "issue", "status": "bad"}, now=300.0)
+    assert face.mood(301.0) == "error"
 
 
 def test_feed_counts_sources(kb_db):
@@ -644,7 +648,7 @@ def test_doctor_checks(tmp_path):
         return "answered", 0.2, {"ok": True}
 
     checks = {c.name: c for c in doctor.run_checks(cfg, "http://x", health=fine)}
-    assert checks["dashboard"].level == doctor.OK and checks["agent"].level == doctor.WARN  # no snapshot yet
+    assert checks["dashboard"].level == doctor.OK and checks["agent"].level == doctor.BAD  # no snapshot: not running
     cfg.paths.run_dir.mkdir()
     snapshot.write(snapshot.path_for(cfg), {"written": time.time(), "status": {"activity": "reasoning",
                    "net": {"online": False, "since": time.time() - 60}}})  # fmt: skip
@@ -686,6 +690,176 @@ def test_units_restart_forever_and_watch_the_dashboard():
     for unit in (agent, dash):
         assert "StartLimitIntervalSec=0" in unit and "Restart=always" in unit and "RestartMaxDelaySec=" in unit
     assert "RuntimeDirectory=polymath" in agent and "RuntimeDirectoryMode=0755" in agent
+    assert "ReadWritePaths=-/srv/polymath/db" in dash  # it starts even while the brain's drive is missing
     assert "Type=notify" in dash and "WatchdogSec=60" in dash and "MemoryMax=1200M" in dash
     cli_wrapper = (ROOT / "deploy/polymath-cli").read_text()
     assert "feed|doctor|" in cli_wrapper
+
+
+# ------------------------------------------------------------------------------------------- v0.5.2: the drive is gone
+def moved_away(cfg: Any, name: str = "Samsung T7") -> None:
+    cfg.paths.data_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.paths.data_dir / "MOVED-TO-DRIVE.json").write_text(json.dumps({"name": name}))
+
+
+def test_init_does_not_fail_while_the_brains_drive_is_missing(tmp_path, capsys):
+    from polymath.core.app import BrainDriveMissing, StorageError, check_storage
+
+    cfg = make_config(tmp_path)
+    moved_away(cfg)
+    with pytest.raises(BrainDriveMissing):
+        check_storage(cfg)
+    assert issubclass(BrainDriveMissing, StorageError)
+    assert cli.main(["--config", str(tmp_path / "polymath.toml"), "init"]) == 0  # systemd's ExecStartPre passes
+    assert "Samsung T7" in json.loads(capsys.readouterr().out)["waiting"]
+
+
+def test_the_agent_waits_for_its_drive_and_says_why(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.paths.run_dir = tmp_path / "run"
+    cfg.paths.run_dir.mkdir()
+    moved_away(cfg)
+    sent: list[str] = []
+
+    class FakeNotifier:
+        def ready(self, status: str = "") -> bool:
+            sent.append("READY " + status)
+            return True
+
+        def watchdog(self, force: bool = False) -> bool:
+            sent.append("WATCHDOG")
+            return True
+
+    rounds = []
+
+    def plug_in_after_two(_s: float) -> None:
+        rounds.append(1)
+        snap = json.loads(snapshot.path_for(cfg).read_text())
+        assert snap["status"]["state"] == "paused" and "Samsung T7" in snap["status"]["paused_reason"]
+        if len(rounds) == 2:  # the drive is plugged back in: the brain is mounted over the data directory
+            (cfg.paths.data_dir / "MOVED-TO-DRIVE.json").unlink()
+
+    assert cli.wait_for_storage(cfg, notifier=FakeNotifier(), sleep=plug_in_after_two)
+    assert len(rounds) == 2 and sent[0].startswith("READY waiting: the brain lives on the drive Samsung T7")
+    assert sent.count("WATCHDOG") == 2  # systemd keeps seeing it alive while it waits
+    lines = feed.status_lines(snapshot.source(snapshot.path_for(cfg))(None)["status"], width=0)
+    flat = ["".join(t for t, _ in line) for line in lines]
+    assert "paused" in flat[0] and "Samsung T7" in flat[1]
+
+    stop = threading.Event()
+    stop.set()
+    moved_away(cfg)
+    assert not cli.wait_for_storage(cfg, notifier=FakeNotifier(), stop=stop)  # told to stop: returns False
+
+
+def test_dashboard_explains_a_missing_drive_and_shows_the_agents_snapshot(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.paths.run_dir = tmp_path / "run"
+    cfg.paths.run_dir.mkdir()
+    moved_away(cfg)
+    server = make_server(cfg, "127.0.0.1", 0)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    try:
+        port = server.server_address[1]
+        status, _h, body = req(port, "GET", "/health")
+        assert status == 503 and "drive is not mounted" in json.loads(body)["error"]
+        status, _h, body = req(port, "GET", "/api/overview")
+        assert status == 503 and "plug it in" in json.loads(body)["error"]
+        status, _h, body = req(port, "GET", "/api/feed")  # no snapshot yet: says why, still answers
+        assert status == 503 and "drive is not mounted" in json.loads(body)["error"]
+        with pytest.raises(feed.FeedUnavailable, match="drive is not mounted"):  # the feed shows the reason
+            feed.http_source(f"http://127.0.0.1:{port}")(None)
+        snapshot.write_waiting(cfg, "the brain lives on the drive Samsung T7, which is not plugged in")
+        status, _h, body = req(port, "GET", "/api/feed")
+        data = json.loads(body)
+        assert status == 200 and data["status"]["state"] == "paused" and data["cursor"] == "s1"
+        assert data["events"][0]["what"] == "home" and data["face"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_doctor_names_the_real_problem(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.paths.run_dir = tmp_path / "run"
+    cfg.storage.mount_root = tmp_path / "mnt"
+    (tmp_path / "mnt").mkdir()
+
+    def refused(url):
+        return "refused", 0.0, None
+
+    checks = {c.name: c for c in doctor.run_checks(cfg, "http://x", health=refused)}
+    assert checks["services"].level == doctor.BAD and "systemctl status polymath" in checks["services"].fix
+    assert checks["agent"].level == doctor.BAD and checks["drives"].level == doctor.WARN
+    assert "lsblk" in checks["drives"].fix
+    cfg.paths.run_dir.mkdir()
+    snapshot.write_waiting(cfg, "the brain lives on the drive Samsung T7, which is not plugged in")
+    checks = {c.name: c for c in doctor.run_checks(cfg, "http://x", health=refused)}
+    assert checks["agent"].level == doctor.WARN and "Samsung T7" in checks["agent"].detail
+    assert "lsblk" in checks["agent"].fix and "services" not in checks
+
+
+# ------------------------------------------------------------------------------------------- the caretaker's inbox
+def test_issue_reports_are_rate_limited_and_listed(db):
+    from polymath.core import issues
+
+    assert issues.report(db, "jobs", "dead:x", "x gave up", severity="bad", now=1000.0)
+    assert not issues.report(db, "jobs", "dead:x", "x gave up again", now=1500.0)  # same code within the hour
+    assert issues.report(db, "jobs", "dead:y", "y gave up", severity="nonsense", now=1600.0)
+    assert issues.report(db, "jobs", "dead:x", "x gave up a third time", now=1000.0 + issues.EVERY)
+    got = issues.recent(db, 0)
+    assert [g["text"] for g in got] == ["x gave up a third time", "y gave up", "x gave up"]
+    assert got[1]["status"] == "warn" and got[2]["status"] == "bad" and got[0]["area"] == "jobs"
+    assert issues.recent(db, 1700.0)[0]["code"] == "dead:x"
+
+
+def test_dead_jobs_and_restart_storms_are_reported(config, db):
+    reg = JobRegistry()
+
+    def broken(ctx: Any) -> JobOutcome:
+        raise ValueError("bad input")
+
+    reg.register("broken.thing", broken, "always fails")
+    for _ in range(4):
+        agent = Agent(config, db, reg, notifier=Notifier({}))
+        agent.start()
+    texts = [r["text"] for r in db.query("SELECT text FROM events WHERE kind = 'issue'")]
+    assert any("started 4 times" in t for t in texts)
+    agent.scheduler.enqueue("broken.thing", {}, key="b1", max_attempts=1)
+    agent.cycle()
+    texts = [r["text"] for r in db.query("SELECT text FROM events WHERE kind = 'issue'")]
+    assert any(t.startswith("broken.thing gave up after 1 tries: ValueError: bad input") for t in texts)
+
+
+def test_body_trouble_is_reported(config, db):
+    from polymath.body.guard import Guard
+    from polymath.body.sensors import Vitals
+
+    hot = Guard(config, db)
+    hot.sensors = lambda: Vitals(temp_c=90.0, load1=0.1, cpus=4, mem_available_mb=4000.0, disk_free_gb=500.0,
+                                 disk_used_gb=1.0)  # fmt: skip
+    assert hot.observe().mode == "pause"
+    row = db.one("SELECT text, detail FROM events WHERE kind = 'issue'")
+    assert (
+        row is not None and row["text"].startswith("pause: CPU 90.0") and json.loads(row["detail"])["status"] == "bad"
+    )
+
+
+def test_issues_reach_the_feed_and_doctor(tmp_path):
+    from polymath.core import issues
+
+    cfg = make_config(tmp_path)
+    cfg.paths.run_dir = tmp_path / "run"
+    cfg.paths.run_dir.mkdir()
+    db = open_database(cfg.paths.db_path)
+    with db.transaction():
+        issues.report(db, "jobs", "dead:x", "x gave up after 5 tries", severity="bad")
+    agent = Agent(cfg, db, JobRegistry(), notifier=Notifier({}))
+    snapshot.planner(agent)
+    snap = json.loads(snapshot.path_for(cfg).read_text())
+    assert snap["status"]["issues"][0]["text"] == "x gave up after 5 tries"
+    seg = feed.render_event(next(e for e in snap["events"] if e.get("what") == "issue"))
+    assert any("problem" in t for t, _ in seg)
+    checks = {c.name: c for c in doctor.run_checks(cfg, "http://x", health=lambda u: ("answered", 0.1, {}))}
+    assert checks["problems"].level == doctor.BAD and "x gave up" in checks["problems"].detail
+    db.close()

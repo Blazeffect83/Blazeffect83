@@ -535,6 +535,32 @@ documents).
 - The agent's snapshot showed "counting…" for good. It now carries approximate counts (the highest row numbers,
   shown with "~").
 
+## 12g. The brain's drive missing (v0.5.2)
+
+**What the Pi showed after v0.5.1** (photo): "waiting: no answer from http://127.0.0.1:8765; the database
+directly: cannot read the database: PermissionError; the agent's own snapshot: no agent…". Neither the agent
+nor the dashboard was running. Two causes in the code were found and fixed:
+- **A drive drop-out switched everything off.** When the brain's drive leaves the USB bus, even briefly,
+  `detach` stopped both services, and nothing started them again until the drive was attached once more.
+- **The dashboard could not start without the brain.** Its unit's `ReadWritePaths=/srv/polymath/db` did not
+  exist while the drive was missing, so systemd refused to start it. The agent's `init` failed on the missing
+  drive too, so it never got to wait.
+
+Which of the two happened on the Pi is not confirmed: that needs `systemctl status polymath
+polymath-dashboard`.
+
+**Live drill** (real `polymath init`, `run` and `dashboard`; the data directory holds only
+`MOVED-TO-DRIVE.json`, as after a drop-out):
+
+| step | result |
+|---|---|
+| `polymath init` | exit 0: `{"waiting": "the brain lives on the drive Samsung T7, which is not plugged in …"}` |
+| `/health` | 503 "database unavailable: the brain's drive is not mounted: plug it in (Polymath starts by itself)" |
+| the feed, through the dashboard and through the snapshot | "● paused · NOW paused — the brain lives on the drive Samsung T7, which is not plugged in …" |
+| drive "plugged in" (marker removed) | the agent started 4 s later by itself; the feed showed "learning" and a `problem` line: "the brain's storage was missing for 15 s before this start" |
+
+The 564 tests pass; ruff, ruff format and mypy --strict are clean.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -551,7 +577,7 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
-0. v0.5.1 on the Pi: install it (it updates both service units: watchdog, restart policy, `/run/polymath`), then
+0. v0.5.2 on the Pi: install it (it updates both service units: watchdog, restart policy, `/run/polymath`), then
    `polymath doctor`; unplug the network cable for a few minutes and watch the feed go `offline` and come back.
 0. v0.5.0 on the Pi's full graph: the reasoning skills on many more things, dated facts after the next Wikidata read,
    tables, Spanish Wikipedia and big-brain mode on the 1 TB SSD.

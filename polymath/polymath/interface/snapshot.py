@@ -59,6 +59,10 @@ def planner(agent: Any) -> None:
                           heavy_counts=False)  # fmt: skip
         data = w.feed.poll(w.cursor)
         approximate_counts(agent.db, data.get("status") or {})
+        from polymath.core import issues
+
+        # the caretaker's inbox, for `polymath doctor` (which cannot read the database)
+        data.setdefault("status", {})["issues"] = issues.recent(agent.db, time.time() - 86400, 5)
         w.cursor = str(data.get("cursor") or "") or None
         for ev in data.get("events") or []:
             w.seq += 1
@@ -69,6 +73,11 @@ def planner(agent: Any) -> None:
     except Exception as exc:  # the snapshot is a convenience: it never disturbs the agent
         if not w.failed:
             log.warning("feed snapshot not written", extra={"error": f"{type(exc).__name__}: {exc}"})
+            with contextlib.suppress(Exception):
+                from polymath.core import issues
+
+                issues.report(agent.db, "feed", "snapshot", f"the feed's fallback snapshot cannot be written: "
+                              f"{type(exc).__name__}: {exc}")  # fmt: skip
         w.failed = True
 
 
@@ -88,6 +97,30 @@ def write(target: Path, payload: dict[str, Any]) -> None:
     tmp.write_text(json.dumps(payload, default=str, separators=(",", ":")), encoding="utf-8")
     os.chmod(tmp, 0o644)
     os.replace(tmp, target)
+
+
+def write_waiting(config: Any, reason: str, *, now: float | None = None, since: float | None = None) -> bool:
+    """While the agent waits for its storage (``cli.wait_for_storage``) the snapshot says why, so the feed and the
+    dashboard show it instead of going quiet. Returns whether it was written (no runtime directory: not)."""
+    target = path_for(config)
+    if not target.parent.is_dir():
+        return False
+    now = time.time() if now is None else now
+    status = {
+        "online": True,
+        "state": "paused",
+        "mode": "pause",
+        "paused_reason": reason,
+        "activity": "waiting for the brain's drive",
+        "net": {"online": True},
+        "counts": {},
+    }
+    event = {"kind": "note", "what": "home", "status": "missing", "text": reason, "at": since or now, "seq": 1}
+    try:
+        write(target, {"version": 1, "written": now, "seq": 1, "status": status, "events": [event]})
+    except OSError:
+        return False
+    return True
 
 
 def parse_cursor(cursor: str | None) -> int | None:

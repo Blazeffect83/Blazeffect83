@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.body.systemd_notify import Notifier
-from polymath.core import inbox, netstate
+from polymath.core import inbox, issues, netstate
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
@@ -35,6 +35,8 @@ MAX_SLICE = 60.0  # seconds; a slice must end well within the systemd watchdog (
 PULSE_EVERY = 15.0  # seconds between touches of the pulse file (each is a small disk write)
 QUIET_HEARTBEAT_EVERY = 30.0  # idle cycles write the database heartbeat this often, not every 2 s
 RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
+RESTART_WINDOW_S = 600.0
+RESTARTS_TOO_MANY = 4  # starts within RESTART_WINDOW_S that mean it keeps stopping
 NET_RETRY_S = 60.0  # a network job that hit a dead connection waits this long (offline: until the probe succeeds)
 
 
@@ -165,7 +167,19 @@ class Agent:
         if recovered["requeued"] or recovered["dead"]:
             log.warning("recovered jobs after unclean shutdown", extra={"recovered": recovered})
         with self.db.transaction():
-            self.db.kv_set("agent_started", time.time())
+            now = time.time()
+            self.db.kv_set("agent_started", now)
+            kept = [float(t) for t in self.db.kv_get("starts") or [] if now - float(t) < 3600][-19:]
+            starts = [*kept, now]
+            self.db.kv_set("starts", starts)
+            recent = sum(1 for t in starts if now - t < RESTART_WINDOW_S)
+            if recent >= RESTARTS_TOO_MANY:  # crash loop or watchdog kills: the caretaker's inbox
+                issues.report(self.db, "agent", "restarts", f"the agent started {recent} times in the last "
+                              f"{RESTART_WINDOW_S // 60:.0f} min: it keeps stopping (journalctl -u polymath -n 80)",
+                              severity="bad")  # fmt: skip
+            if recovered["requeued"] or recovered["dead"]:
+                issues.report(self.db, "agent", "unclean_stop", f"the last run ended without a clean stop "
+                              f"(power cut, crash or kill): {recovered['requeued']} job(s) resumed")  # fmt: skip
             self._heartbeat("starting")
         self.started = True
         self.notifier.ready(f"started at cycle {self.cycle_no}")
@@ -343,6 +357,7 @@ class Agent:
             with self.db.transaction():
                 self.scheduler.fail(job, f"permanent: {exc}", cpu=time.process_time() - c0, retryable=False)
                 self._record(rec, started, t0, json.dumps({"error": str(exc)}))
+                issues.report(self.db, "jobs", f"permanent:{job.kind}", f"{job.kind} cannot be done: {exc}")
             log.warning("job failed permanently", extra={"job": job.id, "kind": job.kind, "error": str(exc)})
         except Exception as exc:
             rec.error = f"{type(exc).__name__}: {exc}"
@@ -351,6 +366,9 @@ class Agent:
             with self.db.transaction():
                 state = self.scheduler.fail(job, rec.error, cpu=time.process_time() - c0)
                 self._record(rec, started, t0, json.dumps({"error": rec.error, "state": state}))
+                if state == "dead":  # it gave up: the caretaker's inbox (core/issues)
+                    why = f"{job.kind} gave up after {job.attempts + 1} tries: {rec.error}"
+                    issues.report(self.db, "jobs", f"dead:{job.kind}", why, severity="bad")
             log.exception("job slice failed", extra={"job": job.id, "kind": job.kind, "state": state})
         return self._finish(rec, started, t0, c0)
 

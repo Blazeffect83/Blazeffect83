@@ -18,6 +18,10 @@ class StorageError(RuntimeError):
     """The data directory is unsafe to use (e.g. on the SD card)."""
 
 
+class BrainDriveMissing(StorageError):
+    """The brain moved onto a drive that is not mounted right now (unplugged, or not mounted yet at boot)."""
+
+
 def check_storage(config: Config) -> None:
     data_dir = config.paths.data_dir
     moved = data_dir / MOVED_FILE
@@ -27,7 +31,7 @@ def check_storage(config: Config) -> None:
         except (OSError, ValueError):
             info = {}
         name = info.get("name") or info.get("id") or "a USB drive"
-        raise StorageError(
+        raise BrainDriveMissing(
             f"the brain lives on the drive {name}, which is not plugged in (or not mounted yet). "
             "Plug it in: Polymath starts by itself."
         )

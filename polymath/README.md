@@ -47,6 +47,9 @@ implemented here and learns only from data the agent downloads itself.
     systemd restarts the dashboard within a minute if it ever stops answering.
   - **The live feed never goes dark:** if the dashboard is down, the feed reads the agent's own snapshot
     instead and tells you the one command that fixes it.
+  - **The brain's drive unplugged or dropped out:** nothing goes dark. The feed says which drive is missing,
+    and Polymath starts by itself the moment it is back (v0.5.2).
+  - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
   - `polymath doctor` checks every part and says exactly what to do. Services restart forever, waiting longer
     between attempts.
 - **Improves itself from what it learns** (never by editing its code):

@@ -301,7 +301,7 @@ def test_a_new_ssd_becomes_the_brains_home(home_helper, config, db, tmp_path):
     fake.calls.clear()
     again = h.attach("/dev/sdb1")
     assert again.action == "home" and ["mount", "--bind", str(home), str(data)] in fake.calls
-    assert fake.calls[-1] == ["systemctl", "start", *vols.SERVICES]
+    assert fake.calls[-1] == ["systemctl", "restart", *vols.SERVICES]  # the waiting agent restarts onto it
     (tmp_path / "mountinfo").write_text(
         f"40 25 8:17 /polymath-brain/home {data} rw - ext4 /dev/sdb1 rw\n"
         f"36 25 8:17 / {config.storage.mount_root / 'new-uuid-1'} rw - ext4 /dev/sdb1 rw\n"
@@ -312,6 +312,9 @@ def test_a_new_ssd_becomes_the_brains_home(home_helper, config, db, tmp_path):
     out = h.detach("/dev/sdb1")  # pulled out: stop the agent, release both mounts
     assert out.action == "detached" and fake.calls[0] == ["systemctl", "stop", *vols.SERVICES]
     assert ["umount", "-l", str(data)] in fake.calls
+    # and both start again straight away: the agent waits for its drive and the feed and dashboard say why
+    assert fake.calls[-1] == ["systemctl", "start", *vols.SERVICES]
+    assert fake.calls.index(["umount", "-l", str(data)]) < len(fake.calls) - 1
 
 
 def test_failed_copy_leaves_the_brain_on_the_sd_card(home_helper, config, monkeypatch):

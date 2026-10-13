@@ -526,7 +526,7 @@ class Helper:
         return shutil.disk_usage(brain).free >= need
 
     def _services(self, verb: str) -> None:
-        if verb == "start":
+        if verb in {"start", "restart"}:
             self.run(["systemctl", "reset-failed", *SERVICES])
         self.run(["systemctl", verb, *SERVICES])
 
@@ -616,7 +616,9 @@ class Helper:
         r = self.run(["mount", "--bind", str(home), str(data)])
         if r.returncode != 0:
             return Outcome(out.action, f"{out.detail}; mounting the brain failed: {r.stderr.strip()}", out.volume)
-        self._services("start")
+        # restart, not start: the agent has been up all along waiting for this drive (and the dashboard showing
+        # why), and a fresh start sees the brain through a fresh mount namespace
+        self._services("restart")
         return Outcome("home", f"{out.detail}; the brain is back on this drive and the agent is starting", out.volume)
 
     def _write_manifest(self, brain: Path, manifest: dict[str, Any]) -> None:
@@ -696,13 +698,16 @@ class Helper:
         with self._locked():
             mps = self.mounts_of(dev)
             home = [(mp, src) for mp, src in self.mounts_at(self.config.paths.data_dir) if src == dev]
-            if home:  # the brain's drive went away: stop the agent (it waits for the drive) and release it
+            if home:  # the brain's drive went away: stop the agent so nothing writes, then release it
                 self.run(["systemctl", "stop", *SERVICES])
                 mps = home + mps
             for mp, _src in mps:
                 self.run(["umount", "-l", mp])
                 with contextlib.suppress(OSError):
                     Path(mp).rmdir()
+            if home:  # …and start both again at once: the agent waits for its drive and says so in the feed and
+                # on the dashboard, instead of everything going dark until the drive is back (a USB drop-out)
+                self._services("start")
         out = Outcome("detached" if mps else "skipped", f"{dev}: {len(mps)} mount(s) released")
         log.info("storage detach", extra={"device": dev, **out.to_dict()})
         return out

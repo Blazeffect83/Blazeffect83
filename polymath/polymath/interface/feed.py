@@ -731,7 +731,12 @@ def http_source(base_url: str, *, timeout: float = 5.0) -> Callable[[str | None]
             with opener.open(url, timeout=timeout) as resp:
                 data = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
-            reason = "the database is not initialised yet" if exc.code == 503 else f"HTTP {exc.code}"
+            reason = f"HTTP {exc.code}"
+            if exc.code == 503:  # the dashboard says why (the brain's drive is not mounted, not initialised…)
+                try:
+                    reason = str(json.loads(exc.read() or b"{}").get("error") or "") or "the database is not ready"
+                except (ValueError, OSError, AttributeError):
+                    reason = "the database is not ready"
             raise FeedUnavailable(reason) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise FeedUnavailable(f"no answer from {base_url}") from exc
@@ -845,7 +850,9 @@ def resilient_source(
                 fix = f" · fix: {hint}" if hint else ""
                 out["events"] = [note(f"{why}: showing {name} instead{fix}", "yellow"), *out["events"]]
             return out
-        raise FeedUnavailable("; ".join(errors) + (f" · fix: {hint}" if hint else ""))
+        raise FeedUnavailable(
+            "nothing answers: the agent and the dashboard look stopped · run: polymath doctor · " + "; ".join(errors)
+        )
 
     return fetch
 
@@ -1086,6 +1093,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "recap": "bmagenta",
             "selfchange": "yellow" if status in {"rolled_back", "demoted", "retired", "reset"} else "bgreen",
             "net": "byellow" if status == "offline" else "bgreen",
+            "issue": "red" if status == "bad" else "yellow",
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -1098,6 +1106,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "prediction": "predicted",
             "selfchange": "improved",
             "net": "offline" if status == "offline" else "online",
+            "issue": "problem",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":

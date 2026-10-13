@@ -8,6 +8,7 @@ with the fix after it. Nothing is changed.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 import urllib.error
@@ -94,11 +95,18 @@ def run_checks(
 
     # the agent, through its own snapshot (needs nothing but /run)
     st, age = snapshot.read_status(snapshot.path_for(config))
+    agent_up = st is not None and age is not None and age <= snapshot.STALE_S
     if st is None:
-        checks.append(Check("agent", WARN, "no live snapshot in /run/polymath (written by v0.5.1 and later)",
-                            "reinstall to get it: sudo ./install.sh"))  # fmt: skip
-    elif age is not None and age > snapshot.STALE_S:
-        checks.append(Check("agent", BAD, f"not running: its snapshot is {int(age // 60)} min old", restart_agent))
+        checks.append(Check("agent", BAD, "not running (no live snapshot in /run/polymath)", restart_agent))
+    elif not agent_up:
+        checks.append(Check("agent", BAD, f"not running: its snapshot is {int((age or 0) // 60)} min old",
+                            restart_agent))  # fmt: skip
+    elif st.get("state") == "paused" and st.get("paused_reason"):
+        reason = str(st["paused_reason"])
+        fix = ("check the drive: is it plugged in, and does `lsblk` list it (sda)? A charge-only cable or a loose "
+               "plug shows nothing. Polymath starts by itself once it is mounted"
+               if "drive" in reason else "")  # fmt: skip
+        checks.append(Check("agent", WARN, f"waiting: {reason}", fix))
     else:
         doing = st.get("activity") or st.get("state") or "running"
         checks.append(Check("agent", OK, f"running: {doing}"))
@@ -124,6 +132,32 @@ def run_checks(
         checks.append(Check("dashboard", BAD, f"not running (nothing listens at {url})", restart_dash))
     else:
         checks.append(Check("dashboard", BAD, f"{url}: {kind}", restart_dash))
+
+    problems = (st or {}).get("issues") or []  # the caretaker's inbox, carried by the snapshot
+    if problems:
+        bad = any(p.get("status") == "bad" for p in problems)
+        when = time.strftime("%H:%M", time.localtime(float(problems[0].get("at") or 0)))
+        checks.append(Check("problems", BAD if bad else WARN,
+                            f"{len(problems)} in the last 24 h; latest at {when}: {problems[0].get('text', '')}",
+                            "the live feed shows each as a 'problem' line"))  # fmt: skip
+
+    if not agent_up and kind != "answered":  # both down: one thing to look at, not two
+        checks.append(Check("services", BAD, "the agent and the dashboard are both stopped",
+                            "systemctl status polymath polymath-dashboard --no-pager   (says why), then: "
+                            "sudo systemctl restart polymath polymath-dashboard"))  # fmt: skip
+
+    # drives plugged in (readable by everyone: /mnt/polymath)
+    root = config.storage.mount_root
+    try:
+        mounted = sorted(d.name for d in root.iterdir() if os.path.ismount(d))
+    except OSError:
+        mounted = []
+    if mounted:
+        checks.append(Check("drives", OK, f"{len(mounted)} mounted: {', '.join(m[:12] for m in mounted)}"))
+    else:
+        checks.append(Check("drives", WARN, f"no drive mounted under {root}",
+                            "if the brain lives on your SSD: is it plugged in, and does `lsblk` show it? "
+                            "Then: journalctl -u 'polymath-volume@*' -n 30"))  # fmt: skip
 
     # disk room
     try:

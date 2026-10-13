@@ -232,6 +232,16 @@ then the most facts, an article, and PageRank.
 - **Feed** (`interface/feed.py`): `resilient_source` tries the dashboard, then the database directly, then the
   agent's snapshot (`interface/snapshot.py`, `/run/polymath/feed.json`, written by a planner every 5 s with
   approximate counts). Events already shown are not shown again when it switches source.
+- **The brain's drive missing** (v0.5.2):
+  - `check_storage` raises `BrainDriveMissing`. `polymath init` passes, so systemd's `ExecStartPre` does not
+    fail, and `polymath run` waits in `cli.wait_for_storage`: it pings the watchdog and writes the "waiting"
+    snapshot until the drive is mounted.
+  - The drive helper's `detach` stops both services, releases the mounts and starts both again, so they wait
+    visibly. `mount_home` restarts them onto the brain.
+  - The dashboard's `ReadWritePaths=-/srv/polymath/db` lets it start without the brain; it then serves the
+    agent's snapshot as `/api/feed`.
+- **Issues** (`core/issues.py`): every problem becomes an `events` row of kind `issue` (area, code, severity),
+  rate-limited to once an hour per code: the caretaker's inbox, the feed's `problem` lines and doctor's list.
 - **`polymath doctor`** (`interface/doctor.py`) runs as you, reading only HTTP, `/run/polymath` and, if you may,
   the database.
 

@@ -174,9 +174,27 @@ class DashboardData:
         if db is not None:
             db.close()
 
+    def missing_reason(self) -> str:
+        """Why there is no database to read: the brain's drive is not mounted, or it was never initialised."""
+        from polymath.core.config import HOME_FILE, MOVED_FILE
+
+        data = self.config.paths.data_dir
+        try:
+            moved = (data / MOVED_FILE).exists() and not (data / HOME_FILE).exists()
+        except OSError:
+            moved = False
+        if moved:
+            return "the brain's drive is not mounted: plug it in (Polymath starts by itself)"
+        return "database not initialised yet"
+
     def health(self) -> tuple[bool, dict[str, Any]]:
         try:
             hb = self.db().kv_get("heartbeat") or {}
+        except FileNotFoundError:
+            reason = self.missing_reason()
+            if reason.startswith("the brain's drive"):
+                return False, {"ok": False, "error": f"database unavailable: {reason}"}
+            return False, {"ok": False, "error": "database unavailable: FileNotFoundError"}
         except Exception as exc:
             return False, {"ok": False, "error": f"database unavailable: {type(exc).__name__}"}
         age = time.time() - float(hb.get("ts", 0)) if hb else None
@@ -310,9 +328,14 @@ class DashboardData:
     def feed(self, cursor: str | None, *, render: bool = False) -> dict[str, Any]:
         from polymath.interface.feed import Feed
 
-        feed = Feed(self.db(), pulse=heartbeat_path(self.config), stale=self.config.loop.heartbeat_stale,
-                    counts_source=self.counts)  # fmt: skip
-        result: dict[str, Any] = feed.poll(cursor)
+        try:
+            db = self.db()
+        except FileNotFoundError:  # no brain to read (its drive is not mounted): show what the agent says
+            result = self._snapshot_feed(cursor)
+        else:
+            feed = Feed(db, pulse=heartbeat_path(self.config), stale=self.config.loop.heartbeat_stale,
+                        counts_source=self.counts)  # fmt: skip
+            result = feed.poll(cursor)
         from polymath.interface.face import state
         from polymath.interface.feed import badge, transitions
 
@@ -328,6 +351,17 @@ class DashboardData:
             "current": st.get("build") == installed.key if st.get("online") else None,
         }
         return result
+
+    def _snapshot_feed(self, cursor: str | None) -> dict[str, Any]:
+        from polymath.interface import snapshot
+        from polymath.interface.feed import FeedUnavailable
+
+        try:
+            return snapshot.source(snapshot.path_for(self.config))(
+                cursor if snapshot.parse_cursor(cursor) is not None else None
+            )
+        except FeedUnavailable:
+            raise FileNotFoundError(self.config.paths.db_path) from None  # nothing at all to show: 503
 
     def insights(self) -> dict[str, Any]:
         """The weekly recap, predictions, surprises, and the disks (one call for the dashboard's new panels)."""
@@ -544,7 +578,7 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._json(200, data.knowledge(q) if q.strip() else {"query": "", "entities": []})
                 return self._json(404, {"error": "not found"})
             except FileNotFoundError:
-                return self._json(503, {"error": "database not initialised yet"})
+                return self._json(503, {"error": data.missing_reason()})
             except sqlite3.OperationalError as exc:
                 if "interrupted" not in str(exc):
                     log.exception("dashboard request failed", extra={"path": path})

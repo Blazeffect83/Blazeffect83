@@ -178,8 +178,12 @@ class Face:
             what, status = event.get("what"), event.get("status")
             if what == "fixed":
                 self.react("proud", now, 8.0, 3)
+            elif what == "home" and status == "missing":  # the brain's drive is gone: looking for it
+                self.react("missing", now, 10.0, 4)
             elif what == "home":  # the whole brain moved onto a drive
                 self.react("newhome", now, 10.0, 4)
+            elif what == "issue":  # something went wrong (the caretaker's inbox)
+                self.react("error" if status == "bad" else "doubt", now, 4.0, 2)
             elif what == "prediction" and status == "confirmed":
                 self.react("proud", now, 8.0, 3)
             elif what == "didyouknow":

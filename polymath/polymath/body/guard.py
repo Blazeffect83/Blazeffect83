@@ -23,6 +23,7 @@ read-only pauses everything with a clear reason.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from pathlib import Path
 
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.body.wear import WearMeter, describe, sd_summary
+from polymath.core import issues
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
@@ -147,6 +149,11 @@ class Guard:
         intensity = {"normal": 1.0, "throttle": 0.5, "yield": 0.5, "pause": 0.0}[mode]
         if mode != self._last_mode:
             log.info("body mode changed", extra={"from": self._last_mode, "to": mode, "reasons": reasons})
+            if mode != "normal":  # the caretaker's inbox (core/issues): heat, a full disk, a failing card
+                code = "read_only" if self._read_only else "thermal" if thermal in {"pause", "throttle"} else "disk"
+                with contextlib.suppress(Exception):
+                    issues.report(self.db, "body", f"{code}:{mode}", f"{mode}: {'; '.join(reasons)}",
+                                  severity="bad" if mode == "pause" else "warn")  # fmt: skip
             self._last_mode = mode
         self._log_vitals(v, data_gb, mode)
         # a disk-full pause still lets eviction run (it is what ends the pause); a thermal pause stops everything

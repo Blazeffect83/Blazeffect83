@@ -227,6 +227,18 @@ may read it) and then the agent's own snapshot, `/run/polymath/feed.json`. The a
 seconds, in memory, readable by everyone. The feed says which one it shows and what to run, and goes back to the
 dashboard as soon as it answers.
 
+**The brain's drive missing** (unplugged, a loose cable, a USB drop-out, or not mounted yet at boot):
+- **The agent stays up.** It shows "paused — the brain lives on the drive …, which is not plugged in" in the
+  feed and on the dashboard, and starts by itself within seconds of the drive being mounted again.
+- **Before v0.5.2**, both services stopped and stayed stopped: the feed showed only "no answer".
+- **The dashboard always starts**, even without the brain, and says why.
+
+**Every problem is recorded** (`core/issues.py`, the caretaker's inbox):
+- what gets recorded: jobs that give up, body pauses (heat, full disk, read-only card), restart loops, unclean
+  stops, time spent without the brain's drive, and a fallback snapshot that cannot be written;
+- each one shows in the feed as a red or yellow `problem` line, and `polymath doctor` lists the last day's;
+- the coming caretaker agent reads the same list.
+
 **Restarts:** both services restart forever, waiting longer between attempts (up to 5 minutes for the agent and
 1 minute for the dashboard), so they come back by themselves once whatever stopped them is fixed.
 
@@ -425,6 +437,7 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 | too hot | improve cooling, or lower `throttle_celsius` / `pause_celsius` |
 | live feed says "no answer from http://127.0.0.1:8765: showing … instead" | the dashboard is down or hung; the feed carries on from the agent's snapshot. systemd restarts a hung dashboard within a minute; to do it now: `sudo systemctl restart polymath-dashboard` (details: `journalctl -u polymath-dashboard -n 40`) |
 | live feed says "waiting: …" (every source failed) | the agent is not running either: `polymath doctor`, then `sudo systemctl restart polymath` |
+| the feed says "paused — the brain lives on the drive …, which is not plugged in" | the SSD dropped out or is not mounted: check its cable and power (a Pi 4 port can brown out a bus-powered SSD; a powered hub or the official 3 A supply helps), and that `lsblk` lists it. Polymath starts by itself once it is back |
 | the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |

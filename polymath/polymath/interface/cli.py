@@ -6,18 +6,22 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from polymath import __version__
+from polymath.body.systemd_notify import Notifier
 from polymath.core import inbox
-from polymath.core.app import StorageError, build_agent, check_storage
+from polymath.core.app import BrainDriveMissing, StorageError, build_agent, check_storage
 from polymath.core.config import Config, ConfigError, load_config
 from polymath.core.db import Database, open_database
-from polymath.core.logging import setup_logging
+from polymath.core.logging import get_logger, setup_logging
 from polymath.core.scheduler import Scheduler
 from polymath.version import Build, read_build
+
+log = get_logger("cli")
 
 
 def _db(config: Config, *, readonly: bool = False) -> Database:
@@ -29,14 +33,73 @@ def _db(config: Config, *, readonly: bool = False) -> Database:
 
 
 def cmd_init(config: Config, args: argparse.Namespace) -> int:
-    db = _db(config)
+    try:
+        db = _db(config)
+    except BrainDriveMissing as exc:  # not an error to stop on: `run` waits for the drive and says so
+        print(json.dumps({"waiting": str(exc)}))
+        return 0
     print(json.dumps({"db": str(config.paths.db_path), "schema_version": db.schema_version()}))
     db.close()
     return 0
 
 
+WAIT_CHECK_S = 5.0  # while the brain's storage is missing, look again this often
+
+
+def wait_for_storage(
+    config: Config,
+    *,
+    notifier: Notifier | None = None,
+    stop: threading.Event | None = None,
+    sleep: Callable[[float], None] | None = None,
+    clock: Callable[[], float] = time.time,
+) -> bool:
+    """Stay up while the brain's storage is missing (its drive unplugged or not mounted yet) instead of crashing.
+
+    Tells systemd it is alive, writes the agent snapshot so the feed and the dashboard show why it waits, and
+    looks again every ``WAIT_CHECK_S``. Returns True once the storage is there, False when told to stop."""
+    from polymath.interface import snapshot
+
+    notifier = notifier or Notifier()
+    stop = stop or threading.Event()
+    wait = sleep or (lambda s: stop.wait(s))
+    said, since = "", clock()
+    while not stop.is_set():
+        try:
+            check_storage(config)
+            return True
+        except StorageError as exc:
+            reason = str(exc)
+        if reason != said:
+            log.warning("waiting for the brain's storage", extra={"reason": reason})
+            notifier.ready("waiting: " + reason[:150])
+            said = reason
+        notifier.watchdog(force=True)
+        snapshot.write_waiting(config, reason, now=clock(), since=since)
+        wait(WAIT_CHECK_S)
+    return False
+
+
 def cmd_run(config: Config, args: argparse.Namespace) -> int:
+    import signal
+
+    stop = threading.Event()
+    previous = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
+    t0 = time.time()
+    try:
+        if not wait_for_storage(config, stop=stop):
+            return 0
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     agent = build_agent(config)
+    if time.time() - t0 > WAIT_CHECK_S:  # it had to wait: the caretaker's inbox keeps the record
+        from polymath.core import issues
+        from polymath.core.netstate import _duration
+
+        away = _duration(time.time() - t0)
+        why = f"the brain's storage was missing for {away} before this start (drive unplugged or loose)"
+        issues.report(agent.db, "storage", "brain_missing", why)
     agent.install_signal_handlers()
     ran = agent.run(max_cycles=args.max_cycles, until_idle=args.until_idle)
     agent.db.close()
