@@ -10,7 +10,7 @@ from typing import Any
 
 from polymath.body.sensors import same_filesystem_as_root
 from polymath.body.systemd_notify import Notifier
-from polymath.core import fsprobe
+from polymath.core import fsprobe, standby
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.db import Database, open_database
 from polymath.core.jobs import JobRegistry, noop_handler
@@ -154,7 +154,12 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
         rate=config.senses.crawl_rate,
     )
     registry = JobRegistry()
-    reg = registry.register
+    on_standby = standby.is_standby(config)
+
+    def reg(kind: str, handler: Any, description: str, **kw: Any) -> None:
+        if on_standby and kind in standby.DROPPED_KINDS:
+            return  # the standby brain on the SD card: light reading only, no dumps (core.standby)
+        registry.register(kind, handler, description, **kw)
 
     def netreg(kind: str, handler: Any, description: str, **kw: Any) -> None:  # needs the internet: held back offline
         reg(kind, handler, description, network=True, **kw)
@@ -270,6 +275,8 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
     reg("net.probe", connectivity.probe_job, "Is the internet back? (asked while offline)", action="maintain")
+    if not on_standby:
+        reg(standby.FOLD_KIND, standby.fold_job, "Fold the standby brain into the real one", action="maintain")
     services: dict[str, Any] = {"http": http, "docs": docs, "crawler": crawl}
     plan: list[tuple[float, Planner]] = (
         [
@@ -301,6 +308,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (60.0, society.planner),
             (30.0, connectivity.planner),
             (60.0, offline.planner),
+            (60.0, standby.planner),
             (SNAPSHOT_EVERY, snapshot.planner),
         ]
         if planners

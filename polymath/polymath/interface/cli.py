@@ -62,11 +62,13 @@ def wait_for_storage(
     stop: threading.Event | None = None,
     sleep: Callable[[float], None] | None = None,
     clock: Callable[[], float] = time.time,
+    timeout: float | None = None,
 ) -> bool:
     """Stay up while the brain's storage is missing (its drive unplugged or not mounted yet) instead of crashing.
 
     Tells systemd it is alive, writes the agent snapshot so the feed and the dashboard show why it waits, and
-    looks again every ``WAIT_CHECK_S``. Returns True once the storage is there, False when told to stop."""
+    looks again every ``WAIT_CHECK_S``. Returns True once the storage is there, False when told to stop or after
+    ``timeout`` seconds (then the standby brain takes over: ``run_standby``)."""
     from polymath.interface import snapshot
 
     notifier = notifier or Notifier()
@@ -74,6 +76,8 @@ def wait_for_storage(
     wait = sleep or (lambda s: stop.wait(s))
     said, since = "", clock()
     while not stop.is_set():
+        if timeout is not None and clock() - since >= timeout:
+            return False
         try:
             check_storage(config)
             return True
@@ -113,12 +117,19 @@ def report_heal_actions(db: Database, config: Config) -> int:
 def cmd_run(config: Config, args: argparse.Namespace) -> int:
     import signal
 
+    from polymath.core import standby
+
     stop = threading.Event()
     previous = {sig: signal.signal(sig, lambda *_: stop.set()) for sig in (signal.SIGTERM, signal.SIGINT)}
     t0 = time.time()
+    after: float | None = None
+    if config.storage.standby:  # a standby brain already running (a restart while the drive is still gone): resume
+        after = WAIT_CHECK_S if standby.read_marker(config) else config.storage.standby_after_s
     try:
-        if not wait_for_storage(config, stop=stop):
-            return 0
+        if not wait_for_storage(config, stop=stop, timeout=after):
+            if stop.is_set():
+                return 0
+            return run_standby(config, args)
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
@@ -137,6 +148,47 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
         agent.db.close()
     print(json.dumps({"job_cycles": ran, "last_cycle": agent.cycle_no, "storage_lost": agent.storage_lost}))
     return 75 if agent.storage_lost else 0  # EX_TEMPFAIL: systemd restarts it, and it waits for its drive
+
+
+def run_standby(config: Config, args: argparse.Namespace, *, check_every: float | None = None) -> int:
+    """The brain's drive has been gone too long: learn on the standby brain on the SD card (``core.standby``).
+
+    Looks for the real brain every ``STANDBY_CHECK_S``. Once it answers, the agent stops and exits with 75, so
+    systemd starts it again on the real brain, which folds in what the standby brain read."""
+    from polymath.core import standby
+
+    try:
+        check_storage(config)
+        return 75  # the real brain answers after all: start on it
+    except StorageError as exc:
+        why = str(exc)
+    scfg = standby.standby_config(config)
+    mark = standby.begin(config, reason=why)
+    agent = build_agent(scfg)
+    since = time.strftime("%H:%M", time.localtime(float(mark["started"])))
+    standby.note(agent.db, f"the brain's drive is not available ({why[:120]}); learning on the standby brain on the "
+                 f"SD card since {since}. What it reads moves to the drive when it is back")  # fmt: skip
+    back = threading.Event()
+
+    def watch() -> None:
+        while not agent.stop_event.wait(check_every or standby.STANDBY_CHECK_S):
+            try:
+                check_storage(config)
+            except StorageError:
+                continue
+            except OSError:
+                continue
+            back.set()
+            agent.stop_event.set()
+            return
+
+    threading.Thread(target=watch, name="standby-watch", daemon=True).start()
+    agent.install_signal_handlers()
+    ran = agent.run(max_cycles=args.max_cycles, until_idle=args.until_idle)
+    with contextlib.suppress(Exception):
+        agent.db.close()
+    print(json.dumps({"job_cycles": ran, "standby": True, "drive_back": back.is_set()}))
+    return 75 if back.is_set() or agent.storage_lost else 0  # 75: systemd starts it again (on the real brain)
 
 
 def status_dict(db: Database) -> dict[str, Any]:

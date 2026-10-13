@@ -52,6 +52,11 @@ implemented here and learns only from data the agent downloads itself.
   - **It brings its drive back by itself:** a dead connection, a drive reporting 0 bytes, or an enclosure stuck
     in its safe-off state after a reboot: it resets the drive, and as a last resort cuts and restores the USB
     power, like a replug (v0.5.5).
+  - **A frozen drive never freezes it:** every look at the brain's drive has a time limit (v0.5.7).
+  - **It keeps learning when the drive is gone** (v0.6.0): after 5 minutes without its drive, it starts a small
+    *standby brain* on the SD card and keeps reading (feeds, the web, single articles; no big dumps, at most
+    3 GB, wear-guarded). When the drive is back, everything it read moves onto it by itself, and the real brain
+    reads it again with all it knows. The feed shows `learning on standby`.
   - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
   - `polymath doctor` checks every part and says exactly what to do. Services restart forever, waiting longer
     between attempts.

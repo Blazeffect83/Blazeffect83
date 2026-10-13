@@ -38,6 +38,10 @@ RestartMaxDelaySec=300
 RuntimeDirectory=polymath
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
+# /var/lib/polymath/standby (SD card): the standby brain it learns on while the brain's drive is gone
+# (core.standby, [storage] standby*); emptied once what it read has moved onto the drive
+StateDirectory=polymath/standby
+StateDirectoryMode=0750
 
 # Leave half the CPU and a quarter of the memory to the desktop (live feed terminal, browser).
 CPUQuota=200%

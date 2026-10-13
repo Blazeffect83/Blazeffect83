@@ -63,6 +63,11 @@ def planner(agent: Any) -> None:
 
         # the caretaker's inbox, for `polymath doctor` (which cannot read the database)
         data.setdefault("status", {})["issues"] = issues.recent(agent.db, time.time() - 86400, 5)
+        from polymath.core import standby
+
+        on_standby = standby.status(agent.config, agent.db)
+        if on_standby:  # learning on the standby brain on the SD card: the feed and doctor say so
+            data["status"]["standby"] = on_standby
         w.cursor = str(data.get("cursor") or "") or None
         for ev in data.get("events") or []:
             w.seq += 1

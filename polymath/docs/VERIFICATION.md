@@ -654,6 +654,31 @@ freeze the probe, `check_storage`, `polymath init` and the volume helper for rea
 EIO. A child Python process shows that a stuck probe never keeps a program from exiting. On the Pi, recovery from
 a real frozen DockCase is not yet confirmed.
 
+## 12k. Learning without its drive: the standby brain (v0.6.0)
+
+**Why:** a Pi 4 with a bus-powered USB enclosure can lose its SSD for hours (power, the enclosure's safe-off
+state, a UAS freeze). Waiting visibly was not enough: Polymath should keep working.
+
+**Added: `core/standby.py`.**
+- After `standby_after_s` (300 s) of waiting, `polymath run` starts a small standby brain on the SD card
+  (`/var/lib/polymath/standby`, systemd `StateDirectory`, 0750, owned by the agent).
+- In standby it does light reading only: dumps, backups and the drive pool are left out. Its budget is 3 GB, it
+  keeps 2 GB free for the system, and the SD card wear guard is on.
+- A watcher looks for the real brain every 30 s and exits 75 when it answers. A restart while the drive is still
+  gone resumes the same standby brain.
+- On the real brain, `storage.fold_standby` folds it in. It is resumable (checkpoint per batch of 50 documents)
+  and idempotent (documents through `DocumentStore.add`; standby id in kv `standby_folded`). It only adds.
+- Feed, face, `doctor` and the caretaker's inbox show it.
+
+**Found on the way, fixed:** `load_config` read `home-drive.json` on the brain's drive with no time limit. On a
+frozen drive that hung every command (`init`, `run`, `dashboard`, `doctor`) before any of the v0.5.7 probes ran.
+It now asks through `core/fsprobe` first.
+
+Tests: `tests/test_standby.py` (18), with real agents for the whole story: drive gone, `polymath run` on
+standby, drive back within the watcher's interval (exit 75), fold (documents, Wikidata, crawl progress, issues;
+nothing doubled; the standby brain removed), a fold split over slices, a restart that resumes standby, and the
+feed, face and doctor lines. On the Pi this is not yet run.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

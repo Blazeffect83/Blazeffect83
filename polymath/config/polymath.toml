@@ -89,3 +89,10 @@ shared_drive_share = 0.5            # on a drive that already holds files, use t
 reserve_fraction = 0.1              # always leave this share of every drive free
 spill_at = 0.75                     # move document bodies to drives once the main disk is this full
 ignore = []                         # filesystem UUIDs never to adopt (see `polymath storage list`)
+# Standby brain: when the brain's drive has been missing, frozen or dead for standby_after_s seconds, keep learning
+# on a small, separate brain on the SD card (light reading only, no dumps); everything it reads moves onto the
+# drive by itself when the drive is back
+standby = true
+standby_after_s = 300
+standby_budget_gb = 3.0
+standby_dir = "/var/lib/polymath/standby"

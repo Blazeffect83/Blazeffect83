@@ -245,7 +245,8 @@ def planner(agent: Any) -> None:
     """Cheap, network-free planner run from OBSERVE: keeps recurring sense jobs alive."""
     s: Scheduler = agent.scheduler
     cfg: Config = agent.config
-    s.ensure_recurring("sources.plan", 6 * 3600, priority=3.0)
+    if not cfg.standby:  # not on the standby brain (core.standby): no dumps there
+        s.ensure_recurring("sources.plan", 6 * 3600, priority=3.0)
     from polymath.drive.strategy import weight
 
     if cfg.senses.feeds:

@@ -181,6 +181,12 @@ class StorageConfig:
     heal_power_cycle: bool = True
     heal_hubs: list[str] = field(default_factory=lambda: ["2", "1-1"])  # Pi 4: USB 3 hub, then the USB 2 hub
     heal_power_off_s: float = 20.0  # long enough for a capacitor-backed enclosure (DockCase) to really switch off
+    # Standby brain (core.standby): when the brain's drive has been missing, frozen or dead this long, keep learning
+    # on a small, separate brain on the SD card; everything it reads moves to the real brain when the drive is back
+    standby: bool = True
+    standby_after_s: float = 300.0
+    standby_budget_gb: float = 3.0
+    standby_dir: Path = Path("/var/lib/polymath/standby")
 
 
 @dataclass
@@ -200,6 +206,8 @@ class Config:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     log_level: str = "INFO"
+    # set by Polymath itself while it runs on the standby brain (core.standby), never in polymath.toml
+    standby: bool = False
 
     def validate(self) -> None:
         if self.loop.job_time_budget <= 0 or self.loop.job_time_budget > 90:
@@ -230,6 +238,10 @@ class Config:
             raise ConfigError("storage.spill_at must be in [0.1, 1]")
         if self.body.sd_endurance_cycles <= 0 or self.body.sd_write_amplification < 1:
             raise ConfigError("body.sd_endurance_cycles must be > 0 and body.sd_write_amplification >= 1")
+        if self.storage.standby_after_s < 30:
+            raise ConfigError("storage.standby_after_s must be at least 30 seconds")
+        if not 0.5 <= self.storage.standby_budget_gb <= 50:
+            raise ConfigError("storage.standby_budget_gb must be between 0.5 and 50")
         if self.body.sd_target_years <= 0:
             raise ConfigError("body.sd_target_years must be > 0")
         if not 100 <= self.body.wal_autocheckpoint <= 100_000:
@@ -276,6 +288,8 @@ def _build(cls: type[Any], data: dict[str, Any], where: str) -> Any:
         )
         data = {k: v for k, v in data.items() if k not in retired}
     unknown = set(data) - known
+    if not where and "standby" in data:
+        unknown.add("standby")  # set by Polymath itself, never by the file
     if unknown:
         raise ConfigError(f"{where or 'config'}: unknown key(s) {sorted(unknown)}")
     obj = cls()
@@ -361,9 +375,15 @@ MOVED_FILE = "MOVED-TO-DRIVE.json"  # left on the SD card's data directory after
 
 
 def apply_home(cfg: Config) -> None:
-    """When the brain lives on a drive, its budget is the drive's (not the SD card's small one)."""
+    """When the brain lives on a drive, its budget is the drive's (not the SD card's small one). Asks the drive
+    first with a time limit: every command loads the configuration, and a frozen drive must not hang them all."""
+    from polymath.core import fsprobe
+
+    home = cfg.paths.data_dir / HOME_FILE
+    if fsprobe.probe(home, read=True, timeout=5.0) != fsprobe.OK:
+        return
     try:
-        data = json.loads((cfg.paths.data_dir / HOME_FILE).read_text(encoding="utf-8"))
+        data = json.loads(home.read_text(encoding="utf-8"))
         budget = float(data["budget_gb"])
     except (OSError, ValueError, KeyError, TypeError):
         return

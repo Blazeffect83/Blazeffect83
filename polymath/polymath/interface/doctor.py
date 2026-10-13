@@ -134,6 +134,13 @@ def run_checks(
     else:
         doing = st.get("activity") or st.get("state") or "running"
         checks.append(Check("agent", OK, f"running: {doing}"))
+        sb = st.get("standby") or {}
+        if sb:
+            since = time.strftime("%H:%M", time.localtime(float(sb["since"]))) if sb.get("since") else "a while"
+            read = f", {int(sb['documents']):,} documents read there" if sb.get("documents") is not None else ""
+            fix = "bring the SSD back (see the brain line): what it read moves onto it by itself"
+            detail = f"learning on the standby brain on the SD card since {since}{read}"
+            checks.append(Check("standby", WARN, detail, fix))
         net = st.get("net") or {}
         if net.get("online") is False:
             since = time.strftime("%H:%M", time.localtime(float(net["since"]))) if net.get("since") else "a while"

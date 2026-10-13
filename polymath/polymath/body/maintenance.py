@@ -398,5 +398,6 @@ def housekeeping_job(ctx: JobContext) -> JobOutcome:
 
 def planner(agent: Any) -> None:
     hour = agent.config.body.backup_hour
-    agent.scheduler.ensure_recurring("body.backup", 86400, priority=3.0, phase=local_phase(hour))
+    if not getattr(agent.config, "standby", False):  # the standby brain (core.standby) is not backed up
+        agent.scheduler.ensure_recurring("body.backup", 86400, priority=3.0, phase=local_phase(hour))
     agent.scheduler.ensure_recurring("body.housekeeping", 86400, priority=3.0, phase=local_phase((hour + 2) % 24))

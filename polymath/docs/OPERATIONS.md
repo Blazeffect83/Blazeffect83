@@ -244,8 +244,24 @@ dashboard as soon as it answers.
      replug, for enclosures like the DockCase whose capacitor keeps the drive in "safe off" across a reboot. At
      most once every 15 minutes and 6 times a day.
 - Every action goes to the caretaker's inbox and to `polymath doctor`. Settings: `[storage] heal`,
-  `heal_power_cycle`, `heal_hubs`, `heal_power_off_s`.
+  `heal_power_cycle`, `heal_hubs`, `heal_power_off_s`; standby brain: `standby`, `standby_after_s`,
+  `standby_budget_gb`, `standby_dir`.
 - A drive reporting 0 bytes is never treated as blank and never formatted.
+- **It keeps learning without its drive** (v0.6.0, `core/standby.py`):
+  - after `[storage] standby_after_s` (5 min) with the brain's drive missing, frozen or dead, the agent starts a
+    small, separate **standby brain** on the SD card (`/var/lib/polymath/standby`, systemd's
+    `StateDirectory`) and learns there: feeds, the crawler, single Wikipedia articles, vetted sites. No dumps, no
+    backups, no drive pool; at most `standby_budget_gb` (3 GB), with the SD card wear guard watching;
+  - the feed's header says `learning on standby`, the face looks at its notes, and `doctor` shows a `standby`
+    line; the caretaker's inbox records when it started;
+  - a restart while the drive is still gone goes straight back to the standby brain (no second 5-minute wait);
+  - when the drive is back (the storage helper restarts the agent, or the agent sees it within 30 s), the agent
+    restarts on the real brain and folds the standby brain into it: its documents (through the normal store, so
+    duplicates are recognised and the real brain reads them again with its whole graph), Wikidata records, the
+    crawler's progress and the problems it noted. Then the standby brain is removed. The feed shows a `standby`
+    line with how much moved;
+  - folding only adds to the real brain, resumes where it stopped after a restart, and never runs twice;
+  - switch it off with `[storage] standby = false`.
 - **Nothing waits on a frozen drive** (v0.5.7): every look at the brain's storage goes through `core/fsprobe`, a
   child process with a time limit, so a drive that stops answering makes Polymath wait visibly, never hang.
 
@@ -457,6 +473,7 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 | `lsblk` shows `sda 0B usb` (doctor: "reports 0 bytes") | the SSD's enclosure answers but the drive does not: unplug it for 10 s, plug it into a blue USB 3 port; if it recurs, power it from a powered hub or its own supply |
 | `Job for polymath.service failed because a timeout was exceeded`, or doctor: "does not answer at all" | the brain's drive froze (reads never return). v0.5.7 waits instead of hanging and `storage heal` resets the drive within a minute or two. By hand: `sudo systemctl stop polymath-heal.timer; sudo umount -l /srv/polymath; sudo umount -l /mnt/polymath/*; sudo usbreset 31db:9210` (your enclosure's ID from `lsusb`), wait 10 s, `sudo systemctl restart 'polymath-volume@*' polymath polymath-dashboard; sudo systemctl start polymath-heal.timer`. A reboot or a replug also clears it |
 | "Input/output error" on `/srv/polymath` (doctor: "its storage does not answer") | the SSD dropped out and came back as a new device; the old mount is dead. `sudo reboot` clears it (v0.5.4 also replaces a dead mount by itself when the drive is attached again) |
+| the feed says `learning on standby` (doctor: `standby`) | the brain's drive has been gone for over 5 minutes, so Polymath learns on its small standby brain on the SD card. Nothing to do for Polymath: bring the drive back (see the rows above). What it read moves onto the drive by itself |
 | the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |

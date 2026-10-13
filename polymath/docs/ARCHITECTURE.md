@@ -244,6 +244,12 @@ then the most facts, an article, and PageRank.
   doctor, `storage heal`, the volume helper) is a `stat` or small read in a child process with a time limit. A
   drive that stops answering reads as `hang` and is handled like a missing one; a task stuck in the kernel is
   left in a disposable child, never in Polymath itself.
+- **Standby brain** (`core/standby.py`, v0.6.0): `polymath run` waits `standby_after_s` for the brain's drive,
+  then runs a second, small brain from `standby_config` (data under `/var/lib/polymath/standby`, the dump kinds
+  in `DROPPED_KINDS` not registered, no drive pool) with a watcher that stops it (exit 75) once the real brain
+  answers. On the real brain, `standby.planner` queues `storage.fold_standby`: standby documents go through
+  `DocumentStore.add` (dedup, state `new`, so the real brain perceives them again), then Wikidata records,
+  crawled pages and issues; the standby id is recorded in kv `standby_folded` and the files are removed.
 - **Issues** (`core/issues.py`): every problem becomes an `events` row of kind `issue` (area, code, severity),
   rate-limited to once an hour per code: the caretaker's inbox, the feed's `problem` lines and doctor's list.
 - **`polymath doctor`** (`interface/doctor.py`) runs as you, reading only HTTP, `/run/polymath` and, if you may,

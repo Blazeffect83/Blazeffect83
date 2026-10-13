@@ -145,6 +145,7 @@ ACTIVITY: dict[str, str] = {
     "perception.howto": "filing step-by-step answers",
     "reason.sanity": "checking for facts that cannot be true",
     "net.probe": "checking whether the internet is back",
+    "storage.fold_standby": "moving what it read on the standby brain onto its drive",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -1094,6 +1095,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "selfchange": "yellow" if status in {"rolled_back", "demoted", "retired", "reset"} else "bgreen",
             "net": "byellow" if status == "offline" else "bgreen",
             "issue": "red" if status == "bad" else "yellow",
+            "standby": "bgreen" if status == "folded" else "byellow",
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -1107,6 +1109,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "selfchange": "improved",
             "net": "offline" if status == "offline" else "online",
             "issue": "problem",
+            "standby": "standby",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":
@@ -1167,6 +1170,11 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         ]
     activity = str(st.get("activity") or "starting up")
     segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
+    sb = st.get("standby") or {}
+    if sb:
+        since = f" since {clock(float(sb['since']))}" if sb.get("since") else ""
+        segs.append((f"  (on the standby brain{since}: the SSD is not available; what it reads moves there later)",
+                     "yellow"))  # fmt: skip
     net = st.get("net") or {}
     if net.get("online") is False:
         since = f" since {clock(float(net['since']))}" if net.get("since") else ""
@@ -1198,6 +1206,8 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
             ("●", "yellow"),
             {"pause": "paused", "throttle": "throttled", "yield": "slowed"}.get(str(st.get("mode")), "paused"),
         )
+    elif st.get("standby"):
+        dot, label = ("●", "yellow"), "learning on standby"
     elif (st.get("net") or {}).get("online") is False:
         dot, label = ("●", "yellow"), "learning offline"
     else:

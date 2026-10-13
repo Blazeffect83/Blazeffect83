@@ -76,6 +76,7 @@ MOODS: dict[str, Mood] = {
     "relieved": Mood(("ᵔ‿ᵔ",), "green", ("▣", "▣♪", "▣", "▣♪")),  # a drive came back
     "missing": Mood(("◐_◐", "◐_◐", "◑_◑", "◑_◑"), "yellow", ("□?", "□", "□?", ""), blink=False),  # looking for it
     "waving": Mood(("^_^",), "bmagenta", ("▣/", "▣", "▣/", ""), blink=False),  # a retired drive: bye!
+    "standby": Mood(("◔‿◔", "◔‿◔", "◕‿◕", "◕‿◕"), "yellow", ("□", "□✎", "□", "□✎")),  # its SSD is away: SD notes
 }
 
 # job kind (or its prefix before the dot) → mood while that job runs
@@ -195,6 +196,8 @@ class Face:
             elif what == "selfchange" and status != "reset":  # your reset is not its doing
                 worse = status in {"rolled_back", "demoted"}
                 self.react("oops" if worse else "proud", now, 6.0, 2)
+            elif what == "standby":  # back on its drive, with what it read on standby
+                self.react("newhome" if status == "folded" else "missing", now, 8.0, 3)
             elif what == "net":  # the internet went away or came back
                 self.react("oops" if status == "offline" else "happy", now, 6.0, 2)
             elif what == "site" and status in {"approved", "probation"}:
@@ -233,6 +236,8 @@ class Face:
             return "paused"
         if mode in {"throttle", "yield"}:
             return "hot"
+        if st.get("standby"):
+            return "standby"
         if (st.get("net") or {}).get("online") is False:
             return "studying"
         if st.get("activity") == "waiting for work":

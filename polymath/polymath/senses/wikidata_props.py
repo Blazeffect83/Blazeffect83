@@ -183,6 +183,8 @@ def properties_job(ctx: JobContext) -> JobOutcome:
 def planner(agent: Any) -> None:
     """Network-free: index property pages once per month, then read them until none is due."""
     s = agent.scheduler
+    if getattr(getattr(agent, "config", None), "standby", False):  # the standby brain (core.standby): no dumps
+        return
     state = agent.db.kv_get("wd_propindex") or {}
     if time.time() - float(state.get("at", 0)) > 30 * 86400:
         s.enqueue("wikidata.propindex", {}, key=f"wd-propindex:{int(time.time() // (30 * 86400))}", priority=2.2)
