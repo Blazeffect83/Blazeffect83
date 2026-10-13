@@ -40,6 +40,26 @@ say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 run() { if [ "$DRY" = 1 ]; then printf '    + %s\n' "$*"; else "$@"; fi; }
+# bounded CMD…: like run, but gives up after 15 s. A brain drive that froze makes writes to it hang in the kernel,
+# where nothing can kill them: the stuck command is left behind (it ends when the drive is reset) and the install
+# carries on, so the code and the services still update
+bounded() {
+    if [ "$DRY" = 1 ]; then printf '    + %s\n' "$*"; return 0; fi
+    local out rc
+    out="$(mktemp)"
+    "$@" </dev/null >"$out" 2>&1 &  # its output via a file: a stuck command must not hold the installer's pipes
+    local pid=$! waited=0
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$waited" -ge "${BOUNDED_TICKS:-30}" ]; then rm -f "$out"; return 124; fi
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    wait "$pid"
+    rc=$?
+    cat "$out" >&2
+    rm -f "$out"
+    return "$rc"
+}
 
 # install_file SRC DEST MODE → prints "changed" when DEST was created or differs
 install_file() {
@@ -183,8 +203,8 @@ fi
 # services still update; the agent then waits for its drive and `polymath doctor` says what to do
 run mkdir -p "$ROOT$DATA" || warn "cannot use $DATA right now (the brain's drive may have dropped out): reboot, then run this installer again"
 if [ "$SYSTEM" = 1 ]; then
-    run chown polymath:polymath "$ROOT$DATA" || warn "cannot change the owner of $DATA (the brain's drive may have dropped out): reboot, then run this installer again"
-    run chmod 0750 "$ROOT$DATA" || true
+    bounded chown polymath:polymath "$ROOT$DATA" || warn "cannot change the owner of $DATA (the brain's drive dropped out or froze): Polymath waits for it and brings it back by itself (polymath doctor shows how it goes)"
+    bounded chmod 0750 "$ROOT$DATA" || true
 fi
 
 # ------------------------------------------------------------------ systemd units and journald limits

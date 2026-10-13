@@ -38,6 +38,14 @@ def release(fifo: Path) -> None:
     os.close(fd)
 
 
+def release_others(fifo: Path) -> None:
+    """Unfreeze readers in other processes (a stuck probe left behind by a program that has exited)."""
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        release(fifo)
+        time.sleep(0.05)
+
+
 @pytest.fixture()
 def frozen(tmp_path: Path) -> Iterator[Path]:
     fifo = tmp_path / "frozen"
@@ -108,6 +116,7 @@ def test_a_stuck_probe_never_keeps_a_program_from_exiting(frozen):
     t0 = time.monotonic()
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=20,
                          cwd=Path(__file__).resolve().parent.parent)  # fmt: skip
+    release_others(frozen)
     assert out.stdout.strip() == "hang" and out.returncode == 0
     assert time.monotonic() - t0 < 10
 
@@ -214,3 +223,18 @@ def test_never_moves_the_brain_while_its_storage_does_not_answer(monkeypatch):
     assert vols._there(Path("/srv/polymath/.moved")) is None
     monkeypatch.setattr(fsprobe, "probe", lambda p, **k: fsprobe.MISSING)
     assert vols._there(Path("/srv/polymath/.moved")) is False
+
+
+def test_the_installer_carries_on_past_a_frozen_drive(frozen):
+    """install.sh's `bounded` gives up on a command stuck on the drive (here: reading a FIFO nobody writes)."""
+    script = (Path(__file__).resolve().parent.parent / "install.sh").read_text()
+    func = script[script.index("bounded() {") : script.index("\n}\n", script.index("bounded() {")) + 3]
+    sh = (
+        f"DRY=0\nBOUNDED_TICKS=2\nwarn() {{ :; }}\n{func}bounded true; a=$?\nbounded false; b=$?\n"
+        f'bounded cat {frozen}; c=$?\necho "$a $b $c"\n'
+    )
+    t0 = time.monotonic()
+    out = subprocess.run(["bash", "-c", sh], capture_output=True, text=True, timeout=20)
+    release_others(frozen)
+    assert out.stdout.split() == ["0", "1", "124"]
+    assert time.monotonic() - t0 < 9

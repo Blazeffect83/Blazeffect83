@@ -960,7 +960,7 @@ def test_doctor_names_a_dead_mount(tmp_path, monkeypatch):
 
 def test_installer_carries_on_past_a_dead_brain_mount():
     script = (ROOT / "install.sh").read_text()
-    assert 'run chown polymath:polymath "$ROOT$DATA" || warn' in script
+    assert 'bounded chown polymath:polymath "$ROOT$DATA" || warn' in script
 
 
 def test_a_dead_mount_that_still_answers_stat_is_caught_by_reading(config, monkeypatch):

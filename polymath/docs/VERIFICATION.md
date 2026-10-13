@@ -643,10 +643,13 @@ thread asks instead.
 
 The volume helper's "replace a dead brain mount" stops the services with `--no-block` too.
 
+**Installer:** `install.sh` runs `chown` and `chmod` on the data directory through `bounded`, which gives up after
+15 s and leaves the stuck command behind, so the code and the services still update.
+
 **systemd:** `polymath.service` now has `WorkingDirectory=/`. Before, systemd would enter the data directory, and
 on a frozen mount it hung there before Polymath even started.
 
-Tests: `tests/test_fsprobe.py` (14). A FIFO with no writer blocks exactly like a frozen mount. It is used to
+Tests: `tests/test_fsprobe.py` (15). A FIFO with no writer blocks exactly like a frozen mount. It is used to
 freeze the probe, `check_storage`, `polymath init` and the volume helper for real. `/proc/self/mem` gives a real
 EIO. A child Python process shows that a stuck probe never keeps a program from exiting. On the Pi, recovery from
 a real frozen DockCase is not yet confirmed.
