@@ -85,12 +85,17 @@ if [ "$SYSTEM" = 1 ]; then
         run useradd --system --home-dir "$DATA" --no-create-home --shell /usr/sbin/nologin polymath
     fi
     missing=()
-    for pkg in python3-venv curl fdisk e2fsprogs uhubctl; do  # uhubctl: `storage heal` can replug the brain's drive
+    for pkg in python3-venv curl fdisk e2fsprogs; do
         dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
     done
     if [ ${#missing[@]} -gt 0 ]; then
         say "installing ${missing[*]}"
-        run apt-get install -y "${missing[@]}"
+        run apt-get install -y "${missing[@]}" || die "could not install ${missing[*]}: if apt says dpkg was interrupted, run 'sudo dpkg --configure -a' and this installer again"
+    fi
+    # optional: lets `polymath storage heal` replug the brain's drive by cutting the USB power; never blocks the install
+    if ! dpkg -s uhubctl >/dev/null 2>&1; then
+        say "installing uhubctl (lets Polymath replug its drive by itself)"
+        run apt-get install -y uhubctl || warn "could not install uhubctl: Polymath still resets its drive, but cannot cut the USB power. Later: sudo dpkg --configure -a && sudo apt-get install uhubctl"
     fi
 fi
 
