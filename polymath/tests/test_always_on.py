@@ -961,3 +961,33 @@ def test_doctor_names_a_dead_mount(tmp_path, monkeypatch):
 def test_installer_carries_on_past_a_dead_brain_mount():
     script = (ROOT / "install.sh").read_text()
     assert 'run chown polymath:polymath "$ROOT$DATA" || warn' in script
+
+
+def test_a_dead_mount_that_still_answers_stat_is_caught_by_reading(config, monkeypatch):
+    """A dead mount can still answer `stat` from cache; reading the brain's files fails, and that counts."""
+    import errno as errno_
+
+    from polymath.core import app
+
+    config.paths.db_path.parent.mkdir(parents=True, exist_ok=True)
+    config.paths.db_path.write_bytes(b"SQLite format 3\0")
+    real = Path.open
+
+    def eio(self: Path, *a: Any, **k: Any) -> Any:
+        if self == config.paths.db_path:
+            raise OSError(errno_.EIO, "Input/output error")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "open", eio)
+    with pytest.raises(app.BrainDriveMissing, match="Input/output error"):
+        app.check_storage(config)
+
+
+def test_init_waits_on_a_database_disk_io_error(tmp_path, capsys, monkeypatch):
+    def broken(_cfg: Any, **_k: Any) -> Any:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    make_config(tmp_path)
+    monkeypatch.setattr(cli, "_db", broken)
+    assert cli.main(["--config", str(tmp_path / "polymath.toml"), "init"]) == 0  # ExecStartPre passes: `run` waits
+    assert "does not answer" in json.loads(capsys.readouterr().out)["waiting"]

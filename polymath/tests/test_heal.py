@@ -140,6 +140,7 @@ def test_a_dead_mount_is_dropped_and_the_drive_asked_for_again(setup, monkeypatc
     assert calls[0] == ["systemctl", "stop", *SERVICES]
     assert ["umount", "-l", str(cfg.paths.data_dir)] in calls
     assert ["systemctl", "start", *SERVICES] in calls and calls[-1][0] == "udevadm"
+    assert ["systemctl", "restart", "polymath-volume@*.service"] in calls  # the unit that already ran is redone
 
 
 def test_heal_can_be_switched_off(setup):

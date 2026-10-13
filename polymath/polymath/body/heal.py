@@ -143,6 +143,10 @@ class Healer:
 
     # ---------------------------------------------------------------- actions
     def _retrigger(self, st: HealState) -> None:
+        """Attach the drives again. A drive's unit that already ran (``polymath-volume@sda``, RemainAfterExit)
+        ignores a new udev "add", so the units that exist are restarted (detach, then attach: a fresh mount and
+        the brain bound onto it), and udev is asked for the devices that have no unit yet."""
+        self.run(["systemctl", "restart", "polymath-volume@*.service"])
         self.run(["udevadm", "trigger", "--action=add", "--subsystem-match=block"])
         st.last_retrigger = self.clock()
 
@@ -193,7 +197,7 @@ class Healer:
                 self.run(["umount", "-l", str(data)])
             self.run(["systemctl", "reset-failed", *self.services])
             self.run(["systemctl", "start", *self.services])  # they wait for the drive, visibly
-            self._retrigger(st)
+            self._retrigger(st)  # the drive's unit restarts: mounted fresh, the brain bound, the services restarted
             did = self._did(st, "dead_mount", f"dropped the dead mount at {data} and asked for the drive again")
         else:
             dead = unresponsive_usb_disks(self.sys_block)

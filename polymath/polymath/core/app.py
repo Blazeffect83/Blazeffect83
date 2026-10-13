@@ -5,11 +5,12 @@ from __future__ import annotations
 import errno
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from polymath.body.sensors import same_filesystem_as_root
 from polymath.body.systemd_notify import Notifier
-from polymath.core.config import MOVED_FILE, Config
+from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.db import Database, open_database
 from polymath.core.jobs import JobRegistry, noop_handler
 from polymath.core.loop import Agent, Planner
@@ -39,8 +40,20 @@ def check_storage(config: Config) -> None:
         ) from exc
 
 
+def _read_probe(path: Path) -> None:
+    """Read a little of ``path`` if it exists: a dead mount fails here with an I/O error even when ``stat`` and
+    directory listings still answer from cache."""
+    try:
+        with path.open("rb") as f:
+            f.read(4096)
+    except FileNotFoundError:
+        return
+
+
 def _check_storage(config: Config) -> None:
     data_dir = config.paths.data_dir
+    _read_probe(data_dir / HOME_FILE)
+    _read_probe(config.paths.db_path)
     moved = data_dir / MOVED_FILE
     if moved.exists():  # the brain moved to a drive, and what is mounted here is the SD card's old directory
         try:

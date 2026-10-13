@@ -35,10 +35,17 @@ def _db(config: Config, *, readonly: bool = False) -> Database:
 
 
 def cmd_init(config: Config, args: argparse.Namespace) -> int:
+    from polymath.core.loop import storage_lost
+
     try:
         db = _db(config)
     except BrainDriveMissing as exc:  # not an error to stop on: `run` waits for the drive and says so
         print(json.dumps({"waiting": str(exc)}))
+        return 0
+    except Exception as exc:
+        if not storage_lost(exc):
+            raise
+        print(json.dumps({"waiting": f"the brain's storage does not answer ({exc}): waiting for its drive"}))
         return 0
     print(json.dumps({"db": str(config.paths.db_path), "schema_version": db.schema_version()}))
     db.close()
