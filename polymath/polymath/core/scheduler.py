@@ -179,6 +179,16 @@ class Scheduler:
             (now + delay, now, job.id),
         )
 
+    def defer(self, job: Job, error: str, *, delay: float, cpu: float = 0.0) -> None:
+        """Requeue a job that could not run for an outside reason (no internet): its attempts are not spent, so a
+        long outage never dead-letters a download, and its checkpoint is kept."""
+        now = self.clock()
+        self.db.execute(
+            "UPDATE jobs SET state='queued', lease_until=NULL, not_before=?, last_error=?, "
+            "cpu_seconds=cpu_seconds+?, updated=? WHERE id=?",
+            (now + delay, error[:2000], cpu, now, job.id),
+        )
+
     def backoff(self, attempts: int) -> float:
         base = min(self.retry_cap, self.retry_base * (2 ** max(0, attempts - 1)))
         return float(base * (0.75 + 0.5 * self.rng.random()))

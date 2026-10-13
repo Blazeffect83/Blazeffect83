@@ -205,6 +205,36 @@ then the most facts, an article, and PageRank.
   500,000), so a run costs the same on a 100-million-fact graph. Contemporaries and events search the 200,000
   best-known entities (`entities_pagerank` index).
 
+## Always on (v0.5.1)
+
+- **Internet state** (`core/netstate.py`, kv `net`) is learned passively by the loop.
+  - A slice that raises a connection-level error (no DNS, refused, timed out: a `FetchError` with no HTTP
+    status) counts against the internet.
+  - So does a slice in which two or more different hosts failed to connect while none answered
+    (`HttpClient.failed_since`). That catches jobs that handle their own fetch errors, like the crawler and feed
+    poller.
+  - Any server answering (`HttpClient.responses` rising) proves the internet works.
+  - Two failures make it offline; the change is an `events` row of kind `net`, so it shows in the feed.
+- **Network jobs** (`register(..., network=True)`: downloads, dump reading, crawl, feeds, site vetting, Wikipedia
+  titles) are held back while offline. They are removed from the ready list before the policy chooses, so the
+  bandit only weighs work that can run. A network job that dies on a dead connection is deferred
+  (`Scheduler.defer`): its attempts and checkpoint stay, so no outage dead-letters a download.
+- **Offline study** (`drive/offline.py`) runs the reasoning, checking, training, quiz, tuning and agent jobs on
+  faster schedules, one queued job per kind at most.
+- **Coming back:** `senses/connectivity.py` probes known servers (HEAD, through the usual SSRF checks and proxy)
+  with growing gaps; the first answer brings it back online.
+- **Dashboard** (`interface/dashboard.py`):
+  - a `PooledHTTPServer` with 8 worker threads, each with its own read-only connection;
+  - per-request query deadlines (`Database.limit_queries`, an SQLite progress handler);
+  - a background thread for the full-table counts;
+  - its own lock for the ask box;
+  - a self-checking systemd watchdog.
+- **Feed** (`interface/feed.py`): `resilient_source` tries the dashboard, then the database directly, then the
+  agent's snapshot (`interface/snapshot.py`, `/run/polymath/feed.json`, written by a planner every 5 s with
+  approximate counts). Events already shown are not shown again when it switches source.
+- **`polymath doctor`** (`interface/doctor.py`) runs as you, reading only HTTP, `/run/polymath` and, if you may,
+  the database.
+
 ## Self-improvement (v0.4)
 
 It improves itself from what it measures, never by rewriting its code: only settings, rule trust, its reading

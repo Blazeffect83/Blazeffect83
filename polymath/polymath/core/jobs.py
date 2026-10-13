@@ -78,19 +78,32 @@ class JobSpec:
     # Actions the drive may choose between are grouped by ``action`` (defaults to kind).
     action: str = ""
     heavy: bool = False  # deferred while the CPU is hot or the disk is nearly full
+    network: bool = False  # needs the internet: held back (not failed) while the Pi is offline
 
 
 class JobRegistry:
     def __init__(self) -> None:
         self._specs: dict[str, JobSpec] = {}
 
-    def register(self, kind: str, handler: Handler, description: str, *, action: str = "", heavy: bool = False) -> None:
+    def register(
+        self,
+        kind: str,
+        handler: Handler,
+        description: str,
+        *,
+        action: str = "",
+        heavy: bool = False,
+        network: bool = False,
+    ) -> None:
         if kind in self._specs:
             raise ValueError(f"job kind {kind!r} already registered")
-        self._specs[kind] = JobSpec(kind, handler, description, action or kind, heavy)
+        self._specs[kind] = JobSpec(kind, handler, description, action or kind, heavy, network)
 
     def get(self, kind: str) -> JobSpec | None:
         return self._specs.get(kind)
+
+    def network_kinds(self) -> frozenset[str]:
+        return frozenset(k for k, s in self._specs.items() if s.network)
 
     def kinds(self) -> list[str]:
         return sorted(self._specs)

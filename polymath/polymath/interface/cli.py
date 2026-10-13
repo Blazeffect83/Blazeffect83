@@ -786,8 +786,18 @@ def cmd_feed(config: Config, args: argparse.Namespace) -> int:
         source = feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config))
         where = str(config.paths.db_path)
     else:
+        from polymath.interface import snapshot
+
         where = args.url or dashboard_url(config)
-        source = feed.http_source(where)
+        source = feed.resilient_source(
+            feed.http_source(where),
+            [
+                ("the database directly",
+                 feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config), heavy_counts=False)),
+                ("the agent's own snapshot", snapshot.source(snapshot.path_for(config))),
+            ],
+            hint="sudo systemctl restart polymath-dashboard (polymath doctor explains)",
+        )  # fmt: skip
     return feed.run(
         source,
         interval=args.interval,
@@ -797,6 +807,21 @@ def cmd_feed(config: Config, args: argparse.Namespace) -> int:
         where=where,
         on_update=None if args.once else _reexec_feed,
     )
+
+
+def cmd_doctor(config: Config, args: argparse.Namespace) -> int:
+    """Check every part (brain, agent, internet, dashboard, disk) and say what to fix."""
+    import locale
+
+    from polymath.interface import doctor
+
+    checks = doctor.run_checks(config, args.url or dashboard_url(config))
+    if args.json:
+        print(json.dumps([c.__dict__ for c in checks], indent=2))
+    else:
+        utf8 = "utf" in (locale.getpreferredencoding(False) or "").lower()
+        print("\n".join(doctor.render(checks, ascii_only=not utf8)))
+    return 1 if any(c.level == doctor.BAD for c in checks) else 0
 
 
 def cmd_backup(config: Config, args: argparse.Namespace) -> int:
@@ -1034,6 +1059,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(func=cmd_run)
 
     sub.add_parser("status", help="agent health and queue summary").set_defaults(func=cmd_status)
+
+    dr = sub.add_parser("doctor", help="check every part (agent, dashboard, internet, disk) and say what to fix")
+    dr.add_argument("--url", help="dashboard URL (default: this machine's)")
+    dr.add_argument("--json", action="store_true")
+    dr.set_defaults(func=cmd_doctor)
 
     vr = sub.add_parser("version", help="installed version and commit, and whether the agent runs it")
     vr.add_argument("--json", action="store_true")

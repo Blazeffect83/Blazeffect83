@@ -11,12 +11,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import http.client
 import ipaddress
 import os
 import socket
 import ssl
 import zlib
+from collections import deque
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -24,6 +26,9 @@ from typing import Any
 from urllib.parse import urljoin, urlsplit
 
 Resolver = Callable[[str, int], list[str]]
+
+
+FAILED_HOSTS_KEEP = 256
 
 
 class FetchError(Exception):
@@ -155,6 +160,12 @@ class HttpClient:
     env: Mapping[str, str] = field(default_factory=lambda: dict(os.environ))
     context: ssl.SSLContext = field(default_factory=ssl.create_default_context)
     requests_made: int = 0
+    responses: int = 0  # requests a server answered (any status): proof that the internet works (core.netstate)
+    # connections that failed (no DNS, refused, timed out): a running count and the newest (number, host) pairs;
+    # the loop compares them before and after a slice to notice an outage even when a job copes with its own
+    # fetch errors
+    connection_failures: int = 0
+    failed_hosts: deque[tuple[int, str]] = field(default_factory=lambda: deque(maxlen=FAILED_HOSTS_KEEP))
 
     # -------------------------------------------------------------- validation
     def validate(self, url: str) -> tuple[str, str, int, str]:
@@ -201,14 +212,24 @@ class HttpClient:
             except OSError as exc:
                 if via_proxy:
                     return None  # the proxy resolves; we cannot pin
+                self._connection_failed(host)
                 raise FetchError(f"DNS failure for {host}: {exc}", transient=True) from exc
         if not addrs:
+            self._connection_failed(host)
             raise FetchError(f"no address for {host}", transient=True)
         if not self.allow_private:
             bad = [a for a in addrs if not is_public_address(a)]
             if bad:
                 raise BlockedURL(f"{host} resolves to non-public address {bad[0]}")
         return addrs[0]
+
+    def _connection_failed(self, host: str) -> None:
+        self.connection_failures += 1
+        self.failed_hosts.append((self.connection_failures, host))
+
+    def failed_since(self, mark: int) -> set[str]:
+        """Hosts whose connection failed after failure number ``mark``."""
+        return {host for n, host in self.failed_hosts if n > mark}
 
     # --------------------------------------------------------------- requests
     def _connect(self, scheme: str, host: str, port: int) -> http.client.HTTPConnection:
@@ -247,7 +268,10 @@ class HttpClient:
                 resp = conn.getresponse()
             except (OSError, http.client.HTTPException) as exc:
                 conn.close()
+                if isinstance(exc, OSError):
+                    self._connection_failed(host)
                 raise FetchError(f"{type(exc).__name__}: {exc}", transient=True) from exc
+            self.responses += 1
             status = resp.status
             rh = {k.lower(): v for k, v in resp.getheaders()}
             if status in (301, 302, 303, 307, 308) and "location" in rh:
@@ -305,6 +329,28 @@ class HttpClient:
                 )
             body = b"".join(sr.iter_chunks())
             return Response(sr.url, sr.status, sr.headers, body)
+
+
+def reachable(client: HttpClient, url: str, *, timeout: float = 8.0) -> tuple[bool, str]:
+    """Does ``url``'s server answer at all (any HTTP status)? One small request with a short timeout, through the
+    same checks and proxy settings as every other fetch. Returns (answered, why not)."""
+    probe = dataclasses.replace(client, timeout=timeout, max_redirects=0, responses=0, requests_made=0,
+                                connection_failures=0, failed_hosts=deque(maxlen=FAILED_HOSTS_KEEP))  # fmt: skip
+    try:
+        with probe.stream(url, method="HEAD") as sr:
+            sr.read(1)
+    except BlockedURL as exc:
+        return False, str(exc)
+    except FetchError as exc:
+        if exc.status is not None or "too many redirects" in str(exc):
+            return True, ""  # it answered (a redirect or an error status still proves the way out is open)
+        return False, str(exc)
+    finally:
+        client.responses += probe.responses
+        client.requests_made += probe.requests_made
+        for _n, host in probe.failed_hosts:
+            client._connection_failed(host)
+    return True, ""
 
 
 def client_from_config(senses: Any) -> HttpClient:

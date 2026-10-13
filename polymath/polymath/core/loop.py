@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.body.systemd_notify import Notifier
-from polymath.core import inbox
+from polymath.core import inbox, netstate
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
@@ -35,6 +35,7 @@ MAX_SLICE = 60.0  # seconds; a slice must end well within the systemd watchdog (
 PULSE_EVERY = 15.0  # seconds between touches of the pulse file (each is a small disk write)
 QUIET_HEARTBEAT_EVERY = 30.0  # idle cycles write the database heartbeat this often, not every 2 s
 RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
+NET_RETRY_S = 60.0  # a network job that hit a dead connection waits this long (offline: until the probe succeeds)
 
 
 @dataclass
@@ -156,6 +157,7 @@ class Agent:
         self._hb_at = -1e18
         self._hb_state = ""
         self.build = read_build()  # the code this process runs; the feed compares it with what is installed
+        self.network_kinds = registry.network_kinds()
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -266,7 +268,10 @@ class Agent:
                     planner(self)
                 except Exception:
                     log.exception("planner failed", extra={"planner": getattr(planner, "__name__", "?")})
-        queue = self.scheduler.ready_stats(self.registry.kinds())
+        kinds = self.registry.kinds()
+        if self.network_kinds and not netstate.get(self.db).online:
+            kinds = [k for k in kinds if k not in self.network_kinds]  # the policy chooses among offline work only
+        queue = self.scheduler.ready_stats(kinds)
         return Observation(now=now, body=self.body.observe(), queue=queue, cycle=self.cycle_no)
 
     def cycle(self) -> CycleRecord:
@@ -280,6 +285,8 @@ class Agent:
             decision = Decision(kinds=list(obs.body.allow), action="maintenance", reason="paused: maintenance only")
         else:
             decision = self.policy.decide(obs, self.registry)  # DECIDE
+            decision = self._offline_filter(decision)
+        responses, failed_mark = self._responses(), self._failed_mark()
         job = self.scheduler.claim(decision.kinds)
         if job is None:
             return self._quiet_cycle("idle", obs, decision.reason)
@@ -318,6 +325,10 @@ class Agent:
                 rec.value = outcome.value
                 rec.reward = self.evaluate(outcome, cpu)  # EVALUATE
                 rec.cpu = cpu
+                if self._responses() > responses:  # a server answered during this slice: the internet works
+                    netstate.succeeded(self.db, time.time())
+                elif len(hosts := self._failed_since(failed_mark)) >= 2:  # the job coped with its own errors,
+                    netstate.failed(self.db, time.time(), f"no connection to {', '.join(sorted(hosts)[:3])}")
                 self.policy.learn(decision, job, rec.reward, cpu, outcome.value)  # LEARN
                 self._record(rec, started, t0, json.dumps(outcome.result, default=str)[:4000])
                 if self._hb_state != "running" or time.monotonic() - self._hb_at >= RUNNING_HEARTBEAT_EVERY:
@@ -335,10 +346,50 @@ class Agent:
             log.warning("job failed permanently", extra={"job": job.id, "kind": job.kind, "error": str(exc)})
         except Exception as exc:
             rec.error = f"{type(exc).__name__}: {exc}"
+            if netstate.is_network_error(exc) and self._responses() == responses:
+                return self._network_down(job, rec, started, t0, c0)
             with self.db.transaction():
                 state = self.scheduler.fail(job, rec.error, cpu=time.process_time() - c0)
                 self._record(rec, started, t0, json.dumps({"error": rec.error, "state": state}))
             log.exception("job slice failed", extra={"job": job.id, "kind": job.kind, "state": state})
+        return self._finish(rec, started, t0, c0)
+
+    def _responses(self) -> int:
+        """How many answers the HTTP client has had (0 without one): rising means the internet works."""
+        return int(getattr(self.services.get("http"), "responses", 0) or 0)
+
+    def _failed_mark(self) -> int:
+        return int(getattr(self.services.get("http"), "connection_failures", 0) or 0)
+
+    def _failed_since(self, mark: int) -> set[str]:
+        """Hosts whose connection failed during this slice (two or more different ones, with no server answering,
+        look like an outage; one dead site does not)."""
+        http = self.services.get("http")
+        return set(http.failed_since(mark)) if http is not None and hasattr(http, "failed_since") else set()
+
+    def _offline_filter(self, decision: Decision) -> Decision:
+        """Offline, network jobs are held back (not failed): everything else, which needs only what is already
+        on disk, keeps running. ``net.probe`` (not a network job here) finds out when the internet is back."""
+        if not self.network_kinds or decision.kinds == [] or netstate.get(self.db).online:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        allowed = [k for k in kinds if k not in self.network_kinds]
+        reason = f"{decision.reason}; offline: studying what it has" if decision.reason else "offline"
+        return Decision(allowed, decision.action, reason, decision.context, decision.scores)
+
+    def _network_down(self, job: Job, rec: CycleRecord, started: float, t0: float, c0: float) -> CycleRecord:
+        """A slice died on a dead connection: the job keeps its attempts and checkpoint and waits; enough of these
+        in a row and the agent calls itself offline (``core.netstate``)."""
+        rec.status = "interrupted"
+        now, error = time.time(), rec.error or "network error"
+        with self.db.transaction():
+            went = netstate.failed(self.db, now, error)
+            self.scheduler.defer(job, error, delay=NET_RETRY_S, cpu=time.process_time() - c0)
+            self._record(rec, started, t0, json.dumps({"error": error, "state": "deferred: no internet"}))
+        if went:
+            log.warning("the internet is gone: network jobs wait, studying what is on disk", extra={"error": rec.error})
+        else:
+            log.info("network job deferred", extra={"job": job.id, "kind": job.kind, "error": rec.error})
         return self._finish(rec, started, t0, c0)
 
     def _integrate(self, job: Job, outcome: JobOutcome, cpu: float) -> None:

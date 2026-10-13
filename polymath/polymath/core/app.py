@@ -57,12 +57,13 @@ class Components:
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
     from polymath.agents import society
     from polymath.body import maintenance
-    from polymath.drive import capacity, selftune, specialists, strategy
+    from polymath.drive import capacity, offline, selftune, specialists, strategy
     from polymath.drive import jobs as djobs
     from polymath.drive import learn as dlearn
     from polymath.evaluation import jobs as vjobs
     from polymath.evaluation import recap, surprise
-    from polymath.interface import knowledge_map
+    from polymath.interface import knowledge_map, snapshot
+    from polymath.interface.snapshot import SNAPSHOT_EVERY
     from polymath.memory import jobs as memjobs
     from polymath.memory import merge
     from polymath.memory.documents import DocumentStore
@@ -74,6 +75,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.reasoning import predictions, rule_audit, sanity
     from polymath.senses import (
         books_qa,
+        connectivity,
         crawler,
         dumpfiles,
         feeds,
@@ -111,19 +113,50 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     )
     registry = JobRegistry()
     reg = registry.register
+
+    def netreg(kind: str, handler: Any, description: str, **kw: Any) -> None:  # needs the internet: held back offline
+        reg(kind, handler, description, network=True, **kw)
+
     reg("noop", noop_handler, "No-op job used for loop acceptance tests")
-    reg("sources.plan", sources.plan_sources, "Resolve current dumps and feed every source pipeline", action="plan")
-    reg("dump.download", dumpfiles.download_job, "Resumable download of a dump file", action="download")
-    reg("wikipedia.part", wikipedia.ingest_part, "Read Wikipedia multistream dump streams", action="read", heavy=True)
-    reg("wikidata.dump", wikidata.ingest_dump, "Read Wikidata entity dump blocks", action="read", heavy=True)
-    reg("wikidata.propindex", wikidata_props.propindex_job, "Locate Wikidata property pages", action="download")
-    reg("wikidata.properties", wikidata_props.properties_job, "Read Wikidata property records", action="read")
+    netreg(
+        "sources.plan",
+        sources.plan_sources,
+        "Resolve current dumps and feed every source pipeline",
+        action="plan",
+    )
+    netreg("dump.download", dumpfiles.download_job, "Resumable download of a dump file", action="download")
+    netreg(
+        "wikipedia.part",
+        wikipedia.ingest_part,
+        "Read Wikipedia multistream dump streams",
+        action="read",
+        heavy=True,
+    )
+    netreg(
+        "wikidata.dump",
+        wikidata.ingest_dump,
+        "Read Wikidata entity dump blocks",
+        action="read",
+        heavy=True,
+    )
+    netreg(
+        "wikidata.propindex",
+        wikidata_props.propindex_job,
+        "Locate Wikidata property pages",
+        action="download",
+    )
+    netreg(
+        "wikidata.properties",
+        wikidata_props.properties_job,
+        "Read Wikidata property records",
+        action="read",
+    )
     reg("openalex.ingest", scholarly.ingest_openalex, "Read an OpenAlex works file", action="read", heavy=True)
     reg("pubmed.ingest", scholarly.ingest_pubmed, "Read a PubMed XML file", action="read", heavy=True)
-    reg("gutenberg.books", books_qa.gutenberg_job, "Fetch Project Gutenberg books", action="read")
+    netreg("gutenberg.books", books_qa.gutenberg_job, "Fetch Project Gutenberg books", action="read")
     reg("stackexchange.ingest", books_qa.ingest_stackexchange, "Read Stack Exchange posts", action="read", heavy=True)
-    reg("feeds.poll", feeds.feeds_job, "Poll RSS/Atom feeds", action="crawl")
-    reg("crawl.step", crawler.crawl_job, "Polite crawl of the frontier", action="crawl")
+    netreg("feeds.poll", feeds.feeds_job, "Poll RSS/Atom feeds", action="crawl")
+    netreg("crawl.step", crawler.crawl_job, "Polite crawl of the frontier", action="crawl")
     reg("memory.index", memjobs.index_documents, "Index passages, near-duplicates and topics", action="memorize")
     reg("memory.graph", memjobs.build_graph, "Build the knowledge graph from Wikidata", action="memorize")
     reg("memory.topics", memjobs.maintain_topics, "Maintain the hierarchical topic map", action="memorize")
@@ -150,7 +183,12 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("reason.contradictions", rjobs.contradictions_job, "Detect contradictions", action="reason")
     reg("reason.reliability", rjobs.reliability_job, "Learn source reliability", action="reason")
     reg("reason.predict", predictions.predict_job, "Guess missing facts, check earlier guesses", action="reason")
-    reg("wikipedia.titles", wikipedia.fetch_titles, "Read specific Wikipedia articles (curiosity)", action="read")
+    netreg(
+        "wikipedia.titles",
+        wikipedia.fetch_titles,
+        "Read specific Wikipedia articles (curiosity)",
+        action="read",
+    )
     reg("drive.pagerank", djobs.pagerank_job, "Entity importance (PageRank)", action="plan")
     reg("drive.priorities", djobs.priorities_job, "Rank topics and pursue knowledge gaps", action="plan")
     reg("agents.step", society.step_job, "Agent society: give agents their turns", action="agents")
@@ -163,9 +201,14 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("body.spill", maintenance.spill_job, "Move document bodies to plugged-in drives", action="maintain")
     reg("body.recall", maintenance.recall_job, "Bring a drive's documents back (retire it)", action="maintain")
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
-    reg("web.blocklists", openweb.plan_blocklists_job, "Refresh the offline safety lists", action="download")
+    netreg(
+        "web.blocklists",
+        openweb.plan_blocklists_job,
+        "Refresh the offline safety lists",
+        action="download",
+    )
     reg("web.blocklist", openweb.load_blocklist_job, "Load a safety list", action="maintain")
-    reg("web.vet", openweb.vet_job, "Vet new sites cited by Wikipedia before any visit", action="crawl")
+    netreg("web.vet", openweb.vet_job, "Vet new sites cited by Wikipedia before any visit", action="crawl")
     reg("web.trust", openweb.trust_job, "Judge sites on probation by their facts", action="reason")
     reg("eval.digest", vjobs.digest_job, "Write the daily 'what I learned today' digest", action="evaluate")
     reg("eval.remedy", vjobs.remedy_job, "Read up on wrong answers and re-test them", action="evaluate")
@@ -184,6 +227,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("eval.holdout", vjobs.holdout_job, "Hold out facts for self-evaluation", action="evaluate")
     reg("eval.quiz", vjobs.quiz_job, "Quiz itself on held-out facts", action="evaluate")
     reg("eval.report", vjobs.report_job, "Write the nightly report", action="evaluate")
+    reg("net.probe", connectivity.probe_job, "Is the internet back? (asked while offline)", action="maintain")
     services: dict[str, Any] = {"http": http, "docs": docs, "crawler": crawl}
     plan: list[tuple[float, Planner]] = (
         [
@@ -213,6 +257,9 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (600.0, sanity.planner),
             (600.0, capacity.planner),
             (60.0, society.planner),
+            (30.0, connectivity.planner),
+            (60.0, offline.planner),
+            (SNAPSHOT_EVERY, snapshot.planner),
         ]
         if planners
         else []

@@ -510,7 +510,10 @@ def test_cli_feed_direct_once(kb_cfg, tmp_path, capsys):
     rc = cli.main(["--config", path, "feed", "--direct", "--once", "--plain", "--no-color"])
     out = capsys.readouterr().out
     assert rc == 0 and "live feed from" in out and "read     wikipedia" in out and "facts" in out
-    assert cli.main(["--config", path, "feed", "--url", "http://127.0.0.1:9", "--once", "--plain"]) == 1
+    # the dashboard is down: the feed carries on from the database itself, and says so
+    assert cli.main(["--config", path, "feed", "--url", "http://127.0.0.1:9", "--once", "--plain"]) == 0
+    out = capsys.readouterr().out
+    assert "showing the database directly instead" in out and "systemctl restart polymath-dashboard" in out
 
 
 def test_dashboard_url(config):

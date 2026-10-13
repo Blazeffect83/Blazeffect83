@@ -144,6 +144,7 @@ ACTIVITY: dict[str, str] = {
     "perception.semantic": "reading causes and kinds of things",
     "perception.howto": "filing step-by-step answers",
     "reason.sanity": "checking for facts that cannot be true",
+    "net.probe": "checking whether the internet is back",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -179,13 +180,37 @@ def _short(text: str, n: int) -> str:
 
 
 # ---------------------------------------------------------------------------------------------- server
+def heavy_counts(db: Database) -> dict[str, Any]:
+    """The full-table counts (documents, things, facts): seconds on a large brain, so never on a request path."""
+    facts = {r["status"]: int(r["n"]) for r in db.query("SELECT status, COUNT(*) AS n FROM triples GROUP BY status")}
+    return {
+        "documents": int(db.scalar("SELECT COUNT(*) FROM documents WHERE state != 'duplicate'", default=0)),
+        "entities": int(db.scalar("SELECT COUNT(*) FROM entities WHERE kind = 'item'", default=0)),
+        "facts": sum(facts.values()),
+        "inferred": facts.get("inferred", 0),
+        "disputed": facts.get("disputed", 0),
+    }
+
+
 class Feed:
     """Read-only event source over the agent's tables (one per database connection)."""
 
-    def __init__(self, db: Database, *, pulse: Path | None = None, stale: float = 60.0) -> None:
+    def __init__(
+        self,
+        db: Database,
+        *,
+        pulse: Path | None = None,
+        stale: float = 60.0,
+        heavy_counts: bool = True,
+        counts_source: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> None:
+        """``heavy_counts=False`` leaves out the full-table counts (the agent's own snapshot); ``counts_source``
+        supplies them from elsewhere (the dashboard counts in a background thread, so no request waits)."""
         self.db = db
         self.pulse = pulse
         self.stale = stale
+        self.heavy_counts = heavy_counts
+        self.counts_source = counts_source
         self._counts: dict[str, Any] = {}
         self._counts_at = -1e18
 
@@ -621,20 +646,10 @@ class Feed:
     # -------------------------------------------------------------- status
     def counts(self, now: float) -> dict[str, Any]:
         """Knowledge counts. Full-table counts are cached (``COUNTS_TTL``); small tables are read every time."""
-        if now - self._counts_at >= COUNTS_TTL or not self._counts:
-            facts = {
-                r["status"]: int(r["n"])
-                for r in self.db.query("SELECT status, COUNT(*) AS n FROM triples GROUP BY status")
-            }
-            self._counts = {
-                "documents": int(
-                    self.db.scalar("SELECT COUNT(*) FROM documents WHERE state != 'duplicate'", default=0)
-                ),
-                "entities": int(self.db.scalar("SELECT COUNT(*) FROM entities WHERE kind = 'item'", default=0)),
-                "facts": sum(facts.values()),
-                "inferred": facts.get("inferred", 0),
-                "disputed": facts.get("disputed", 0),
-            }
+        if self.counts_source is not None:
+            self._counts = dict(self.counts_source() or {})
+        elif self.heavy_counts and (now - self._counts_at >= COUNTS_TTL or not self._counts):
+            self._counts = heavy_counts(self.db)
             self._counts_at = now
         quiz = self.db.one("SELECT accuracy, chance FROM quizzes ORDER BY id DESC LIMIT 1")
         return self._counts | {
@@ -693,7 +708,15 @@ class Feed:
             "curious": curious,
             "counts": self.counts(now),
             "brain": self.brain(),
+            "net": self.net(),
         }
+
+    def net(self) -> dict[str, Any]:
+        """The agent's view of the internet (``core.netstate``): offline means it studies what it has."""
+        raw = self.db.kv_get("net")
+        if not isinstance(raw, dict):
+            return {"online": True}
+        return {"online": bool(raw.get("online", True)), "since": raw.get("since"), "reason": raw.get("reason", "")}
 
 
 # ---------------------------------------------------------------------------------------------- client
@@ -721,7 +744,9 @@ def http_source(base_url: str, *, timeout: float = 5.0) -> Callable[[str | None]
     return fetch
 
 
-def direct_source(db_path: Path, *, pulse: Path | None = None) -> Callable[[str | None], dict[str, Any]]:
+def direct_source(
+    db_path: Path, *, pulse: Path | None = None, heavy_counts: bool = True
+) -> Callable[[str | None], dict[str, Any]]:
     """Read the database directly (read-only); for users who can read the data directory."""
     feed: Feed | None = None
 
@@ -731,13 +756,96 @@ def direct_source(db_path: Path, *, pulse: Path | None = None) -> Callable[[str 
             if feed is None:
                 if not db_path.exists():
                     raise FeedUnavailable("the database is not initialised yet")
-                feed = Feed(Database(db_path, readonly=True), pulse=pulse)
+                feed = Feed(Database(db_path, readonly=True), pulse=pulse, heavy_counts=heavy_counts)
             return feed.poll(cursor)
         except FeedUnavailable:
             raise
         except Exception as exc:  # locked, permission denied, mid-restore…
             feed = None
             raise FeedUnavailable(f"cannot read the database: {type(exc).__name__}") from exc
+
+    return fetch
+
+
+PRIMARY_RETRY_S = 30.0  # while a fallback serves the feed, the dashboard is asked again this often
+DEDUP_KEEP = 600  # events remembered to avoid showing one twice when the feed switches sources
+
+
+def resilient_source(
+    primary: Callable[[str | None], dict[str, Any]],
+    fallbacks: list[tuple[str, Callable[[str | None], dict[str, Any]]]],
+    *,
+    hint: str = "",
+    clock: Callable[[], float] = time.monotonic,
+) -> Callable[[str | None], dict[str, Any]]:
+    """The feed never goes dark because one way of reading is down.
+
+    ``primary`` (the dashboard) is tried first. When it fails, each fallback (``(name, source)``: the database
+    itself, the agent's own snapshot) is tried in turn, and the first that answers serves the feed, with one line
+    saying so and what to do; the dashboard is asked again every ``PRIMARY_RETRY_S``. Each source keeps its own
+    cursor, and events already shown are not shown again when the feed switches. Only when every way fails does
+    this raise ``FeedUnavailable``, naming all the reasons.
+    """
+    cursors: dict[str, str | None] = {}
+    seen: dict[str, None] = {}  # insertion-ordered set of shown events
+    state: dict[str, Any] = {"using": "", "primary_failed_at": None}
+
+    def key(ev: dict[str, Any]) -> str:
+        return json.dumps([ev.get("at"), ev.get("kind"), ev.get("text") or ev.get("title") or ev.get("what"),
+                           ev.get("n")], default=str)  # fmt: skip
+
+    def fresh(data: dict[str, Any]) -> dict[str, Any]:
+        events = []
+        for ev in data.get("events") or []:
+            k = key(ev)
+            if k in seen:
+                continue
+            seen[k] = None
+            events.append(ev)
+        while len(seen) > DEDUP_KEEP:
+            del seen[next(iter(seen))]
+        return {**data, "events": events}
+
+    def note(text: str, style: str) -> dict[str, Any]:
+        return {"kind": "link", "text": text, "style": style, "at": time.time()}
+
+    def fetch(cursor: str | None) -> dict[str, Any]:
+        if cursor is None:  # a (re)started feed
+            cursors.clear()
+        failed_at = state["primary_failed_at"]
+        why = ""
+        if failed_at is None or clock() - failed_at >= PRIMARY_RETRY_S:
+            try:
+                data = primary(cursors.get("primary"))
+            except FeedUnavailable as exc:
+                why = str(exc)
+                state["primary_failed_at"] = clock()
+            else:
+                cursors["primary"] = str(data.get("cursor") or "") or None
+                was, state["using"], state["primary_failed_at"] = state["using"], "primary", None
+                out = fresh(data)
+                if was and was != "primary":
+                    out["events"] = [note("the dashboard answers again: back to the normal feed", "green"),
+                                     *out["events"]]  # fmt: skip
+                return out
+        else:
+            why = state.get("why") or "the dashboard did not answer"
+        state["why"] = why
+        errors = [why]
+        for name, src in fallbacks:
+            try:
+                data = src(cursors.get(name))
+            except FeedUnavailable as exc:
+                errors.append(f"{name}: {exc}")
+                continue
+            cursors[name] = str(data.get("cursor") or "") or None
+            was, state["using"] = state["using"], name
+            out = fresh(data)
+            if was != name:
+                fix = f" · fix: {hint}" if hint else ""
+                out["events"] = [note(f"{why}: showing {name} instead{fix}", "yellow"), *out["events"]]
+            return out
+        raise FeedUnavailable("; ".join(errors) + (f" · fix: {hint}" if hint else ""))
 
     return fetch
 
@@ -977,6 +1085,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "prediction": "bgreen" if status == "confirmed" else "yellow",
             "recap": "bmagenta",
             "selfchange": "yellow" if status in {"rolled_back", "demoted", "retired", "reset"} else "bgreen",
+            "net": "byellow" if status == "offline" else "bgreen",
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -988,6 +1097,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "didyouknow": "fun fact",
             "prediction": "predicted",
             "selfchange": "improved",
+            "net": "offline" if status == "offline" else "online",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":
@@ -1048,6 +1158,10 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         ]
     activity = str(st.get("activity") or "starting up")
     segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
+    net = st.get("net") or {}
+    if net.get("online") is False:
+        since = f" since {clock(float(net['since']))}" if net.get("since") else ""
+        segs.append((f"  (no internet{since}: studying what it has)", "yellow"))
     if st.get("mode") in {"throttle", "yield"}:
         segs.append(
             ("  (slowed: " + ("running hot" if st.get("mode") == "throttle" else "low on disk") + ")", "yellow")
@@ -1075,6 +1189,8 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
             ("●", "yellow"),
             {"pause": "paused", "throttle": "throttled", "yield": "slowed"}.get(str(st.get("mode")), "paused"),
         )
+    elif (st.get("net") or {}).get("online") is False:
+        dot, label = ("●", "yellow"), "learning offline"
     else:
         dot, label = ("●", "green"), "learning"
     line1: list[Seg] = [(" POLYMATH ", "bold"), (f" {dot[0]} ", dot[1]), (label, dot[1])]
@@ -1086,12 +1202,21 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
     def n(key: str) -> str:
         return compact(c.get(key, 0), short=short)
 
-    parts: list[tuple[int, Seg]] = [  # (how important: the lowest is dropped first when space is short, segment)
-        (9, (f" {n('documents')} docs · {n('entities')} things · ", "")),
-        (9, (f"{n('facts')} facts", "bold")),
-        (1, (f" ({n('inferred')} inferred, {n('disputed')} disputed)", "dim")),
-        (4, (f" · {c.get('rules', 0)} rules", "")),
-    ]
+    if c.get("approx"):  # the agent's own snapshot: highest row numbers, close but not exact
+        known: list[tuple[int, Seg]] = [
+            (9, (f" ~{n('documents')} docs · ~{n('entities')} things · ", "")),
+            (9, (f"~{n('facts')} facts", "bold")),
+        ]
+    elif "facts" in c:
+        known = [
+            (9, (f" {n('documents')} docs · {n('entities')} things · ", "")),
+            (9, (f"{n('facts')} facts", "bold")),
+            (1, (f" ({n('inferred')} inferred, {n('disputed')} disputed)", "dim")),
+        ]
+    else:
+        known = [(9, (" counting what it knows…", "dim"))]  # never a false "0 facts" while the counts are on the way
+    parts: list[tuple[int, Seg]] = known  # (how important: the lowest is dropped first when space is short)
+    parts.append((4, (f" · {c.get('rules', 0)} rules", "")))
     q = c.get("quiz")
     if q:
         parts.append((7, (f" · quiz {float(q['accuracy']):.0%}", "")))

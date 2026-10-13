@@ -75,6 +75,16 @@ class Database:
                 self._conn.close()
                 self._conn = None
 
+    def limit_queries(self, seconds: float | None) -> None:
+        """Abort any statement still running ``seconds`` from now with ``sqlite3.OperationalError`` (interrupted);
+        ``None`` lifts the limit. For request handlers: a slow query fails one request instead of hanging it."""
+        with self._lock:
+            if seconds is None:
+                self.conn.set_progress_handler(None, 0)
+                return
+            end = time.monotonic() + seconds
+            self.conn.set_progress_handler(lambda: 1 if time.monotonic() > end else 0, 20_000)
+
     def execute(self, sql: str, params: Params = ()) -> sqlite3.Cursor:
         with self._lock:
             return self.conn.execute(sql, params)

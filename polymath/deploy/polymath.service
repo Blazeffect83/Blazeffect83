@@ -6,8 +6,9 @@ After=network-online.target local-fs.target
 Wants=network-online.target
 # Data lives on the NVMe drive: never start (and write to the SD card) without it.
 RequiresMountsFor=/srv/polymath
-StartLimitIntervalSec=600
-StartLimitBurst=10
+# Never give up restarting: the pauses between attempts grow instead (RestartSteps below), so a crash loop costs
+# little and the agent comes back by itself once whatever stopped it is fixed (drive replugged, disk freed).
+StartLimitIntervalSec=0
 
 [Service]
 Type=notify
@@ -29,6 +30,13 @@ TimeoutStopSec=90
 WatchdogSec=120
 Restart=always
 RestartSec=10
+RestartSteps=6
+RestartMaxDelaySec=300
+# /run/polymath (memory, readable by all): the agent's live snapshot, so the feed works even without the
+# dashboard; kept after a stop so the feed can tell "not running" from "gone"
+RuntimeDirectory=polymath
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 
 # Leave half the CPU and a quarter of the memory to the desktop (live feed terminal, browser).
 CPUQuota=200%

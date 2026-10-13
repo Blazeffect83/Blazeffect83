@@ -57,6 +57,7 @@ MOODS: dict[str, Mood] = {
     "paused": Mood(("-_-",), "yellow", blink=False),
     "offline": Mood(("×_×",), "red", blink=False),
     "connecting": Mood(("·_·", "·_·", "•_•", "•_•"), "dim", blink=False),
+    "studying": Mood(("◔‿◔", "◔‿◔", "◕‿◕", "◕‿◕"), "yellow", ("✎", "✎", "", "")),  # no internet: works from notes
     # reactions
     "happy": Mood(("^‿^", "^‿^", "^ᵕ^", "^ᵕ^"), "bgreen", ("✧", "", "✦", ""), blink=False),  # a little bounce
     "aha": Mood(("◕‿◕",), "bcyan", ("!", "")),
@@ -190,6 +191,8 @@ class Face:
             elif what == "selfchange" and status != "reset":  # your reset is not its doing
                 worse = status in {"rolled_back", "demoted"}
                 self.react("oops" if worse else "proud", now, 6.0, 2)
+            elif what == "net":  # the internet went away or came back
+                self.react("oops" if status == "offline" else "happy", now, 6.0, 2)
             elif what == "site" and status in {"approved", "probation"}:
                 self.react("happy", now, 3.0, 1)
             elif what == "site" and status in {"refused", "dropped"}:
@@ -226,6 +229,8 @@ class Face:
             return "paused"
         if mode in {"throttle", "yield"}:
             return "hot"
+        if (st.get("net") or {}).get("online") is False:
+            return "studying"
         if st.get("activity") == "waiting for work":
             return mood_for_action(None, hour=time.localtime(now).tm_hour)
         return mood_for_action(st.get("action") or None, hour=time.localtime(now).tm_hour)

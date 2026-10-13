@@ -503,6 +503,38 @@ Tables, the second language, how-to steps and the end-to-end Spanish pipeline ar
 articles and answers; the copy holds no table data, Spanish articles or answers with steps (all are read from new
 documents).
 
+## 12f. Always on (v0.5.1)
+
+**Development container (x86_64, Python 3.11).** 556 tests pass at 94 % coverage; ruff, ruff format and mypy
+--strict are clean. New: `tests/test_always_on.py` (36 tests).
+
+**The reported symptom, reproduced.** The Pi's feed stayed on "waiting: no answer from http://127.0.0.1:8765".
+- **Setup:** v0.5.0 (`7f29c9f`) against a 5,000,000-fact, 876 MB brain, asking for `/api/overview` and
+  `/api/feed` at the same moment, as the phone page and the desktop feed do.
+- **Old code:** the feed got its answer after **5.75 s**. The feed gives up after 5 s, so it showed "no
+  answer". The cause: every request shared one locked connection, and the full-table counts took 1.3 s even on
+  this fast CPU.
+- **Expected on the Pi** (not measured): about 4–6× slower per core, the dashboard capped at 25 % of one core,
+  and the file read over USB 2. The wait would be tens of seconds.
+- **v0.5.1:** the feed got its answer in **0.05 s** in the same test.
+
+**Real-process drills** (a real `polymath run` and `polymath dashboard`, a relay in front of the proxy that can be
+"unplugged"):
+
+| drill | result |
+|---|---|
+| internet unplugged | offline within 1 s: two downloads refused. Both were deferred with 0 attempts used; 0 dead jobs; 0 network jobs ran while offline. All 19 study kinds ran; the probe ran and found nothing |
+| internet back | the probe 2 min later answered: "back online after 3 min: reading again". It then loaded the safety lists and read 567 Wikipedia articles |
+| dashboard under a fake systemd notify socket (`WATCHDOG_USEC=2 s`) | `READY=1`, then 23 watchdog pings in 12 s |
+| dashboard frozen (SIGSTOP), feed as an unprivileged user who cannot read the database | the feed switched to the agent's snapshot within 5 s ("no answer from …: showing the agent's own snapshot instead · fix: sudo systemctl restart polymath-dashboard") and showed the offline and online events and the reading |
+| `polymath doctor` as that user | all ✓ with the dashboard up; with it frozen: "✗ dashboard no answer … within 6 s (hung or overloaded) → sudo systemctl restart polymath-dashboard", exit 1 |
+
+**Found and fixed during the drills:**
+- `Path.exists()` raises PermissionError on a directory you may not read (Python 3.11–3.13). `doctor` crashed
+  for the desktop user and now reports "its files belong to the polymath user".
+- The agent's snapshot showed "counting…" for good. It now carries approximate counts (the highest row numbers,
+  shown with "~").
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -519,6 +551,8 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
+0. v0.5.1 on the Pi: install it (it updates both service units: watchdog, restart policy, `/run/polymath`), then
+   `polymath doctor`; unplug the network cable for a few minutes and watch the feed go `offline` and come back.
 0. v0.5.0 on the Pi's full graph: the reasoning skills on many more things, dated facts after the next Wikidata read,
    tables, Spanish Wikipedia and big-brain mode on the 1 TB SSD.
 1. v0.4.0 on the Pi's larger graph over a week: tuning trials and their rollbacks, rule demotions, specialists

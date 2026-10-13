@@ -57,6 +57,7 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 |---|---|
 | live feed | opens in a terminal at login · `polymath feed` in any terminal · menu: *Polymath live feed* |
 | dashboard | `http://<pi>:8765/` · menu: *Polymath dashboard* |
+| is everything working? | `polymath doctor`: brain, agent, internet, dashboard and disk, each with the fix if broken |
 | status | `polymath status` · `systemctl status polymath polymath-dashboard` |
 | logs | `journalctl -u polymath -f` (JSON lines; `-o cat` for compact) |
 | nightly report | `/srv/polymath/reports/report-YYYY-MM-DD.md` or `polymath report` |
@@ -198,7 +199,36 @@ directly, as a user who can). To stop the window opening at login, delete
 These limits always apply, whatever the mode:
 - `CPUQuota=200%` (2 of 4 cores), `MemoryMax=3G`, `Nice=10`, idle-ish IO priority;
 - numpy is limited to 2 threads;
-- the dashboard is limited to 25 % CPU and 400 MB.
+- the dashboard is limited to 25 % CPU and 1.2 GB (400 MB was too tight for the ask box on a big brain).
+
+### <a id="always-on"></a>Always on (v0.5.1)
+
+**Without the internet** it keeps working:
+- **Noticing:** two failed connections in a row while reading, or failures at two different sites in one step
+  with no site answering, mean offline. One dead website never counts. The feed shows `offline` and the face
+  turns studious.
+- **Holding back:** downloads, dump reading, crawling, feeds and site vetting wait. They keep their place and
+  progress and never use up their retries, so a long outage loses nothing.
+- **Studying:** reasoning, contradiction and sanity checks, predictions, rule audits, quizzes, self-tuning,
+  duplicate merging, re-training from text and the agents run more often than usual (`drive/offline.py`).
+- **Coming back:** it asks a server it already reads from (one small request) after 1, 2, 4 and 8 minutes, then
+  every 10 minutes. The first answer brings it back: "back online after 3 h: reading again".
+
+**The dashboard** cannot hang the live feed any more:
+- requests run on a fixed pool of 8 threads, each with its own read-only connection;
+- every query has a deadline: 4 s for the feed and health, 20 s for pages, then the request answers "busy";
+- the expensive full-table counts are made by a background thread, never on a request;
+- a question in the ask box no longer blocks every other page while it loads the answerer;
+- it checks its own `/health` every 15 s and pings systemd only while it answers (`WatchdogSec=60`), so a stuck
+  dashboard is restarted within a minute.
+
+**The live feed** never goes dark. If the dashboard does not answer, it tries the database directly (when you
+may read it) and then the agent's own snapshot, `/run/polymath/feed.json`. The agent writes that every 5
+seconds, in memory, readable by everyone. The feed says which one it shows and what to run, and goes back to the
+dashboard as soon as it answers.
+
+**Restarts:** both services restart forever, waiting longer between attempts (up to 5 minutes for the agent and
+1 minute for the dashboard), so they come back by themselves once whatever stopped them is fixed.
 
 **SD card wear.** An SD card wears out from writes, and nothing on it reports its own wear, so Polymath measures
 writes and estimates. Every 15 minutes it records the bytes written to the data disk and the system disk
@@ -387,12 +417,15 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 
 | symptom | check |
 |---|---|
+| anything | `polymath doctor`: each broken part with the command that fixes it |
 | service won't start | `journalctl -u polymath -b`; is `/srv/polymath` mounted (`findmnt /srv/polymath`)? |
 | dashboard says "cannot reach the database" | `systemctl status polymath`; `ls -l /srv/polymath/db` |
 | `/health` 503 | heartbeat older than 60 s: the agent is stopped, paused for heat, or hung (the watchdog restarts it) |
 | not learning anything new | `polymath status` (dead jobs, queue) and `polymath why` (recent decisions) |
 | too hot | improve cooling, or lower `throttle_celsius` / `pause_celsius` |
-| live feed says "waiting: no answer from http://127.0.0.1:8765" | `systemctl status polymath-dashboard`; it reconnects by itself |
+| live feed says "no answer from http://127.0.0.1:8765: showing … instead" | the dashboard is down or hung; the feed carries on from the agent's snapshot. systemd restarts a hung dashboard within a minute; to do it now: `sudo systemctl restart polymath-dashboard` (details: `journalctl -u polymath-dashboard -n 40`) |
+| live feed says "waiting: …" (every source failed) | the agent is not running either: `polymath doctor`, then `sudo systemctl restart polymath` |
+| the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |
 | the agent waits: "the brain lives on the drive …" | plug that drive in; `journalctl -u 'polymath-volume@*'` shows it being mounted |

@@ -37,6 +37,8 @@ class PathsConfig:
     data_dir: Path = Path("/srv/polymath")
     # Refuse to start when data_dir sits on the root filesystem (the SD card).
     require_separate_mount: bool = True
+    # Memory-backed and readable by everyone: the agent's live snapshot for the feed (never the SD card, no wear)
+    run_dir: Path = Path("/run/polymath")
 
     @property
     def db_path(self) -> Path:
@@ -291,6 +293,8 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
     cfg: Config = _build(Config, data, "")
     if env.get("POLYMATH_DATA_DIR"):
         cfg.paths.data_dir = Path(env["POLYMATH_DATA_DIR"])
+    if env.get("POLYMATH_RUN_DIR"):
+        cfg.paths.run_dir = Path(env["POLYMATH_RUN_DIR"])
     apply_home(cfg)
     apply_capacity(cfg, data)
     cfg.validate()

@@ -1,6 +1,6 @@
 # Polymath
 
-An autonomous learning agent for the Raspberry Pi 5 that teaches itself from public data, around the clock,
+An autonomous learning agent for the Raspberry Pi 4/5 that teaches itself from public data, around the clock,
 and answers questions about what it has learned — **without** an LLM, external AI services or pretrained
 models. Every intelligent part (tokenizer, stemmer, sentence splitter, phrase finder, entity linker, relation
 extractor, word embeddings, vector index, truth discovery, rule learning, curiosity, self-evaluation) is
@@ -39,6 +39,16 @@ implemented here and learns only from data the agent downloads itself.
 - **Keeps the Pi healthy:** at most 2 cores and 3 GB, `nice 10`, so the desktop stays responsive. It throttles
   at 75 °C and pauses at 82 °C.
 - **Survives power loss:** every step commits atomically (SQLite WAL); jobs resume where they stopped.
+- **Always on** (v0.5.1):
+  - **No internet:** it notices, holds back everything that needs the internet (no download is ever given up),
+    and studies what it already has: reasoning, checking its facts, re-training, quizzing and tuning itself,
+    more often than usual. When the internet is back it resumes reading by itself.
+  - **The dashboard cannot freeze the feed:** slow pages are stopped, counting happens in the background, and
+    systemd restarts the dashboard within a minute if it ever stops answering.
+  - **The live feed never goes dark:** if the dashboard is down, the feed reads the agent's own snapshot
+    instead and tells you the one command that fixes it.
+  - `polymath doctor` checks every part and says exactly what to do. Services restart forever, waiting longer
+    between attempts.
 - **Improves itself from what it learns** (never by editing its code):
   - it tunes its own settings with fair A/B tests and undoes a change if its self-test score drops;
   - it drops rules whose conclusions sources keep contradicting;
