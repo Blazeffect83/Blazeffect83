@@ -152,6 +152,11 @@ def run_checks(
         mounted = sorted(d.name for d in root.iterdir() if os.path.ismount(d))
     except OSError:
         mounted = []
+    from polymath.body.sensors import DEAD_DRIVE_FIX, unresponsive_usb_disks
+
+    for name in unresponsive_usb_disks():
+        checks.append(Check("drives", BAD, f"/dev/{name} is connected by USB but reports 0 bytes: the drive behind "
+                            "it is not responding", DEAD_DRIVE_FIX))  # fmt: skip
     if mounted:
         checks.append(Check("drives", OK, f"{len(mounted)} mounted: {', '.join(m[:12] for m in mounted)}"))
     else:

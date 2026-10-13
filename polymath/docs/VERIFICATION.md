@@ -546,8 +546,15 @@ nor the dashboard was running. Two causes in the code were found and fixed:
   exist while the drive was missing, so systemd refused to start it. The agent's `init` failed on the missing
   drive too, so it never got to wait.
 
-Which of the two happened on the Pi is not confirmed: that needs `systemctl status polymath
-polymath-dashboard`.
+**Confirmed on the Pi** (`systemctl status`, 2026-10-12):
+- `polymath`: `ExecStartPre … polymath init (code=exited, status=3)`, the missing-drive refusal, in a restart
+  loop;
+- `polymath-dashboard`: `status=226/NAMESPACE`, the missing `/srv/polymath/db`;
+- `lsblk` showed `sda 0B usb`. The SSD's USB bridge enumerates but the drive behind it reports 0 bytes, which
+  points to power, a brown-out or the cable.
+
+v0.5.3 detects that exact state (`body/sensors.unresponsive_usb_disks`, from `/sys/block/sd*/size` and the USB
+device path) and names it in `polymath doctor` and in the waiting message, with the fix.
 
 **Live drill** (real `polymath init`, `run` and `dashboard`; the data directory holds only
 `MOVED-TO-DRIVE.json`, as after a drop-out):

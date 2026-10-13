@@ -863,3 +863,41 @@ def test_issues_reach_the_feed_and_doctor(tmp_path):
     checks = {c.name: c for c in doctor.run_checks(cfg, "http://x", health=lambda u: ("answered", 0.1, {}))}
     assert checks["problems"].level == doctor.BAD and "x gave up" in checks["problems"].detail
     db.close()
+
+
+def test_a_usb_drive_reporting_zero_bytes_is_named(tmp_path, monkeypatch):
+    """The Pi showed `sda 0B usb`: the enclosure answers, the SSD behind it does not (power, cable, brown-out)."""
+    from polymath.body import sensors
+
+    devices = tmp_path / "devices" / "platform" / "usb1" / "1-1"
+    for name, size in (("sda", "0"), ("sdb", "1953525168")):
+        (devices / name).mkdir(parents=True)
+        (devices / name / "size").write_text(size)
+    (tmp_path / "devices" / "mmc").mkdir()
+    (tmp_path / "devices" / "mmc" / "size").write_text("0")
+    block = tmp_path / "block"
+    block.mkdir()
+    (block / "sda").symlink_to(devices / "sda")
+    (block / "sdb").symlink_to(devices / "sdb")
+    (block / "mmcblk0").symlink_to(tmp_path / "devices" / "mmc")
+    assert sensors.unresponsive_usb_disks(block) == ["sda"]
+    assert sensors.unresponsive_usb_disks(tmp_path / "missing") == []
+
+    monkeypatch.setattr(sensors, "unresponsive_usb_disks", lambda *a: ["sda"])
+    cfg = make_config(tmp_path)
+    cfg.paths.run_dir = tmp_path / "run"
+    cfg.paths.run_dir.mkdir()
+    cfg.storage.mount_root = tmp_path / "mnt"
+    checks = [c for c in doctor.run_checks(cfg, "http://x", health=lambda u: ("refused", 0.0, None))]
+    dead = next(c for c in checks if c.name == "drives" and c.level == doctor.BAD)
+    assert "/dev/sda" in dead.detail and "powered USB hub" in dead.fix
+    moved_away(cfg)
+    monkeypatch.setattr(cli, "unresponsive_usb_disks", lambda *a: ["sda"])
+    stop = threading.Event()
+
+    def once(_s: float) -> None:
+        stop.set()
+
+    cli.wait_for_storage(cfg, notifier=Notifier({}), stop=stop, sleep=once)
+    reason = json.loads(snapshot.path_for(cfg).read_text())["status"]["paused_reason"]
+    assert "/dev/sda answers but reports 0 bytes" in reason and "blue USB 3 port" in reason

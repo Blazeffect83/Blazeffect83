@@ -12,6 +12,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from polymath import __version__
+from polymath.body.sensors import DEAD_DRIVE_FIX, unresponsive_usb_disks
 from polymath.body.systemd_notify import Notifier
 from polymath.core import inbox
 from polymath.core.app import BrainDriveMissing, StorageError, build_agent, check_storage
@@ -70,6 +71,9 @@ def wait_for_storage(
             return True
         except StorageError as exc:
             reason = str(exc)
+        dead = unresponsive_usb_disks()
+        if dead:  # the commonest cause, named: the enclosure answers, the SSD in it does not
+            reason += f" The USB drive /dev/{dead[0]} answers but reports 0 bytes: {DEAD_DRIVE_FIX}."
         if reason != said:
             log.warning("waiting for the brain's storage", extra={"reason": reason})
             notifier.ready("waiting: " + reason[:150])
