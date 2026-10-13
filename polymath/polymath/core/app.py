@@ -10,6 +10,7 @@ from typing import Any
 
 from polymath.body.sensors import same_filesystem_as_root
 from polymath.body.systemd_notify import Notifier
+from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.db import Database, open_database
 from polymath.core.jobs import JobRegistry, noop_handler
@@ -40,22 +41,29 @@ def check_storage(config: Config) -> None:
         ) from exc
 
 
-def _read_probe(path: Path) -> None:
-    """Read a little of ``path`` if it exists: a dead mount fails here with an I/O error even when ``stat`` and
-    directory listings still answer from cache."""
-    try:
-        with path.open("rb") as f:
-            f.read(4096)
-    except FileNotFoundError:
-        return
+PROBE_TIMEOUT_S = 10.0  # a brain that has not answered a small read in this long is treated as gone
+
+
+def _read_probe(config: Config, path: Path, *, read: bool = True) -> str:
+    """Read a little of ``path`` (if it exists) in a child process with a time limit (``core.fsprobe``). A dead
+    mount fails here with an I/O error even when ``stat`` still answers from cache, and a frozen one does not answer
+    at all: either way the brain's drive is gone for now, and nothing that asked is left hanging."""
+    state = fsprobe.probe(path, read=read, timeout=PROBE_TIMEOUT_S)
+    if fsprobe.unhealthy(state):
+        raise BrainDriveMissing(
+            f"the brain's storage at {config.paths.data_dir} is not answering ({fsprobe.describe(state)}): its drive "
+            "froze or dropped out. Polymath brings it back by itself (polymath storage heal); a reboot also clears it."
+        )
+    return state
 
 
 def _check_storage(config: Config) -> None:
     data_dir = config.paths.data_dir
-    _read_probe(data_dir / HOME_FILE)
-    _read_probe(config.paths.db_path)
+    _read_probe(config, data_dir, read=False)
+    _read_probe(config, data_dir / HOME_FILE)
+    _read_probe(config, config.paths.db_path)
     moved = data_dir / MOVED_FILE
-    if moved.exists():  # the brain moved to a drive, and what is mounted here is the SD card's old directory
+    if _read_probe(config, moved) == fsprobe.OK:  # the brain moved to a drive; mounted here is the SD card's old dir
         try:
             info = json.loads(moved.read_text(encoding="utf-8"))
         except (OSError, ValueError):

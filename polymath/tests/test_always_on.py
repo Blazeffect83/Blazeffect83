@@ -967,8 +967,9 @@ def test_a_dead_mount_that_still_answers_stat_is_caught_by_reading(config, monke
     """A dead mount can still answer `stat` from cache; reading the brain's files fails, and that counts."""
     import errno as errno_
 
-    from polymath.core import app
+    from polymath.core import app, fsprobe
 
+    monkeypatch.setattr(fsprobe, "ISOLATE", False)  # the fake error below lives in this process
     config.paths.db_path.parent.mkdir(parents=True, exist_ok=True)
     config.paths.db_path.write_bytes(b"SQLite format 3\0")
     real = Path.open

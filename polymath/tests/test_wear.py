@@ -757,7 +757,7 @@ def test_a_dead_brain_mount_is_replaced_not_trusted(home_helper, config, tmp_pat
     fake.calls.clear()
     out = h.mount_home(brain, {"home": True}, vols.Outcome("attached", "d", "26ffc49f"))
     assert out.action == "home"
-    assert fake.calls[0] == ["systemctl", "stop", *vols.SERVICES]
+    assert fake.calls[0] == ["systemctl", "stop", "--no-block", *vols.SERVICES]  # never waits on a hung agent
     assert ["umount", "-l", str(data)] in fake.calls
     assert ["mount", "--bind", str(brain / vols.HOME), str(data)] in fake.calls
     assert fake.calls[-1] == ["systemctl", "restart", *vols.SERVICES]

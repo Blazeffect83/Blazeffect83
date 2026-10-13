@@ -15,7 +15,8 @@ Type=notify
 NotifyAccess=main
 User=polymath
 Group=polymath
-WorkingDirectory=/srv/polymath
+# Not the data directory: if its drive freezes, systemd would hang entering it before Polymath even starts.
+WorkingDirectory=/
 Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
 Environment=PYTHONUNBUFFERED=1
 # numpy must not grab every core: the desktop and the live feed stay responsive.

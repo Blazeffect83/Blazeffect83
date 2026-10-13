@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from polymath.body import heal
+from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE
 from polymath.core.db import open_database
 from polymath.interface import cli, doctor
@@ -60,6 +61,7 @@ def setup(tmp_path):
 
 def test_brain_state(setup, monkeypatch):
     cfg, *_ = setup
+    monkeypatch.setattr(fsprobe, "ISOLATE", False)  # the fake error below lives in this process
     data = cfg.paths.data_dir
     assert heal.brain_state(cfg) == "local"  # the brain lives on this disk: nothing to heal
     (data / MOVED_FILE).write_text("{}")
@@ -137,10 +139,10 @@ def test_a_dead_mount_is_dropped_and_the_drive_asked_for_again(setup, monkeypatc
     monkeypatch.setattr(heal, "brain_state", lambda c: "dead")
     out = make().heal()
     assert out["action"] == "dead_mount"
-    assert calls[0] == ["systemctl", "stop", *SERVICES]
-    assert ["umount", "-l", str(cfg.paths.data_dir)] in calls
-    assert ["systemctl", "start", *SERVICES] in calls and calls[-1][0] == "udevadm"
-    assert ["systemctl", "restart", "polymath-volume@*.service"] in calls  # the unit that already ran is redone
+    assert calls[0] == ["umount", "-l", str(cfg.paths.data_dir)]  # first, and lazily: nothing waits on the drive
+    assert not any(c[:2] == ["systemctl", "stop"] for c in calls)  # a service hung on the drive stops slowly
+    assert ["systemctl", "restart", "--no-block", *SERVICES] in calls and calls[-1][0] == "udevadm"
+    assert ["systemctl", "restart", "--no-block", "polymath-volume@*.service"] in calls  # the unit that ran is redone
 
 
 def test_heal_can_be_switched_off(setup):

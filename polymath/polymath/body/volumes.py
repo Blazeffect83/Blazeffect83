@@ -62,6 +62,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.logging import get_logger
 from polymath.memory.pool import BRAIN, MANIFEST, ignored_ids, read_manifest
@@ -163,12 +164,15 @@ class Outcome:
 
 
 def _answers(path: Path) -> bool:
-    """Can ``path`` be read? False on a dead mount (Input/output error) as on a missing file."""
-    try:
-        path.stat()
-    except OSError:
-        return False
-    return True
+    """Can ``path`` be read? False on a dead mount (Input/output error), a frozen one (no answer: never waits long)
+    and a missing file."""
+    return fsprobe.probe(path, read=True, timeout=8.0) == fsprobe.OK
+
+
+def _there(path: Path) -> bool | None:
+    """Whether ``path`` exists; None when its storage is dead or frozen (never waits long)."""
+    state = fsprobe.probe(path, timeout=8.0)
+    return None if fsprobe.unhealthy(state) else state != fsprobe.MISSING
 
 
 class Helper:
@@ -519,7 +523,7 @@ class Helper:
     def home_hint(self, brain: Path, manifest: dict[str, Any]) -> str:
         """Why a big drive did not become the brain's home, and the one thing to do about it ("" if none)."""
         st, data = self.config.storage, self.config.paths.data_dir
-        if not st.move_home or (data / MOVED_FILE).exists() or not self.data_on_system_disk():
+        if not st.move_home or _there(data / MOVED_FILE) is not False or not self.data_on_system_disk():
             return ""
         if int(manifest.get("size_bytes") or 0) < st.home_min_gb * 1e9:
             return ""
@@ -535,8 +539,10 @@ class Helper:
         st, data = self.config.storage, self.config.paths.data_dir
         if not st.move_home or not manifest.get("dedicated") or manifest.get("fstype") not in POSIX_FS:
             return False
-        if (data / MOVED_FILE).exists() or (data / HOME_FILE).exists() or not self.data_on_system_disk():
-            return False  # the brain already lives on a drive (this one or another), or not on the SD card
+        if _there(data / MOVED_FILE) is not False or _there(data / HOME_FILE) is not False:
+            return False  # the brain already lives on a drive (this one or another), or its storage does not answer
+        if not self.data_on_system_disk():
+            return False  # not on the SD card
         need = max(st.home_min_gb * 1e9, 3 * tree_stats(data)[1])
         return shutil.disk_usage(brain).free >= need
 
@@ -634,7 +640,7 @@ class Helper:
             # the brain's mount points at a connection that died (a USB reset or drop-out that never unplugged):
             # drop it, then mount the drive as it is now
             log.warning("replacing a dead brain mount", extra={"data": str(data), "was": existing[-1]})
-            self.run(["systemctl", "stop", *SERVICES])
+            self.run(["systemctl", "stop", "--no-block", *SERVICES])  # one hung on the dead drive stops slowly
             for _src in existing:
                 self.run(["umount", "-l", str(data)])
         r = self.run(["mount", "--bind", str(home), str(data)])

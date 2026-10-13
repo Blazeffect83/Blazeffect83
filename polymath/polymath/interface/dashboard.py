@@ -95,6 +95,10 @@ class DashboardData:
     def db(self) -> Database:
         db: Database | None = getattr(self._local, "db", None)
         if db is None or not db.is_open:
+            from polymath.core import fsprobe
+
+            if fsprobe.unhealthy(fsprobe.probe(self.config.paths.db_path, timeout=3.0)):
+                raise FileNotFoundError(self.config.paths.db_path)  # a frozen drive: answer "not there", never hang
             db = Database(self.config.paths.db_path, readonly=True)
             db.execute(f"PRAGMA cache_size=-{WORKER_CACHE_KIB}")  # several of these: keep each one's cache small
             self._local.db = db
@@ -176,13 +180,14 @@ class DashboardData:
 
     def missing_reason(self) -> str:
         """Why there is no database to read: the brain's drive is not mounted, or it was never initialised."""
+        from polymath.core import fsprobe
         from polymath.core.config import HOME_FILE, MOVED_FILE
 
         data = self.config.paths.data_dir
-        try:
-            moved = (data / MOVED_FILE).exists() and not (data / HOME_FILE).exists()
-        except OSError:
-            moved = False
+        home = fsprobe.probe(data / HOME_FILE, timeout=3.0)
+        if fsprobe.unhealthy(home):
+            return "the brain's drive is not answering (it froze or dropped out): Polymath brings it back by itself"
+        moved = home == fsprobe.MISSING and fsprobe.probe(data / MOVED_FILE, timeout=3.0) == fsprobe.OK
         if moved:
             return "the brain's drive is not mounted: plug it in (Polymath starts by itself)"
         return "database not initialised yet"

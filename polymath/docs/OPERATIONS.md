@@ -237,7 +237,8 @@ dashboard as soon as it answers.
 - `polymath-heal.timer` runs `polymath storage heal` 45 s after boot and then every minute. While the brain is
   healthy it does nothing.
 - When the brain is missing or dead, it escalates:
-  1. a dead mount is dropped and the drive is asked for again;
+  1. a dead or frozen mount (v0.5.7: one that does not answer at all) is dropped lazily, the USB drive behind it
+     is reset, and the services are restarted without waiting on them; then the drive is asked for again;
   2. a USB drive reporting 0 bytes gets a soft reset of just that device;
   3. still missing after 90 s, the USB ports' power is cut for 20 s and restored (`uhubctl`). That is a real
      replug, for enclosures like the DockCase whose capacitor keeps the drive in "safe off" across a reboot. At
@@ -245,6 +246,8 @@ dashboard as soon as it answers.
 - Every action goes to the caretaker's inbox and to `polymath doctor`. Settings: `[storage] heal`,
   `heal_power_cycle`, `heal_hubs`, `heal_power_off_s`.
 - A drive reporting 0 bytes is never treated as blank and never formatted.
+- **Nothing waits on a frozen drive** (v0.5.7): every look at the brain's storage goes through `core/fsprobe`, a
+  child process with a time limit, so a drive that stops answering makes Polymath wait visibly, never hang.
 
 **Every problem is recorded** (`core/issues.py`, the caretaker's inbox):
 - what gets recorded: jobs that give up, body pauses (heat, full disk, read-only card), restart loops, unclean
@@ -452,6 +455,7 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 | live feed says "waiting: …" (every source failed) | the agent is not running either: `polymath doctor`, then `sudo systemctl restart polymath` |
 | the feed says "paused — the brain lives on the drive …, which is not plugged in" | the SSD dropped out or is not mounted: check its cable and power (a Pi 4 port can brown out a bus-powered SSD; a powered hub or the official 3 A supply helps), and that `lsblk` lists it. Polymath starts by itself once it is back |
 | `lsblk` shows `sda 0B usb` (doctor: "reports 0 bytes") | the SSD's enclosure answers but the drive does not: unplug it for 10 s, plug it into a blue USB 3 port; if it recurs, power it from a powered hub or its own supply |
+| `Job for polymath.service failed because a timeout was exceeded`, or doctor: "does not answer at all" | the brain's drive froze (reads never return). v0.5.7 waits instead of hanging and `storage heal` resets the drive within a minute or two. By hand: `sudo systemctl stop polymath-heal.timer; sudo umount -l /srv/polymath; sudo umount -l /mnt/polymath/*; sudo usbreset 31db:9210` (your enclosure's ID from `lsusb`), wait 10 s, `sudo systemctl restart 'polymath-volume@*' polymath polymath-dashboard; sudo systemctl start polymath-heal.timer`. A reboot or a replug also clears it |
 | "Input/output error" on `/srv/polymath` (doctor: "its storage does not answer") | the SSD dropped out and came back as a new device; the old mount is dead. `sudo reboot` clears it (v0.5.4 also replaces a dead mount by itself when the drive is attached again) |
 | the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |

@@ -613,6 +613,44 @@ was replugged.
 Tests: `tests/test_heal.py` (9) and `test_a_drive_reporting_zero_bytes_is_never_formatted`. On the Pi, the
 power cut itself is not yet measured (uhubctl on the Pi 4's VL805 hub).
 
+## 12j. A frozen drive never freezes Polymath (v0.5.7)
+
+**What the Pi showed:** after installing v0.5.6, `Job for polymath.service failed because a timeout was
+exceeded`, and the dashboard was not listening. The brain's mount no longer failed with an I/O error; it did not
+answer at all. Every `stat` or `read` on it slept in the kernel, so `polymath init`, the dashboard's database
+open and the self-heal's own check all froze.
+
+**Added: `core/fsprobe.py`.** `probe(path)` asks in a tiny child process and waits at most a few seconds. It
+answers `ok`, `missing`, `denied`, `dead` (I/O error) or `hang` (no answer). It uses a process, not a thread: a
+task stuck in the kernel cannot be killed, so a stuck thread would keep `polymath init` from exiting. A probe
+still stuck from earlier makes the next one for that path answer `hang` at once. If no process can start, a
+thread asks instead.
+
+**Every place that looked at the brain's storage now asks through it:**
+- the agent's storage check (data directory, home marker, database, moved marker: a frozen drive is
+  `BrainDriveMissing`, so `init` passes and `run` waits visibly);
+- the dashboard (opening the database, and the 503 reason);
+- `doctor`;
+- `storage heal`'s brain state;
+- the volume helper (`_answers` for the brain's mount; it never moves the brain while its storage does not
+  answer).
+
+**The self-heal no longer waits on anything frozen:**
+- it lazily unmounts first;
+- it releases each drive under `/mnt/polymath` whose own mount is dead or frozen, and resets its USB device (the
+  reset makes stuck I/O fail, so hung processes exit);
+- only then does it restart the services, and the drive units, with `--no-block`.
+
+The volume helper's "replace a dead brain mount" stops the services with `--no-block` too.
+
+**systemd:** `polymath.service` now has `WorkingDirectory=/`. Before, systemd would enter the data directory, and
+on a frozen mount it hung there before Polymath even started.
+
+Tests: `tests/test_fsprobe.py` (14). A FIFO with no writer blocks exactly like a frozen mount. It is used to
+freeze the probe, `check_storage`, `polymath init` and the volume helper for real. `/proc/self/mem` gives a real
+EIO. A child Python process shows that a stuck probe never keeps a program from exiting. On the Pi, recovery from
+a real frozen DockCase is not yet confirmed.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

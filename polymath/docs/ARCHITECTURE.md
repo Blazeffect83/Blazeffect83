@@ -240,6 +240,10 @@ then the most facts, an article, and PageRank.
     visibly. `mount_home` restarts them onto the brain.
   - The dashboard's `ReadWritePaths=-/srv/polymath/db` lets it start without the brain; it then serves the
     agent's snapshot as `/api/feed`.
+- **Frozen-drive guard** (`core/fsprobe.py`, v0.5.7): every look at the brain's storage (agent start, dashboard,
+  doctor, `storage heal`, the volume helper) is a `stat` or small read in a child process with a time limit. A
+  drive that stops answering reads as `hang` and is handled like a missing one; a task stuck in the kernel is
+  left in a disposable child, never in Polymath itself.
 - **Issues** (`core/issues.py`): every problem becomes an `events` row of kind `issue` (area, code, severity),
   rate-limited to once an hour per code: the caretaker's inbox, the feed's `problem` lines and doctor's list.
 - **`polymath doctor`** (`interface/doctor.py`) runs as you, reading only HTTP, `/run/polymath` and, if you may,

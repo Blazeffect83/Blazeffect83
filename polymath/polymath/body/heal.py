@@ -6,8 +6,9 @@ Or the drive freezes and comes back as a new device while the brain's mount stil
 
 What it does, only while the brain's drive is missing or dead (a healthy brain costs one ``stat``):
 
-1. **Dead mount** (Input/output error on ``/srv/polymath``): stop the services, drop the mount, ask udev to attach
-   the drive again (``mount_home`` binds it and restarts the services).
+1. **Dead or frozen mount** (Input/output error on ``/srv/polymath``, or no answer at all): drop the mount
+   (lazily: never waits), reset the USB drive behind it, restart the services without waiting on them, and ask
+   for the drive again (``mount_home`` binds it and restarts the services).
 2. **A USB drive reporting 0 bytes**: a soft reset of just that device (its ``authorized`` switch in sysfs, off
    and on: a replug in software). At most once every ``RESET_EVERY`` seconds.
 3. **Still missing** after ``POWER_AFTER`` seconds: cut the power of the USB ports for ``heal_power_off_s``
@@ -22,9 +23,9 @@ It never formats, never touches a drive that is not the brain's, and does nothin
 from __future__ import annotations
 
 import contextlib
-import errno
 import json
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable
@@ -33,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from polymath.body.sensors import unresponsive_usb_disks
+from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.logging import get_logger
 
@@ -46,7 +48,7 @@ POWER_EVERY = 900.0  # power cycles at most this often
 POWER_PER_DAY = 6
 RETRIGGER_EVERY = 120.0  # asking udev to attach drives again
 KEEP_ACTIONS = 30
-DEAD_ERRNOS = {errno.EIO, errno.ENOTCONN, errno.ESTALE, errno.ENODEV, errno.ENXIO}
+PROBE_TIMEOUT_S = 8.0
 
 
 @dataclass
@@ -61,20 +63,18 @@ class HealState:
 
 
 def brain_state(config: Config) -> str:
-    """``healthy`` | ``dead`` (mount does not answer) | ``missing`` (lives on a drive that is not there) |
-    ``local`` (the brain lives on this disk, nothing to heal)."""
+    """``healthy`` | ``dead`` (the mount gives I/O errors or does not answer at all) | ``missing`` (lives on a drive
+    that is not there) | ``local`` (the brain lives on this disk, nothing to heal). Never hangs (``core.fsprobe``)."""
     data = config.paths.data_dir
-    try:
-        (data / HOME_FILE).stat()
-        return "healthy"
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        return "dead" if exc.errno in DEAD_ERRNOS else "healthy"  # permission trouble is not a drive problem
-    try:
-        return "missing" if (data / MOVED_FILE).exists() else "local"
-    except OSError as exc:
-        return "dead" if exc.errno in DEAD_ERRNOS else "local"
+    home = fsprobe.probe(data / HOME_FILE, timeout=PROBE_TIMEOUT_S)
+    if home in {fsprobe.OK, fsprobe.DENIED, fsprobe.ERROR}:
+        return "healthy"  # permission trouble is not a drive problem
+    if fsprobe.unhealthy(home):
+        return "dead"
+    moved = fsprobe.probe(data / MOVED_FILE, timeout=PROBE_TIMEOUT_S)
+    if fsprobe.unhealthy(moved):
+        return "dead"
+    return "missing" if moved == fsprobe.OK else "local"
 
 
 def usb_device_dir(block_dir: Path) -> Path | None:
@@ -146,7 +146,7 @@ class Healer:
         """Attach the drives again. A drive's unit that already ran (``polymath-volume@sda``, RemainAfterExit)
         ignores a new udev "add", so the units that exist are restarted (detach, then attach: a fresh mount and
         the brain bound onto it), and udev is asked for the devices that have no unit yet."""
-        self.run(["systemctl", "restart", "polymath-volume@*.service"])
+        self.run(["systemctl", "restart", "--no-block", "polymath-volume@*.service"])
         self.run(["udevadm", "trigger", "--action=add", "--subsystem-match=block"])
         st.last_retrigger = self.clock()
 
@@ -163,6 +163,25 @@ class Healer:
             log.warning("usb reset failed", extra={"disk": disk, "error": str(exc)})
             return False
         return True
+
+    def release_dead_drives(self) -> list[str]:
+        """Drives under the mount root whose own mount is dead or frozen: lazy-unmount (never blocks) and reset
+        the USB device behind each. Returns the disks reset."""
+        root = self.config.storage.mount_root
+        reset: list[str] = []
+        try:
+            entries = sorted(root.iterdir())
+        except OSError:
+            return reset
+        for mnt in entries:
+            sources = [src for _mp, src in self.mounts_at(mnt)]
+            if not sources or not fsprobe.unhealthy(fsprobe.probe(mnt, timeout=PROBE_TIMEOUT_S)):
+                continue
+            self.run(["umount", "-l", str(mnt)])
+            disk = re.sub(r"p?\d+$", "", Path(sources[-1]).name) if sources[-1].startswith("/dev/sd") else ""
+            if disk and self.reset_usb(disk):
+                reset.append(disk)
+        return reset
 
     def power_cycle(self) -> str:
         """Cut the USB ports' power long enough for an enclosure with a capacitor to switch off, then restore it."""
@@ -192,13 +211,17 @@ class Healer:
         data = self.config.paths.data_dir
         did: dict[str, Any] | None = None
         if state == "dead":
-            self.run(["systemctl", "stop", *self.services])
+            # Nothing here waits on the frozen drive: a lazy unmount returns at once, and resetting the drive makes
+            # whatever hangs on it (the agent, the dashboard) fail and exit. Only then are they restarted, without
+            # waiting (`--no-block`): a service stuck in the kernel can take minutes to stop.
             for _mp in [mp for mp, _src in self.mounts_at(data) if mp == str(data)] or [str(data)]:
                 self.run(["umount", "-l", str(data)])
+            reset = self.release_dead_drives()  # the drive's own mount is just as dead: release it, reset the drive
             self.run(["systemctl", "reset-failed", *self.services])
-            self.run(["systemctl", "start", *self.services])  # they wait for the drive, visibly
+            self.run(["systemctl", "restart", "--no-block", *self.services])  # they wait for the drive, visibly
             self._retrigger(st)  # the drive's unit restarts: mounted fresh, the brain bound, the services restarted
-            did = self._did(st, "dead_mount", f"dropped the dead mount at {data} and asked for the drive again")
+            extra = f"; reset {', '.join('/dev/' + d for d in reset)}" if reset else ""
+            did = self._did(st, "dead_mount", f"dropped the dead mount at {data}{extra} and asked for the drive again")
         else:
             dead = unresponsive_usb_disks(self.sys_block)
             day = time.strftime("%Y-%m-%d", time.localtime(now))

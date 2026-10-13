@@ -54,13 +54,19 @@ def _exists(path: Path) -> bool | None:
 
 
 def brain_check(data: Path) -> Check:
-    """Where the brain is, as far as you may look; a dead mount (the drive dropped out) is named."""
+    """Where the brain is, as far as you may look; a dead or frozen mount (the drive dropped out) is named."""
+    from polymath.core import fsprobe
+
+    state = fsprobe.probe(data, timeout=5.0)
+    if fsprobe.unhealthy(state):
+        return Check("brain", BAD, f"its storage at {data} does not answer ({fsprobe.describe(state)}): the drive "
+                     "froze or dropped out", "Polymath brings it back by itself within a few minutes (storage heal); "
+                     "now: sudo polymath storage heal")  # fmt: skip
     try:
         moved, home = _exists(data / MOVED_FILE), _exists(data / HOME_FILE)
     except DeadStorage as exc:
         return Check("brain", BAD, f"its storage at {data} does not answer ({exc.strerror}): the drive dropped out "
-                     "and the old connection is dead", "sudo reboot   (Polymath then mounts the drive and starts by "
-                     "itself)")  # fmt: skip
+                     "and the old connection is dead", "sudo polymath storage heal   (or sudo reboot)")  # fmt: skip
     if moved is None or home is None:  # the brain belongs to the polymath user: you may not look inside
         return Check("brain", OK, f"at {data} (its files belong to the polymath user)")
     if moved and not home:
