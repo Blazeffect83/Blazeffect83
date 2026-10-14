@@ -679,6 +679,35 @@ standby, drive back within the watcher's interval (exit 75), fold (documents, Wi
 nothing doubled; the standby brain removed), a fold split over slices, a restart that resumes standby, and the
 feed, face and doctor lines. On the Pi this is not yet run.
 
+## 12l. The caretaker knows every problem and its fix, and stays current (v0.6.1)
+
+**Why:** Christian asked that the caretaker be told about every problem and every update, so it can fix the
+same problem by itself next time.
+
+**Added:**
+- **`polymath/agents/faults.toml`**, the caretaker's knowledge:
+  - 20 known faults, one for each issue code Polymath reports and each problem seen on the Pi;
+  - the situation on the Pi now;
+  - 7 incidents from the Pi's history;
+  - one `[[update]]` per release since v0.5.1.
+- **`agents/faults.py`** loads and validates it, and matches problems by code or by their words.
+- **`core/issues.report`** tags each problem with the faults it matches.
+- **`polymath doctor`** gives the known fix on its problems line.
+- **`polymath caretaker`** gives the briefing; `known`, `show <id>`, `history` and `--json` list the rest.
+- **`polymath/CLAUDE.md`** states the update rule for every future change.
+- **`docs/CARETAKER.md`** is the caretaker spec, now in the repository, with a new section C.6b.
+
+**Tests:** `tests/test_faults.py` (21). They are the rule itself; each of these fails the suite:
+- a version bump without `updated_for` and an `[[update]]` entry;
+- an `issues.report` code in the source that no fault matches (scanned);
+- history fixed in a future version;
+- a step that changes the system (`/boot`, apt, dpkg, chmod, …) without `needs = "approval"`;
+- a fault that tells nobody what to do. The first run caught this one: the standby fault had only an `auto`
+  step.
+
+Malformed knowledge is refused: unknown `needs`, duplicate ids, priors that do not add up to 1, unknown fault
+references.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

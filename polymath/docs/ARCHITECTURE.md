@@ -250,6 +250,10 @@ then the most facts, an article, and PageRank.
   answers. On the real brain, `standby.planner` queues `storage.fold_standby`: standby documents go through
   `DocumentStore.add` (dedup, state `new`, so the real brain perceives them again), then Wikidata records,
   crawled pages and issues; the standby id is recorded in kv `standby_folded` and the files are removed.
+- **Caretaker knowledge** (`agents/faults.toml` + `agents/faults.py`, v0.6.1): known faults (codes, words,
+  symptoms, causes with priors, checks, self-healing, steps tagged by who may act), the situation on the Pi,
+  the incident history and per-release updates. `issues.report` tags each problem with its faults
+  (`detail.known`); `polymath caretaker` and `doctor` read it; `tests/test_faults.py` keeps it current.
 - **Issues** (`core/issues.py`): every problem becomes an `events` row of kind `issue` (area, code, severity),
   rate-limited to once an hour per code: the caretaker's inbox, the feed's `problem` lines and doctor's list.
 - **`polymath doctor`** (`interface/doctor.py`) runs as you, reading only HTTP, `/run/polymath` and, if you may,

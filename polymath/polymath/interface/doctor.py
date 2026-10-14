@@ -168,9 +168,18 @@ def run_checks(
     if problems:
         bad = any(p.get("status") == "bad" for p in problems)
         when = time.strftime("%H:%M", time.localtime(float(problems[0].get("at") or 0)))
+        fix = "the live feed shows each as a 'problem' line"
+        known = problems[0].get("known") or []
+        if known:  # a known problem: the caretaker's knowledge (agents/faults.toml) says what to do
+            from polymath.agents import faults
+
+            f = faults.knowledge().by_id.get(str(known[0]))
+            step = f.next_step() if f else None
+            if f and step:
+                fix = f"known problem: {faults.describe_step(step)}   (more: polymath caretaker show {f.id})"
         checks.append(Check("problems", BAD if bad else WARN,
                             f"{len(problems)} in the last 24 h; latest at {when}: {problems[0].get('text', '')}",
-                            "the live feed shows each as a 'problem' line"))  # fmt: skip
+                            fix))  # fmt: skip
 
     if not agent_up and kind != "answered":  # both down: one thing to look at, not two
         checks.append(Check("services", BAD, "the agent and the dashboard are both stopped",

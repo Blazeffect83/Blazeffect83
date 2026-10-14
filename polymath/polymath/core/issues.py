@@ -7,6 +7,8 @@ away or coming back (kind ``net``) and a drive arriving or leaving (``volume_eve
 the caretaker reads those too.
 
 Reports are rate-limited per code (``EVERY``), so a problem that repeats is one line an hour, not a flood.
+Each report is tagged with the known faults it matches (``detail.known``, from ``agents/faults.toml``): the
+caretaker's knowledge of what it is and what to do about it.
 """
 
 from __future__ import annotations
@@ -39,15 +41,29 @@ def report(
     last: dict[str, float] = dict(db.kv_get("issue_last") or {})
     if code in last and now - float(last[code]) < every:
         return False
+    extra: dict[str, Any] = {"status": severity, "area": area, "code": code, **(detail or {})}
+    known = known_faults(f"{area}/{code}", text)
+    if known:  # which known problem it is (agents/faults.toml): the caretaker knows what to do about it
+        extra["known"] = known
     db.execute(
         "INSERT INTO events(at, kind, text, detail) VALUES(?, 'issue', ?, ?)",
-        (now, text[:240], json.dumps({"status": severity, "area": area, "code": code, **(detail or {})})),
+        (now, text[:240], json.dumps(extra)),
     )
     last[code] = now
     if len(last) > KEEP_CODES:
         last = dict(sorted(last.items(), key=lambda kv: kv[1])[-KEEP_CODES:])
     db.kv_set("issue_last", last)
     return True
+
+
+def known_faults(code: str, text: str = "") -> list[str]:
+    """Ids of the known faults (``agents/faults.toml``) an issue matches; [] when it is new to the caretaker."""
+    try:
+        from polymath.agents import faults
+
+        return [f.id for f in faults.for_issue(code, text)]
+    except Exception:  # the knowledge is a help, never a reason for a report to fail
+        return []
 
 
 def recent(db: Database, since: float, limit: int = 50) -> list[dict[str, Any]]:

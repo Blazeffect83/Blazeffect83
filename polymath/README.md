@@ -58,6 +58,8 @@ implemented here and learns only from data the agent downloads itself.
     3 GB, wear-guarded). When the drive is back, everything it read moves onto it by itself, and the real brain
     reads it again with all it knows. The feed shows `learning on standby`.
   - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
+    Each one is matched against the caretaker's knowledge of known problems and their fixes
+    (`polymath caretaker`), which every update keeps current (v0.6.1).
   - `polymath doctor` checks every part and says exactly what to do. Services restart forever, waiting longer
     between attempts.
 - **Improves itself from what it learns** (never by editing its code):
@@ -151,6 +153,7 @@ polymath agents show research-black-holes             # what it learned to prefe
 | [SOURCES](docs/SOURCES.md) | where knowledge comes from, licenses, politeness |
 | [OPERATIONS](docs/OPERATIONS.md) | install, NVMe, logs, backups, restore, tuning, uninstall |
 | [VERIFICATION](docs/VERIFICATION.md) | what was measured, where, and what is still pending |
+| [CARETAKER](docs/CARETAKER.md) | the caretaker agent (Orin) and its knowledge of every known problem and fix |
 
 ## Develop
 

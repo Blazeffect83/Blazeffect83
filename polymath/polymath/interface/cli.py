@@ -978,6 +978,38 @@ def cmd_doctor(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(c.level == doctor.BAD for c in checks) else 0
 
 
+def cmd_caretaker(config: Config, args: argparse.Namespace) -> int:
+    """What the caretaker knows: the situation now, known problems and their fixes, what happened before."""
+    from polymath.agents import faults
+    from polymath.interface import snapshot
+
+    k = faults.knowledge()
+    if args.op == "known":
+        width = max(len(f.id) for f in k.faults)
+        for f in k.faults:
+            print(f"{f.id:<{width}}  {f.title}")
+        return 0
+    if args.op == "show":
+        found = k.by_id.get(args.fault or "")
+        if found is None:
+            print(f"no known problem {args.fault!r}: `polymath caretaker known` lists them", file=sys.stderr)
+            return 2
+        print("\n".join(faults.fault_lines(found)))
+        return 0
+    if args.op == "history":
+        for h in k.history:
+            state = "still open" if h.open else f"fixed in v{h.fixed_in}"
+            print(f"{h.date}  v{h.version}: {h.what}\n    cause: {h.cause}\n    → {h.fault}, {state}")
+        return 0
+    st, _age = snapshot.read_status(snapshot.path_for(config))  # readable by everyone: no database needed
+    lines = faults.briefing((st or {}).get("issues") or [], version=__version__)
+    if args.json:
+        print(json.dumps({"updated_for": k.updated_for, "situation": k.situation, "lines": lines}, indent=2))
+    else:
+        print("\n".join(lines))
+    return 0
+
+
 def cmd_backup(config: Config, args: argparse.Namespace) -> int:
     """Take a verified backup now (or list the existing ones)."""
     from polymath.body import maintenance
@@ -1218,6 +1250,12 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--url", help="dashboard URL (default: this machine's)")
     dr.add_argument("--json", action="store_true")
     dr.set_defaults(func=cmd_doctor)
+
+    ct = sub.add_parser("caretaker", help="what the caretaker knows: the situation now, known problems, fixes")
+    ct.add_argument("op", nargs="?", default="brief", choices=["brief", "known", "show", "history"])
+    ct.add_argument("fault", nargs="?", help="with `show`: the known problem's id (`polymath caretaker known`)")
+    ct.add_argument("--json", action="store_true")
+    ct.set_defaults(func=cmd_caretaker)
 
     vr = sub.add_parser("version", help="installed version and commit, and whether the agent runs it")
     vr.add_argument("--json", action="store_true")
