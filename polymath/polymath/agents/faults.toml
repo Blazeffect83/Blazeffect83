@@ -24,7 +24,7 @@ brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4,
 as_of = "2026-10-14"
 summary = """Seen on the Pi itself (through a Remote Control session, 06:13 UTC): /opt/polymath still runs v0.5.6 (build ca43ce6, 2026-10-13). None of v0.5.7, v0.6.0 or v0.6.1 was ever installed, because ~/Blazeffect83 is checked out on claude/aegis-agent (another project, with local uncommitted work that must not be lost), so git pull never fetched Polymath. The SSD is mounted but frozen: it runs at USB 2 speed (480M, usb-storage driver, behind the USB 2 hub), the kernel's usb-storage thread and polymath init sit in state D. init timed out, and every restart since fails with 'database is locked' (the stuck init holds the lock); the dashboard is killed by its watchdog. Power is fine (throttled=0x0). uhubctl is not installed."""
 waiting_on = [
-    "a separate checkout of Polymath (git worktree) so the AEGIS work in ~/Blazeffect83 stays untouched",
+    "done 06:25 UTC: ~/polymath-src (Polymath's own clone, installed from before) fast-forwarded to v0.6.2; ~/Blazeffect83 untouched",
     "Christian, with sudo: release the frozen drive, finish dpkg, install uhubctl, install v0.6.2 from that checkout",
     "Christian, at the Pi: move the DockCase to a blue USB 3 port (USB 3 cable, no USB 2 hub)",
 ]
@@ -234,9 +234,9 @@ checks = [
 ]
 self_healing = ["none: installing changes the system"]
 steps = [
-    { needs = "you", do = "get Polymath in its own folder, leaving the other checkout alone", command = "git -C ~/Blazeffect83 fetch origin claude/polymath-agent && git -C ~/Blazeffect83 worktree add ~/polymath-src origin/claude/polymath-agent" },
+    { needs = "you", do = "update Polymath's own clone (on this Pi: ~/polymath-src, on claude/polymath-agent; never the AEGIS checkout ~/Blazeffect83)", command = "git -C ~/polymath-src pull --ff-only origin claude/polymath-agent" },
     { needs = "approval", do = "install it", command = "cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card" },
-    { needs = "you", do = "later updates", command = "git -C ~/polymath-src fetch origin claude/polymath-agent && git -C ~/polymath-src checkout --detach origin/claude/polymath-agent && cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card" },
+    { needs = "you", do = "if that clone is missing, make a separate one (never switch another project's checkout)", command = "git clone -b claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git ~/polymath-src" },
 ]
 since = "0.6.2"
 updated = "0.6.2"
