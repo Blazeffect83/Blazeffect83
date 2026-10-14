@@ -15,30 +15,32 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.6.1"
+updated_for = "0.6.2"
 updated = "2026-10-14"
-pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit"
-brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), bus-powered from the Pi's USB 3 port"
+pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
+brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
 
 [situation]
 as_of = "2026-10-14"
-summary = """The Pi runs v0.5.6. After that install polymath.service failed to start ("a timeout was exceeded") and \
-the dashboard was not listening: the brain's mount on /srv/polymath froze (reads never return). uhubctl is not \
-installed because dpkg was interrupted. v0.6.1 is ready: nothing waits on a frozen drive any more, the \
-configuration loads without touching the drive, and after 5 minutes without its drive Polymath learns on the \
-standby brain on the SD card. Christian is away from the Pi and runs commands remotely."""
+summary = """Seen on the Pi itself (through a Remote Control session, 06:13 UTC): /opt/polymath still runs v0.5.6 (build ca43ce6, 2026-10-13). None of v0.5.7, v0.6.0 or v0.6.1 was ever installed, because ~/Blazeffect83 is checked out on claude/aegis-agent (another project, with local uncommitted work that must not be lost), so git pull never fetched Polymath. The SSD is mounted but frozen: it runs at USB 2 speed (480M, usb-storage driver, behind the USB 2 hub), the kernel's usb-storage thread and polymath init sit in state D. init timed out, and every restart since fails with 'database is locked' (the stuck init holds the lock); the dashboard is killed by its watchdog. Power is fine (throttled=0x0). uhubctl is not installed."""
 waiting_on = [
-    "sudo dpkg --configure -a && sudo apt-get install -y uhubctl (finish the interrupted package install)",
-    "cd ~/Blazeffect83/polymath && git pull && sudo ./install.sh --allow-sd-card (install v0.6.1)",
-    "polymath doctor (send the output)",
+    "a separate checkout of Polymath (git worktree) so the AEGIS work in ~/Blazeffect83 stays untouched",
+    "Christian, with sudo: release the frozen drive, finish dpkg, install uhubctl, install v0.6.2 from that checkout",
+    "Christian, at the Pi: move the DockCase to a blue USB 3 port (USB 3 cable, no USB 2 hub)",
 ]
-suspected_root_cause = "the DockCase's USB bridge freezing under UAS, and/or not enough power from the Pi's USB port"
+suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
-    "brain-drive-uas",
-    "brain-drive-power",
+    "update-not-installed",
+    "brain-drive-usb2",
+    "brain-mount-frozen",
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.6.2"
+date = "2026-10-14"
+changes = """From the Pi itself: probes read past the page cache (O_DIRECT), so a frozen drive whose data is still cached is caught; 'database is locked' / disk I/O errors on opening the brain mean BrainDriveMissing (wait, then standby) instead of a crash loop; doctor names a brain drive linked at USB 2. New faults: update-not-installed, brain-drive-usb2."""
+
 [[update]]
 version = "0.6.1"
 date = "2026-10-14"
@@ -179,7 +181,7 @@ id = "brain-mount-frozen"
 title = "The brain's drive froze: reads never return"
 area = "storage"
 codes = []
-patterns = ["does not answer at all", "a timeout was exceeded"]
+patterns = ["does not answer at all", "a timeout was exceeded", "database is locked", "start-pre operation timed out"]
 symptoms = [
     "systemctl: 'Job for polymath.service failed because a timeout was exceeded'",
     "the dashboard is not listening; processes sit in state D (ps -eo stat,cmd | grep ' D')",
@@ -199,6 +201,8 @@ self_healing = [
     "nothing in Polymath waits on it: every look has a time limit (v0.5.7); loading the config too (v0.6.0)",
     "storage heal: lazy unmount, USB reset of the frozen drive, restart without waiting (v0.5.7)",
     "after 5 minutes: the standby brain on the SD card (v0.6.0)",
+    "probes read past the page cache, so a frozen drive with cached data is caught too (v0.6.2)",
+    "'database is locked' from a process stuck on the drive reads as a missing drive, not a crash loop (v0.6.2)",
 ]
 steps = [
     { needs = "auto", do = "wait: storage heal resets the drive; the agent learns on standby meanwhile" },
@@ -206,7 +210,59 @@ steps = [
     { needs = "approval", do = "stop the freezes at their root: see brain-drive-uas and brain-drive-power" },
 ]
 since = "0.5.7"
-updated = "0.6.0"
+updated = "0.6.2"
+
+[[fault]]
+id = "update-not-installed"
+title = "An update was pulled but never installed (the Pi runs an older Polymath)"
+area = "install"
+codes = []
+patterns = ["is installed but the agent", "build.json", "not the Polymath branch"]
+symptoms = [
+    "polymath version (or /opt/polymath/build.json) shows an older version than the newest on GitHub",
+    "git -C ~/Blazeffect83 branch shows a branch other than claude/polymath-agent (on 2026-10-14: claude/aegis-agent)",
+    "fixes that should be there are not: the tracebacks' line numbers match an old release",
+]
+causes = [
+    { cause = "the clone is checked out on another project's branch, so git pull fetched that branch", prior = 0.7 },
+    { cause = "git pull ran, but install.sh was not run afterwards (or stopped early)", prior = 0.3 },
+]
+checks = [
+    "cat /opt/polymath/build.json",
+    "git -C ~/Blazeffect83 status -sb; git -C ~/Blazeffect83 branch -vv",
+    "git -C ~/Blazeffect83 log --oneline --branches --not --remotes   (local-only commits: never reset these)",
+]
+self_healing = ["none: installing changes the system"]
+steps = [
+    { needs = "you", do = "get Polymath in its own folder, leaving the other checkout alone", command = "git -C ~/Blazeffect83 fetch origin claude/polymath-agent && git -C ~/Blazeffect83 worktree add ~/polymath-src origin/claude/polymath-agent" },
+    { needs = "approval", do = "install it", command = "cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card" },
+    { needs = "you", do = "later updates", command = "git -C ~/polymath-src fetch origin claude/polymath-agent && git -C ~/polymath-src checkout --detach origin/claude/polymath-agent && cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card" },
+]
+since = "0.6.2"
+updated = "0.6.2"
+
+[[fault]]
+id = "brain-drive-usb2"
+title = "The brain's SSD runs at USB 2 speed"
+area = "storage"
+codes = []
+patterns = ["runs at USB 2 speed", "480M", "480 Mbit/s"]
+symptoms = [
+    "doctor: drives ! '/dev/sda runs at USB 2 speed (480 Mbit/s), not USB 3'",
+    "lsusb -t: the Mass Storage device sits under the 480M bus; the 5000M bus is empty",
+]
+causes = [
+    { cause = "plugged into a black USB 2 port instead of a blue USB 3 port", prior = 0.5 },
+    { cause = "a USB 2 cable, or a USB 2 hub in between", prior = 0.35 },
+    { cause = "the enclosure fell back to USB 2 after resets", prior = 0.15 },
+]
+checks = ["lsusb -t", "cat /sys/bus/usb/devices/*/speed"]
+self_healing = ["doctor names it; storage heal resets the drive when it stalls; the standby brain keeps learning"]
+steps = [
+    { needs = "you", do = "move the DockCase to a blue USB 3 port, with a USB 3 cable and no USB 2 hub; check: lsusb -t shows it under 5000M" },
+]
+since = "0.6.2"
+updated = "0.6.2"
 
 [[fault]]
 id = "brain-drive-uas"
@@ -534,4 +590,22 @@ what = "Christian: 'this is still not working'."
 cause = "load_config still read the drive without a time limit; the drive itself keeps freezing (UAS / power suspected)"
 fault = "brain-mount-frozen"
 fixed_in = "0.6.0"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "Seen on the Pi itself: none of v0.5.7–v0.6.1 was installed; ~/Blazeffect83 was on claude/aegis-agent."
+cause = "git pull fetched the other project's branch, so install.sh kept installing the old Polymath tree"
+fault = "update-not-installed"
+fixed_in = "0.6.2"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "SSD at 480M, usb-storage and polymath init in state D; init timed out, then 'database is locked' on every restart."
+cause = "the SSD stalls on its USB 2 link; the stuck init keeps the database lock; cached probes did not see the freeze"
+fault = "brain-drive-usb2"
+fixed_in = "0.6.2"
 open = true

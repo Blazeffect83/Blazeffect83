@@ -16,7 +16,7 @@ from polymath import __version__
 from polymath.body.sensors import DEAD_DRIVE_FIX, unresponsive_usb_disks
 from polymath.body.systemd_notify import Notifier
 from polymath.core import inbox
-from polymath.core.app import BrainDriveMissing, StorageError, build_agent, check_storage
+from polymath.core.app import BrainDriveMissing, StorageError, build_agent, check_storage, open_brain
 from polymath.core.config import Config, ConfigError, load_config
 from polymath.core.db import Database, open_database
 from polymath.core.logging import get_logger, setup_logging
@@ -30,8 +30,7 @@ def _db(config: Config, *, readonly: bool = False) -> Database:
     if readonly:
         return Database(config.paths.db_path, readonly=True)
     check_storage(config)
-    db = open_database(config.paths.db_path)
-    return db
+    return open_brain(config)
 
 
 def cmd_init(config: Config, args: argparse.Namespace) -> int:

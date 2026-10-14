@@ -95,6 +95,45 @@ def unresponsive_usb_disks(sys_block: Path = Path("/sys/block")) -> list[str]:
     return out
 
 
+def slow_usb_disks(sys_block: Path = Path("/sys/block")) -> list[tuple[str, int]]:
+    """USB disks linked below USB 3 speed: ``(name, Mbit/s)``, e.g. ``("sda", 480)``.
+
+    The USB device a disk hangs off reports its link speed in sysfs (``speed``: 480 = USB 2, 5000 = USB 3). An SSD
+    on a black USB 2 port, behind a USB 2 hub or on a USB 2 cable runs about ten times slower, and the Pi 4's USB 2
+    ports share less power (the Pi, 2026-10-14: the brain's SSD at 480M, then frozen). Plain file reads, no root."""
+    out: list[tuple[str, int]] = []
+    try:
+        entries = sorted(sys_block.iterdir())
+    except OSError:
+        return out
+    for dev in entries:
+        if not dev.name.startswith("sd"):
+            continue
+        try:
+            cur = dev.resolve()
+        except OSError:
+            continue
+        if "/usb" not in str(cur):
+            continue
+        while cur != cur.parent:
+            speed = cur / "speed"
+            if speed.is_file() and (cur / "idVendor").is_file():
+                try:
+                    mbps = int(float(speed.read_text().strip()))
+                except (OSError, ValueError):
+                    break
+                if mbps < 5000:
+                    out.append((dev.name, mbps))
+                break
+            cur = cur.parent
+    return out
+
+
+SLOW_DRIVE_FIX = (
+    "move the SSD to a blue USB 3 port, with a USB 3 cable and no USB 2 hub in between: USB 2 is about ten times "
+    "slower, and the Pi 4's USB 2 ports give the drive less power"
+)
+
 DEAD_DRIVE_FIX = (
     "unplug the SSD for 10 seconds and plug it into a blue USB 3 port. If it happens again it is not getting enough "
     "power: use a powered USB hub (or the SSD's own power supply) and the official 5.1 V 3 A Pi supply"

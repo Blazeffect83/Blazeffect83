@@ -44,11 +44,29 @@ def check_storage(config: Config) -> None:
 PROBE_TIMEOUT_S = 10.0  # a brain that has not answered a small read in this long is treated as gone
 
 
+def open_brain(config: Config) -> Database:
+    """Open the brain's database after ``check_storage``. A database that stays locked, or a disk I/O error, means a
+    process is stuck on a frozen drive and holds the lock (the Pi, 2026-10-14): that is the drive's problem, so it
+    reads as ``BrainDriveMissing`` (wait, then the standby brain), never as a crash that systemd restarts in a loop."""
+    import sqlite3
+
+    try:
+        return open_database(config.paths.db_path)
+    except sqlite3.OperationalError as exc:
+        text = str(exc).lower()
+        if "locked" not in text and "disk i/o" not in text:
+            raise
+        raise BrainDriveMissing(
+            f"the brain's database at {config.paths.db_path} cannot be opened ({exc}): a process is stuck on its "
+            "drive. Polymath brings the drive back by itself (polymath storage heal); a reboot also clears it."
+        ) from exc
+
+
 def _read_probe(config: Config, path: Path, *, read: bool = True) -> str:
     """Read a little of ``path`` (if it exists) in a child process with a time limit (``core.fsprobe``). A dead
     mount fails here with an I/O error even when ``stat`` still answers from cache, and a frozen one does not answer
     at all: either way the brain's drive is gone for now, and nothing that asked is left hanging."""
-    state = fsprobe.probe(path, read=read, timeout=PROBE_TIMEOUT_S)
+    state = fsprobe.probe(path, read=read, direct=read, timeout=PROBE_TIMEOUT_S)
     if fsprobe.unhealthy(state):
         raise BrainDriveMissing(
             f"the brain's storage at {config.paths.data_dir} is not answering ({fsprobe.describe(state)}): its drive "
@@ -322,7 +340,7 @@ def build_agent(config: Config, *, notifier: Notifier | None = None, planners: b
 
     check_storage(config)
     storage_pool.activate(config)
-    db = open_database(config.paths.db_path)
+    db = open_brain(config)
     db.execute(f"PRAGMA wal_autocheckpoint={int(config.body.wal_autocheckpoint)}")  # fewer write-backs
     comps = build_components(config, db, planners=planners and config.loop.planners)
     from polymath.body.guard import Guard

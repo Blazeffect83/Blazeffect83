@@ -26,13 +26,25 @@ OK, MISSING, DENIED, DEAD, HANG, ERROR = "ok", "missing", "denied", "dead", "han
 ISOLATE = True  # ask in a child process (tests that fake errors inside this process switch it off)
 
 _CODES = {0: OK, 1: MISSING, 2: DENIED, 3: DEAD, 4: ERROR}
+# ``direct``: read past the page cache (O_DIRECT), so a drive that froze is caught even while its data is still
+# cached in memory (the Pi, 2026-10-14: the probes passed from cache, then opening the database hung)
 _CHILD = (
     "import os,sys\n"
-    "p,r=sys.argv[1],sys.argv[2]=='1'\n"
+    "p,r,d=sys.argv[1],sys.argv[2]=='1',sys.argv[3]=='1'\n"
     "try:\n"
-    "    if r:\n"
+    "    done=False\n"
+    "    if r and d and hasattr(os,'O_DIRECT'):\n"
+    "        import mmap\n"
+    "        try:\n"
+    "            fd=os.open(p,os.O_RDONLY|os.O_DIRECT)\n"
+    "            try: os.preadv(fd,[mmap.mmap(-1,4096)],0); done=True\n"
+    "            finally: os.close(fd)\n"
+    "        except OSError as e:\n"
+    "            if e.errno!=22: raise\n"
+    "    if r and not done:\n"
     "        with open(p,'rb') as f: f.read(4096)\n"
-    "    else: os.stat(p)\n"
+    "    if not r: os.stat(p)\n"
+    "except IsADirectoryError: sys.exit(4)\n"
     "except FileNotFoundError: sys.exit(1)\n"
     "except PermissionError: sys.exit(2)\n"
     f"except OSError as e: sys.exit(3 if e.errno in {sorted(DEAD_ERRNOS)} else 4)\n"
@@ -63,11 +75,11 @@ def _check(path: Path, read: bool) -> str:
     return OK
 
 
-def _in_child(key: str, path: Path, read: bool, timeout: float) -> str | None:
+def _in_child(key: str, path: Path, read: bool, timeout: float, direct: bool = False) -> str | None:
     """The answer from a child process; None when no child could be started."""
     try:
         child = subprocess.Popen(
-            [sys.executable, "-I", "-S", "-c", _CHILD, str(path), "1" if read else "0"],
+            [sys.executable, "-I", "-S", "-c", _CHILD, str(path), "1" if read else "0", "1" if direct else "0"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             cwd="/", close_fds=True,
         )  # fmt: skip
@@ -95,10 +107,11 @@ def _in_thread(key: str, path: Path, read: bool, timeout: float) -> str:
     return result.get("v", ERROR)
 
 
-def probe(path: Path, *, read: bool = False, timeout: float = 5.0) -> str:
+def probe(path: Path, *, read: bool = False, direct: bool = False, timeout: float = 5.0) -> str:
     """``ok`` | ``missing`` | ``denied`` | ``dead`` (an I/O error: a dead mount) | ``hang`` (no answer in time) |
-    ``error``. Never takes much longer than ``timeout``."""
-    key = f"{path}|{read}"
+    ``error``. Never takes much longer than ``timeout``. With ``direct`` a read goes to the drive itself, not to
+    what the kernel still has cached (where the filesystem cannot do that, an ordinary read)."""
+    key = f"{path}|{read}|{direct}"
     with _lock:
         stuck = _inflight.get(key)
         if stuck is not None:
@@ -106,7 +119,7 @@ def probe(path: Path, *, read: bool = False, timeout: float = 5.0) -> str:
                 return HANG
             del _inflight[key]  # it finished at last (and is reaped): ask afresh
     if ISOLATE:
-        state = _in_child(key, path, read, timeout)
+        state = _in_child(key, path, read, timeout, direct)
         if state is not None:
             return state
     return _in_thread(key, path, read, timeout)

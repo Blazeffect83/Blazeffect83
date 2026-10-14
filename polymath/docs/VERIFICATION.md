@@ -708,6 +708,33 @@ same problem by itself next time.
 Malformed knowledge is refused: unknown `needs`, duplicate ids, priors that do not add up to 1, unknown fault
 references.
 
+## 12m. What the Pi itself showed, fixed (v0.6.2)
+
+**Seen on 2026-10-14 through a Remote Control session on the Pi (read-only diagnostics):**
+- **None of v0.5.7–v0.6.1 was ever installed.** `/opt/polymath` ran v0.5.6 (build `ca43ce6`), because
+  `~/Blazeffect83` was checked out on `claude/aegis-agent`, another project with local uncommitted work. So
+  `git pull` never fetched Polymath.
+- **The SSD was frozen at USB 2 speed:** 480M, the `usb-storage` driver, behind the USB 2 hub. The kernel's
+  `usb-storage` thread and `polymath init` were in state D.
+- **`init` timed out;** every restart after that failed with `database is locked`, because the stuck process
+  held the lock. Power was fine (`throttled=0x0`).
+
+**Fixed:**
+- **Probes read past the page cache** (`fsprobe.probe(direct=True)`, `O_DIRECT`). A frozen drive whose data is
+  still cached is now caught; where the filesystem has no `O_DIRECT`, it falls back to an ordinary read.
+- **`app.open_brain`:** a database that stays locked, or a disk I/O error on opening it, now means
+  `BrainDriveMissing`. Polymath waits and then switches to the standby brain instead of crash-looping. Used by
+  `init`, `run` and every command.
+- **`doctor`** names a USB disk linked below USB 3 (`sensors.slow_usb_disks`, read from sysfs `speed`), with the
+  fix: a blue port, a USB 3 cable, no USB 2 hub.
+- **The caretaker's knowledge:**
+  - new faults `update-not-installed` (the fix: a separate `git worktree`, never touching the other checkout)
+    and `brain-drive-usb2`;
+  - the situation as seen on the Pi;
+  - two new incidents.
+
+Tests: `tests/test_pi_1014.py` (8). On the Pi this is not yet installed.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

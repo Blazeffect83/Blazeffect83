@@ -130,7 +130,7 @@ def test_without_a_child_process_a_thread_asks(frozen, tmp_path, monkeypatch):
     f.write_text("x")
     assert fsprobe.probe(f, read=True) == fsprobe.OK
     assert fsprobe.probe(frozen, read=True, timeout=0.3) == fsprobe.HANG
-    assert fsprobe.stuck() == 1 and isinstance(fsprobe._inflight[f"{frozen}|True"], threading.Thread)
+    assert fsprobe.stuck() == 1 and isinstance(fsprobe._inflight[f"{frozen}|True|False"], threading.Thread)
     wait_unstuck(frozen)
 
 
