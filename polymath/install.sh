@@ -37,6 +37,10 @@ while [ $# -gt 0 ]; do
 done
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
+# a step that fails names itself, so a stopped install never looks like "nothing happened"
+trap 'rc=$?; printf "\033[31merror:\033[0m the install stopped at line %s (exit status %s): %s\n" "$LINENO" "$rc" "$BASH_COMMAND" >&2' ERR
+# mounts from mountinfo: on a frozen drive even stat() of the mount point hangs (mountpoint, stat)
+is_mounted() { awk -v m="$1" '$5 == m {f = 1} END {exit !f}' /proc/self/mountinfo 2>/dev/null; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 run() { if [ "$DRY" = 1 ]; then printf '    + %s\n' "$*"; else "$@"; fi; }
@@ -83,11 +87,11 @@ if [ "$SYSTEM" = 1 ]; then
     [ "$(uname -m)" = aarch64 ] || warn "this is $(uname -m), not a 64-bit Raspberry Pi; continuing"
     grep -qsE 'bookworm|trixie' /etc/os-release || warn "not Raspberry Pi OS Bookworm or Trixie; continuing"
     if [ "$ALLOW_SD" = 1 ]; then
-        if ! mountpoint -q "$DATA" 2>/dev/null; then
+        if ! is_mounted "$DATA"; then
             warn "keeping the brain on the SD card ($DATA) with a small budget, as asked (--allow-sd-card);" \
                 "drives you plug in later are added to the brain automatically"
         fi
-    elif ! mountpoint -q "$DATA"; then
+    elif ! is_mounted "$DATA"; then
         die "$DATA is not a mounted filesystem. Mount the NVMe drive there first (see docs/OPERATIONS.md), \
 or pass --allow-sd-card to start on the SD card and add drives later."
     elif [ "$(stat -c %d "$DATA")" = "$(stat -c %d /)" ]; then
@@ -121,6 +125,8 @@ fi
 
 # ------------------------------------------------------------------ code and virtual environment
 OPT="$ROOT/opt/polymath"
+say "installing polymath v$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/pyproject.toml" | head -n 1) from $SRC" \
+    "(installed now: $(cat "$OPT/build.json" 2>/dev/null || echo nothing))"
 say "installing code to $OPT/src"
 run mkdir -p "$OPT/src"
 code_changed=0
@@ -293,10 +299,11 @@ if [ "$SYSTEM" = 1 ]; then
     if [ -n "$udev_changed" ] || [ "$units_changed" = 1 ]; then
         run udevadm control --reload-rules
     fi
+    # --no-block: an agent stuck on a frozen drive can take minutes to stop; the health wait below follows it
     if [ "$code_changed" = 1 ] || [ "$units_changed" = 1 ]; then
-        run systemctl restart polymath.service polymath-dashboard.service
+        run systemctl restart --no-block polymath.service polymath-dashboard.service
     else
-        run systemctl start polymath.service polymath-dashboard.service
+        run systemctl start --no-block polymath.service polymath-dashboard.service
     fi
     say "looking for drives already plugged in"
     run udevadm trigger --action=add --subsystem-match=block
@@ -314,4 +321,4 @@ if [ "$SYSTEM" = 1 ]; then
         fi
     fi
 fi
-say "done"
+say "done: installed $(cat "$OPT/build.json" 2>/dev/null || echo '?')"

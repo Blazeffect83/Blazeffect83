@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.6.2"
+updated_for = "0.6.3"
 updated = "2026-10-14"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -24,7 +24,8 @@ brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4,
 as_of = "2026-10-14"
 summary = """Seen on the Pi itself (through a Remote Control session, 06:13 UTC): /opt/polymath still runs v0.5.6 (build ca43ce6, 2026-10-13). None of v0.5.7, v0.6.0 or v0.6.1 was ever installed, because ~/Blazeffect83 is checked out on claude/aegis-agent (another project, with local uncommitted work that must not be lost), so git pull never fetched Polymath. The SSD is mounted but frozen: it runs at USB 2 speed (480M, usb-storage driver, behind the USB 2 hub), the kernel's usb-storage thread and polymath init sit in state D. init timed out, and every restart since fails with 'database is locked' (the stuck init holds the lock); the dashboard is killed by its watchdog. Power is fine (throttled=0x0). uhubctl is not installed."""
 waiting_on = [
-    "done 06:25 UTC: ~/polymath-src (Polymath's own clone, installed from before) fast-forwarded to v0.6.2; ~/Blazeffect83 untouched",
+    "06:40 UTC: Christian ran the manual sudo block; nothing changed (build.json still 0.5.6, agent 'activating', dashboard hung), cause not captured",
+    "now: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/rescue.sh (one command, ✓/✗ per step, log in ~/polymath-rescue.txt)",
     "Christian, with sudo: release the frozen drive, finish dpkg, install uhubctl, install v0.6.2 from that checkout",
     "Christian, at the Pi: move the DockCase to a blue USB 3 port (USB 3 cable, no USB 2 hub)",
 ]
@@ -36,6 +37,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.6.3"
+date = "2026-10-14"
+changes = """scripts/rescue.sh: one command that stops the services, frees a frozen brain drive (lazy unmounts from mountinfo, USB reset through sysfs, waits for stuck processes), finishes dpkg, adds uhubctl, installs the checkout and checks the result, every step time-limited with ✓/✗ and a log (~/polymath-rescue.txt). install.sh names the line it stops at, never waits on a frozen agent (--no-block) and reads mounts from mountinfo."""
+
 [[update]]
 version = "0.6.2"
 date = "2026-10-14"
@@ -206,18 +212,18 @@ self_healing = [
 ]
 steps = [
     { needs = "auto", do = "wait: storage heal resets the drive; the agent learns on standby meanwhile" },
-    { needs = "sudo", do = "release it by hand", command = "sudo systemctl stop polymath-heal.timer; sudo umount -l /srv/polymath; sudo umount -l /mnt/polymath/*; sudo usbreset 31db:9210; sleep 10; sudo systemctl restart 'polymath-volume@*' polymath polymath-dashboard; sudo systemctl start polymath-heal.timer" },
+    { needs = "approval", do = "free it and reinstall in one command (✓/✗ per step; log in ~/polymath-rescue.txt; installs uhubctl)", command = "cd ~/polymath-src/polymath && sudo ./scripts/rescue.sh" },
     { needs = "approval", do = "stop the freezes at their root: see brain-drive-uas and brain-drive-power" },
 ]
 since = "0.5.7"
-updated = "0.6.2"
+updated = "0.6.3"
 
 [[fault]]
 id = "update-not-installed"
 title = "An update was pulled but never installed (the Pi runs an older Polymath)"
 area = "install"
 codes = []
-patterns = ["is installed but the agent", "build.json", "not the Polymath branch"]
+patterns = ["is installed but the agent", "build.json", "not the Polymath branch", "still installed:", "nothing changed"]
 symptoms = [
     "polymath version (or /opt/polymath/build.json) shows an older version than the newest on GitHub",
     "git -C ~/Blazeffect83 branch shows a branch other than claude/polymath-agent (on 2026-10-14: claude/aegis-agent)",
@@ -235,11 +241,11 @@ checks = [
 self_healing = ["none: installing changes the system"]
 steps = [
     { needs = "you", do = "update Polymath's own clone (on this Pi: ~/polymath-src, on claude/polymath-agent; never the AEGIS checkout ~/Blazeffect83)", command = "git -C ~/polymath-src pull --ff-only origin claude/polymath-agent" },
-    { needs = "approval", do = "install it", command = "cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card" },
+    { needs = "approval", do = "install it, with every step checked and logged (a stuck drive is freed first)", command = "cd ~/polymath-src/polymath && sudo ./scripts/rescue.sh" },
     { needs = "you", do = "if that clone is missing, make a separate one (never switch another project's checkout)", command = "git clone -b claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git ~/polymath-src" },
 ]
 since = "0.6.2"
-updated = "0.6.2"
+updated = "0.6.3"
 
 [[fault]]
 id = "brain-drive-usb2"
@@ -608,4 +614,13 @@ what = "SSD at 480M, usb-storage and polymath init in state D; init timed out, t
 cause = "the SSD stalls on its USB 2 link; the stuck init keeps the database lock; cached probes did not see the freeze"
 fault = "brain-drive-usb2"
 fixed_in = "0.6.2"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "Christian ran the manual sudo block (release, dpkg, install.sh): nothing changed, build.json still 0.5.6."
+cause = "not captured: install.sh stopped before installing the code and the terminal output was lost; the agent stayed 'activating'"
+fault = "update-not-installed"
+fixed_in = "0.6.3"
 open = true

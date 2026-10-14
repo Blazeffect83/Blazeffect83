@@ -735,6 +735,47 @@ references.
 
 Tests: `tests/test_pi_1014.py` (8). On the Pi this is not yet installed.
 
+## 12n. One command to recover and install: `scripts/rescue.sh` (v0.6.3)
+
+**Why:** after v0.6.2, Christian ran the manual recovery-and-install block, and "nothing changed". `build.json`
+still said 0.5.6, the agent stayed `activating` and the dashboard hung. Nobody could see where it stopped.
+
+**Added:** `scripts/rescue.sh`, which runs six steps, each with a time limit and a ✓, – or ✗ line:
+1. versions;
+2. stop the services without waiting;
+3. free a frozen brain drive:
+   - stuck processes seen 3 times a second apart, or a direct read with no answer within 10 s;
+   - lazy unmounts of everything listed in mountinfo;
+   - a USB reset through sysfs `authorized`;
+   - waiting for the stuck processes to end, then for the drive to be mounted again;
+4. `dpkg --configure -a` and `uhubctl`;
+5. `install.sh` (its output shown live);
+6. the installed version, the services, `polymath doctor`.
+
+There is a summary at the end. The log is in `/var/log/polymath-rescue.log` and `~/polymath-rescue.txt`, and the
+exit status is 1 if any step failed.
+
+**install.sh:**
+- a failed step names its line and command (ERR trap);
+- the services restart with `--no-block`;
+- mounts are read from `/proc/self/mountinfo` (`mountpoint` stats a frozen mount);
+- a banner names the version being installed and the version installed now.
+
+**Tests:** `tests/test_rescue.py` (7). The real script runs against stand-in commands, a fake sysfs USB tree and
+a fake mountinfo in five scenarios:
+- frozen, seen by stuck processes;
+- frozen, seen only by the direct read;
+- healthy (nothing unmounted or reset);
+- the install fails (✗ and its last lines);
+- the drive does not come back (✗ and the standby note).
+
+Two more tests check that the root guard comes before any action, and the installer properties above.
+
+While I wrote these tests, a check that ran *after* the root guard executed the real script once inside the
+development container, which runs as root. Everything it created there (the `polymath` user, `/opt/polymath`,
+two packages) was removed. The test now checks the order without running the script as root. On the Pi this is
+not yet run.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
