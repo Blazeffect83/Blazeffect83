@@ -114,7 +114,8 @@ def test_begin_resume_and_discard(cfg):
     assert first["started"] == 100.0 and first["reason"] == "drive gone"
     assert standby.pending(cfg) is None  # nothing read yet: no database
     open_database(standby.standby_config(cfg).paths.db_path).close()
-    assert standby.pending(cfg)["id"] == first["id"]
+    found = standby.pending(cfg)
+    assert found is not None and found["id"] == first["id"]
     standby.discard(cfg)
     assert cfg.storage.standby_dir.is_dir() and not any(cfg.storage.standby_dir.iterdir())  # systemd's dir stays
 
@@ -159,8 +160,8 @@ def test_waiting_gives_up_after_the_standby_delay(cfg):
         t[0] += s
 
     stop = threading.Event()
-    assert not cli.wait_for_storage(cfg, notifier=SimpleNamespace(ready=lambda *a: None, watchdog=lambda **k: None),
-                                    stop=stop, sleep=tick, clock=lambda: t[0], timeout=60.0)  # fmt: skip
+    quiet: Any = SimpleNamespace(ready=lambda *a: None, watchdog=lambda **k: None)
+    assert not cli.wait_for_storage(cfg, notifier=quiet, stop=stop, sleep=tick, clock=lambda: t[0], timeout=60.0)
     assert not stop.is_set() and 60.0 <= t[0] <= 65.0
 
 
@@ -205,6 +206,7 @@ def test_folding_hands_everything_to_the_real_brain_once(cfg):
     assert main.scalar("SELECT state FROM frontier WHERE url = 'https://example.org/1'") == "done"  # not fetched again
     assert main.scalar("SELECT text FROM events WHERE kind = 'issue'") == "(on standby) feed X failed"
     line = main.one("SELECT text, detail FROM events WHERE kind = 'standby'")
+    assert line is not None
     assert "2 documents it read there are now in the real brain" in line["text"]
     assert json.loads(line["detail"])["status"] == "folded"
     assert not any(cfg.storage.standby_dir.iterdir())  # the standby brain is gone
@@ -224,7 +226,7 @@ def test_folding_resumes_where_it_stopped(cfg, monkeypatch):
         t[0] += 0.6
         return t[0]
 
-    monkeypatch.setattr(standby.time, "monotonic", slow)
+    monkeypatch.setattr(time, "monotonic", slow)  # the clock standby.py reads
     job_id = int(main.scalar("SELECT id FROM jobs WHERE kind = ?", (standby.FOLD_KIND,)))
     ctx = fold_ctx(cfg, main, job_id)
     ctx.time_left = lambda: 0.0
@@ -244,7 +246,9 @@ def test_folding_resumes_where_it_stopped(cfg, monkeypatch):
 def test_a_standby_brain_folded_already_is_only_cleared(cfg):
     standby_brain_with(cfg, [doc(1)])
     main = open_database(cfg.paths.db_path)
-    main.kv_set(standby.FOLDED_KEY, [standby.read_marker(cfg)["id"]])
+    mark = standby.read_marker(cfg)
+    assert mark is not None
+    main.kv_set(standby.FOLDED_KEY, [mark["id"]])
     standby.planner(SimpleNamespace(config=cfg, db=main, scheduler=Scheduler(main)))
     assert main.scalar("SELECT COUNT(*) FROM jobs") == 0 and not any(cfg.storage.standby_dir.iterdir())
     main.close()
@@ -289,7 +293,7 @@ def test_feed_face_and_doctor_show_the_standby_brain(cfg):
     agent.start()  # running: its heartbeat is fresh
     snapshot.planner(agent)
     st, _age = snapshot.read_status(snapshot.path_for(cfg))
-    assert st["standby"]["since"] and st["standby"]["documents"] == 0
+    assert st is not None and st["standby"]["since"] and st["standby"]["documents"] == 0
     head = ["".join(t for t, _ in line) for line in feed.status_lines(st)]
     assert "learning on standby" in head[0]
     assert "on the standby brain since" in "".join(t for t, _ in feed.now_line(st))

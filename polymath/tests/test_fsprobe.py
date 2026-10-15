@@ -165,7 +165,7 @@ def test_the_dashboard_answers_503_on_a_frozen_drive(tmp_path, monkeypatch):
     data = cfg.paths.data_dir
     monkeypatch.setattr(fsprobe, "probe", lambda p, **k: fsprobe.HANG if str(p).startswith(str(data))
                         else fsprobe.OK)  # fmt: skip
-    from tests.test_always_on import req
+    from tests.test_interface import req
 
     server = make_server(cfg, "127.0.0.1", 0)
     threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()

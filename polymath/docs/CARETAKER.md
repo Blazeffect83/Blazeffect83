@@ -151,6 +151,8 @@ goes only through the job allowlist or inbox ops:
 | Dashboard hung repeatedly | "The dashboard restarted 4 times today. Details: `journalctl -u polymath-dashboard -n 80`. Restart now: `sudo systemctl restart polymath-dashboard`." |
 | Agent crash loop | "The agent restarted 5 times in an hour; last error: … Run `polymath doctor`, then `journalctl -u polymath -n 80`." |
 | Brain drive missing | "The brain's drive is unplugged or not mounted: plug it in, and Polymath starts by itself." |
+| SD-card mode on (v0.7.0; `storage/sd_card`, once a day) | "Polymath runs on the SD card since 15 Oct (11.4 GB of room, 6.2 GB free). Once the SSD works again (blue USB 3 port, USB 3 cable, no USB 2 hub): `cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off`. What it learned on the SD card moves onto the SSD by itself." |
+| Brain drive keeps freezing | "Your SSD froze 3 times today. Until it is fixed, Polymath can run entirely on the SD card: `cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on` (nothing on the SSD is touched)." |
 | SD card failing (read-only remount, I/O errors) | "The SD card was remounted read-only, the usual sign it is failing. Back up now: `polymath backup`, then replace the card." |
 | Update installed but not running | "v0.6.0 is installed but the agent still runs v0.5.1: `sudo systemctl restart polymath`." |
 | Config changed | "/etc/polymath/polymath.toml changed at 14:02 (3 keys). If that was not you, check who has sudo." |

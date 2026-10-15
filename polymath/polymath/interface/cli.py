@@ -134,6 +134,10 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
             signal.signal(sig, handler)
     agent = build_agent(config)
     report_heal_actions(agent.db, config)
+    if config.storage.sd_only:  # the whole brain on the SD card (core.sdcard): marked, shown, and in the inbox
+        from polymath.core import sdcard
+
+        sdcard.start(config, agent.db)
     if time.time() - t0 > WAIT_CHECK_S:  # it had to wait: the caretaker's inbox keeps the record
         from polymath.core import issues
         from polymath.core.netstate import _duration

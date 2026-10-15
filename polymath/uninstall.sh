@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Remove Polymath. Learned data (/srv/polymath) and configuration (/etc/polymath) are KEPT unless --purge.
+# Remove Polymath. Learned data (/srv/polymath, and /var/lib/polymath: the SD-card and standby brains) and
+# configuration (/etc/polymath) are KEPT unless --purge.
 #
 #   sudo ./uninstall.sh                 stop and remove services, autostart entries and code
 #   sudo ./uninstall.sh --purge --yes   also delete all learned data, backups, configuration and the user
@@ -72,6 +73,6 @@ if [ "$PURGE" = 1 ]; then
         userdel polymath || true
     fi
 else
-    say "kept /srv/polymath (learned data, backups) and /etc/polymath; use --purge --yes to delete them"
+    say "kept /srv/polymath and /var/lib/polymath (learned data, backups) and /etc/polymath; use --purge --yes to delete them"
 fi
 say "done"

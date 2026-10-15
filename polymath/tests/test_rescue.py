@@ -100,6 +100,7 @@ def pi(tmp_path: Path):
         "RESCUE_POLYMATH": str(bin_dir / "fake-polymath"), "RESCUE_LOG": str(tmp_path / "rescue.log"),
         "RESCUE_PROBE_S": "1", "RESCUE_STUCK_WAIT_S": "2", "RESCUE_MOUNT_WAIT_S": "2", "RESCUE_CHECK_S": "2",
         "RESCUE_LOOK_S": "0.05", "RESCUE_UHUBCTL": "no-such-uhubctl",  # never what this machine has
+        "RESCUE_ETC": str(tmp_path / "etc"),  # never this machine's /etc/polymath
     }  # fmt: skip
 
     def run(*args: str, **extra: str) -> subprocess.CompletedProcess[str]:
@@ -167,6 +168,29 @@ def test_a_drive_that_does_not_come_back_is_named(pi):
     assert "✗ the drive did not come back within 2 s" in out.stdout and "standby brain" in out.stdout
     assert "✗ could not install uhubctl (optional" in out.stdout
     assert out.returncode == 1
+
+
+def test_in_sd_card_mode_a_frozen_drive_is_let_go_of_not_waited_for(pi, tmp_path):
+    run, calls, state, usbdev = pi
+    (tmp_path / "etc" / "polymath.d").mkdir(parents=True)
+    (tmp_path / "etc" / "polymath.d" / "sd-card.toml").write_text("[storage]\nsd_only = true\n")
+    (state / "stuck").touch()
+    out = run()
+    assert out.returncode == 0, out.stdout
+    assert "switched off the USB device of /dev/sda (31db:9210): SD-card mode leaves it alone" in out.stdout
+    assert usbdev.joinpath("authorized").read_text() == "0"  # stays off: not reset and switched back on
+    assert "✓ SD-card mode: let go of the drive" in out.stdout and "did not come back" not in out.stdout
+    assert "polymath-volume@" not in calls.read_text()  # the drive is not asked back
+
+
+def test_in_sd_card_mode_with_no_drive_there_is_nothing_to_do(pi, tmp_path):
+    run, calls, _state, _ = pi
+    (tmp_path / "etc" / "polymath.d").mkdir(parents=True)
+    (tmp_path / "etc" / "polymath.d" / "sd-card.toml").write_text("[storage]\nsd_only = true\n")
+    (tmp_path / "mountinfo").write_text("")
+    out = run()
+    assert "– SD-card mode: the brain is on the SD card and no drive is mounted" in out.stdout
+    assert "umount" not in calls.read_text()
 
 
 def test_it_refuses_to_run_without_root(tmp_path):

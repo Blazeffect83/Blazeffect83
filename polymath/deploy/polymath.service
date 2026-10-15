@@ -39,8 +39,10 @@ RuntimeDirectory=polymath
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # /var/lib/polymath/standby (SD card): the standby brain it learns on while the brain's drive is gone
-# (core.standby, [storage] standby*); emptied once what it read has moved onto the drive
-StateDirectory=polymath/standby
+# (core.standby, [storage] standby*); emptied once what it read has moved onto the drive.
+# /var/lib/polymath/brain (SD card): the whole brain in SD-card mode (core.sdcard, scripts/sd-card-mode.sh); emptied
+# once what it learned there has moved onto the drive
+StateDirectory=polymath/standby polymath/brain
 StateDirectoryMode=0750
 
 # Leave half the CPU and a quarter of the memory to the desktop (live feed terminal, browser).

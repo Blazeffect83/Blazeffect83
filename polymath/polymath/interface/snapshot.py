@@ -68,6 +68,11 @@ def planner(agent: Any) -> None:
         on_standby = standby.status(agent.config, agent.db)
         if on_standby:  # learning on the standby brain on the SD card: the feed and doctor say so
             data["status"]["standby"] = on_standby
+        from polymath.core import sdcard
+
+        on_sd = sdcard.status(agent.config, agent.db)
+        if on_sd:  # SD-card mode: the whole brain on the SD card (room, free space, what it read there)
+            data["status"]["sd_card"] = on_sd
         w.cursor = str(data.get("cursor") or "") or None
         for ev in data.get("events") or []:
             w.seq += 1

@@ -57,6 +57,12 @@ implemented here and learns only from data the agent downloads itself.
     *standby brain* on the SD card and keeps reading (feeds, the web, single articles; no big dumps, at most
     3 GB, wear-guarded). When the drive is back, everything it read moves onto it by itself, and the real brain
     reads it again with all it knows. The feed shows `learning on standby`.
+  - **SD-card mode, for a drive that cannot be trusted** (v0.7.0): `sudo ./scripts/sd-card-mode.sh on` runs the
+    whole brain on the SD card. It lets go of the SSD and switches its USB device off, and the SSD's brain is not
+    touched. It carries on from the copy the SD card kept when the brain moved onto the SSD, installs, and checks
+    that it runs. Everything runs as usual, dumps included, inside what the card can give (all but 2 GB). The feed
+    shows `learning on the SD card`. Once the SSD works again, `sudo ./scripts/sd-card-mode.sh off` switches back,
+    and what it learned on the SD card moves onto the SSD by itself.
   - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
     Each one is matched against the caretaker's knowledge of known problems and their fixes
     (`polymath caretaker`), which every update keeps current (v0.6.1).
@@ -93,7 +99,9 @@ implemented here and learns only from data the agent downloads itself.
 ## Install (Raspberry Pi OS Bookworm, 64-bit)
 
 Best with an NVMe drive mounted at `/srv/polymath` ([docs/OPERATIONS.md](docs/OPERATIONS.md#nvme)). No drive
-yet? Use `sudo ./install.sh --allow-sd-card`, then plug drives in later; they are added by themselves. Then:
+yet? Use `sudo ./install.sh --allow-sd-card`, then plug drives in later; they are added by themselves. Is a drive
+there, but keeps freezing? Run everything on the SD card until it is fixed: `sudo ./scripts/sd-card-mode.sh on`
+([docs/OPERATIONS.md](docs/OPERATIONS.md#sd-card-mode)). Then:
 
 ```bash
 git clone --branch claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git

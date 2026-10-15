@@ -7,6 +7,9 @@
 #   sudo ./install.sh --dry-run       print what would be done
 #   ./install.sh --root /tmp/stage    stage all files under a directory (no system changes; for testing)
 #
+# In SD-card mode (scripts/sd-card-mode.sh on) the brain runs on the SD card (/var/lib/polymath/brain) and the SSD is
+# left alone: the installer then never touches /srv/polymath, and needs no --allow-sd-card.
+#
 # Result: polymath.service (the agent) and polymath-dashboard.service run at boot, the desktop logs in
 # automatically and opens a terminal with the live feed of what it is learning. Any drive plugged in
 # (USB SSD/HDD/stick, NVMe) is added to the brain's storage pool.
@@ -22,7 +25,7 @@ DATA=/srv/polymath
 ALLOW_SD=0
 MOUNT_ROOT=/mnt/polymath
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
@@ -41,6 +44,9 @@ say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 trap 'rc=$?; printf "\033[31merror:\033[0m the install stopped at line %s (exit status %s): %s\n" "$LINENO" "$rc" "$BASH_COMMAND" >&2' ERR
 # mounts from mountinfo: on a frozen drive even stat() of the mount point hangs (mountpoint, stat)
 is_mounted() { awk -v m="$1" '$5 == m {f = 1} END {exit !f}' /proc/self/mountinfo 2>/dev/null; }
+# SD-card mode (scripts/sd-card-mode.sh wrote its drop-in): the brain is on the SD card, the SSD is not used
+sd_mode() { grep -qsE '^[[:space:]]*sd_only[[:space:]]*=[[:space:]]*true' "$ROOT/etc/polymath/polymath.d/"*.toml; }
+SD_DIR=/var/lib/polymath/brain
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 run() { if [ "$DRY" = 1 ]; then printf '    + %s\n' "$*"; else "$@"; fi; }
@@ -86,7 +92,9 @@ PY
 if [ "$SYSTEM" = 1 ]; then
     [ "$(uname -m)" = aarch64 ] || warn "this is $(uname -m), not a 64-bit Raspberry Pi; continuing"
     grep -qsE 'bookworm|trixie' /etc/os-release || warn "not Raspberry Pi OS Bookworm or Trixie; continuing"
-    if [ "$ALLOW_SD" = 1 ]; then
+    if sd_mode; then
+        say "SD-card mode is on: the brain runs on the SD card ($SD_DIR); $DATA and the SSD are left alone"
+    elif [ "$ALLOW_SD" = 1 ]; then
         if ! is_mounted "$DATA"; then
             warn "keeping the brain on the SD card ($DATA) with a small budget, as asked (--allow-sd-card);" \
                 "drives you plug in later are added to the brain automatically"
@@ -185,7 +193,9 @@ else
     fi
 fi
 
-if [ "$ALLOW_SD" = 1 ] && [ "$DRY" = 0 ]; then
+if sd_mode; then
+    say "SD-card mode: its settings come from $ROOT/etc/polymath/polymath.d (polymath.toml is not changed)"
+elif [ "$ALLOW_SD" = 1 ] && [ "$DRY" = 0 ]; then
     # The brain may live on the root filesystem; size its budget to the card (≤ 15 GB, keeping 10 GB free).
     probe="$ROOT$DATA"
     while [ ! -e "$probe" ]; do probe="$(dirname "$probe")"; done
@@ -205,12 +215,21 @@ elif [ "$ALLOW_SD" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ data directory
-# a brain drive that dropped out leaves a dead mount here (Input/output error): warn and carry on, so the code and
-# services still update; the agent then waits for its drive and `polymath doctor` says what to do
-run mkdir -p "$ROOT$DATA" || warn "cannot use $DATA right now (the brain's drive may have dropped out): reboot, then run this installer again"
-if [ "$SYSTEM" = 1 ]; then
-    bounded chown polymath:polymath "$ROOT$DATA" || warn "cannot change the owner of $DATA (the brain's drive dropped out or froze): Polymath waits for it and brings it back by itself (polymath doctor shows how it goes)"
-    bounded chmod 0750 "$ROOT$DATA" || true
+if sd_mode; then
+    # the SD-card brain (systemd also makes it when the agent starts: StateDirectory); /srv/polymath is not touched
+    run mkdir -p "$ROOT$SD_DIR/db"
+    if [ "$SYSTEM" = 1 ]; then
+        run chown -R polymath:polymath "$ROOT$SD_DIR"
+        run chmod 0750 "$ROOT$SD_DIR"
+    fi
+else
+    # a brain drive that dropped out leaves a dead mount here (Input/output error): warn and carry on, so the code and
+    # services still update; the agent then waits for its drive and `polymath doctor` says what to do
+    run mkdir -p "$ROOT$DATA" || warn "cannot use $DATA right now (the brain's drive may have dropped out): reboot, then run this installer again"
+    if [ "$SYSTEM" = 1 ]; then
+        bounded chown polymath:polymath "$ROOT$DATA" || warn "cannot change the owner of $DATA (the brain's drive dropped out or froze): Polymath waits for it and brings it back by itself (polymath doctor shows how it goes)"
+        bounded chmod 0750 "$ROOT$DATA" || true
+    fi
 fi
 
 # ------------------------------------------------------------------ systemd units and journald limits

@@ -201,8 +201,13 @@ class Healer:
         cfg = self.config.storage
         st = self.load()
         now = self.clock()
+        if not cfg.heal:  # switched off (SD-card mode switches it off: no drive is touched, not even looked at)
+            if st.missing_since:
+                st.missing_since = 0.0
+                self.save(st)
+            return {"brain": "sd-card" if cfg.sd_only else "not watched", "action": "none"}
         state = brain_state(self.config)
-        if not cfg.heal or state in {"healthy", "local"}:
+        if state in {"healthy", "local"}:
             if st.missing_since:
                 st.missing_since = 0.0
                 self.save(st)

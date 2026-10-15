@@ -15,28 +15,32 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.6.3"
-updated = "2026-10-14"
+updated_for = "0.7.0"
+updated = "2026-10-15"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
 
 [situation]
-as_of = "2026-10-14"
-summary = """Seen on the Pi itself (through a Remote Control session, 06:13 UTC): /opt/polymath still runs v0.5.6 (build ca43ce6, 2026-10-13). None of v0.5.7, v0.6.0 or v0.6.1 was ever installed, because ~/Blazeffect83 is checked out on claude/aegis-agent (another project, with local uncommitted work that must not be lost), so git pull never fetched Polymath. The SSD is mounted but frozen: it runs at USB 2 speed (480M, usb-storage driver, behind the USB 2 hub), the kernel's usb-storage thread and polymath init sit in state D. init timed out, and every restart since fails with 'database is locked' (the stuck init holds the lock); the dashboard is killed by its watchdog. Power is fine (throttled=0x0). uhubctl is not installed."""
+as_of = "2026-10-15"
+summary = """The SSD still cannot be trusted: on 2026-10-14 it was seen frozen at USB 2 speed (480M) with polymath init and usb-storage stuck in state D, and /opt/polymath still ran v0.5.6. No rescue.sh run has been reported. On 2026-10-15 Christian asked to run everything off the SD card until the SSD is solved (about 15 GB of room instead of 1 TB). v0.7.0 adds SD-card mode for that: scripts/sd-card-mode.sh on lets go of the SSD (unmounts it, switches its USB device off), starts the brain on the SD card (/var/lib/polymath/brain) from the copy the SD card kept when the brain moved onto the SSD (/srv/polymath-sd-copy, renamed, not copied), installs v0.7.0 and checks the agent runs there. The brain on the SSD is not touched; what Polymath learns on the SD card moves onto the SSD by itself after sd-card-mode.sh off."""
 waiting_on = [
-    "06:40 UTC: Christian ran the manual sudo block; nothing changed (build.json still 0.5.6, agent 'activating', dashboard hung), cause not captured",
-    "now: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/rescue.sh (one command, ✓/✗ per step, log in ~/polymath-rescue.txt)",
-    "Christian, with sudo: release the frozen drive, finish dpkg, install uhubctl, install v0.6.2 from that checkout",
-    "Christian, at the Pi: move the DockCase to a blue USB 3 port (USB 3 cable, no USB 2 hub)",
+    "now, Christian with sudo: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/sd-card-mode.sh on   (✓/✗ per step; log in ~/polymath-sd-card.txt)",
+    "then: send the summary or ~/polymath-sd-card.txt if anything shows ✗",
+    "later, at the Pi: fix the SSD (blue USB 3 port, USB 3 cable, no USB 2 hub; its own power if it still drops), then: sudo ./scripts/sd-card-mode.sh off",
 ]
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
+    "sd-card-mode",
     "update-not-installed",
     "brain-drive-usb2",
-    "brain-mount-frozen",
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.7.0"
+date = "2026-10-15"
+changes = """SD-card mode: the whole brain runs on the SD card (/var/lib/polymath/brain, storage.sd_only) while the SSD cannot be trusted. scripts/sd-card-mode.sh on|off|status switches it with one drop-in (/etc/polymath/polymath.d/sd-card.toml; polymath.toml is never edited): on stops everything, unmounts the SSD and switches its USB device off, starts the SD-card brain from the SD card's old copy (renamed, not copied) or empty, installs and checks; off switches the SSD back on and the mode off, and keeps SD-card mode if the SSD does not come back. In SD-card mode no drive is touched (no pool, no move or mount of the brain's drive, no heal, no standby), the budget is what the card can give less 2 GB, two backups are kept, and the feed, doctor and the inbox (storage/sd_card) say so. After off, the fold job (storage.fold_standby) moves what was learned on the SD card onto the SSD, then removes the SD-card brain. Configuration drop-ins (polymath.d/*.toml) are new; scripts/ops-lib.sh holds what rescue.sh and sd-card-mode.sh share; rescue.sh lets go of a drive in SD-card mode instead of waiting for it."""
+
 [[update]]
 version = "0.6.3"
 date = "2026-10-14"
@@ -214,9 +218,10 @@ steps = [
     { needs = "auto", do = "wait: storage heal resets the drive; the agent learns on standby meanwhile" },
     { needs = "approval", do = "free it and reinstall in one command (✓/✗ per step; log in ~/polymath-rescue.txt; installs uhubctl)", command = "cd ~/polymath-src/polymath && sudo ./scripts/rescue.sh" },
     { needs = "approval", do = "stop the freezes at their root: see brain-drive-uas and brain-drive-power" },
+    { needs = "approval", do = "until the SSD is fixed: run everything on the SD card (the SSD is let go of and switched off; nothing on it is touched)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
 ]
 since = "0.5.7"
-updated = "0.6.3"
+updated = "0.7.0"
 
 [[fault]]
 id = "update-not-installed"
@@ -266,9 +271,10 @@ checks = ["lsusb -t", "cat /sys/bus/usb/devices/*/speed"]
 self_healing = ["doctor names it; storage heal resets the drive when it stalls; the standby brain keeps learning"]
 steps = [
     { needs = "you", do = "move the DockCase to a blue USB 3 port, with a USB 3 cable and no USB 2 hub; check: lsusb -t shows it under 5000M" },
+    { needs = "approval", do = "until then: run everything on the SD card", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
 ]
 since = "0.6.2"
-updated = "0.6.2"
+updated = "0.7.0"
 
 [[fault]]
 id = "brain-drive-uas"
@@ -346,20 +352,89 @@ updated = "0.6.0"
 
 [[fault]]
 id = "standby-fold-failed"
-title = "What the standby brain read could not be moved to the drive"
+title = "What the standby or SD-card brain learned could not be moved to the drive"
 area = "jobs"
 codes = ["jobs/dead:storage.fold_standby", "jobs/permanent:storage.fold_standby"]
 patterns = ["storage.fold_standby"]
-symptoms = ["a problem line: 'storage.fold_standby …'", "/var/lib/polymath/standby still holds a brain after the drive is back"]
-causes = [{ cause = "an error while folding (disk full on the drive, a damaged standby database)", prior = 1.0 }]
-checks = ["journalctl -u polymath -n 80 | grep -i standby", "df -h /srv/polymath"]
-self_healing = ["the fold is resumable and idempotent: requeueing it continues where it stopped; the standby brain is kept until it is done"]
+symptoms = [
+    "a problem line: 'storage.fold_standby …'",
+    "/var/lib/polymath/standby or /var/lib/polymath/brain still holds a brain long after the drive is back",
+]
+causes = [{ cause = "an error while folding (disk full on the drive, a damaged standby or SD-card database)", prior = 1.0 }]
+checks = ["journalctl -u polymath -n 80 | grep -iE 'standby|folded'", "df -h /srv/polymath"]
+self_healing = ["the fold is resumable and idempotent: requeueing it continues where it stopped; the standby or SD-card brain is kept until it is done"]
 steps = [
     { needs = "caretaker", do = "requeue the fold job once the cause is gone" },
     { needs = "sudo", do = "send the log", command = "journalctl -u polymath -n 120 --no-pager" },
 ]
 since = "0.6.0"
-updated = "0.6.0"
+updated = "0.7.0"
+
+[[fault]]
+id = "sd-card-mode"
+title = "SD-card mode: the whole brain runs on the SD card (the SSD is not used)"
+area = "storage"
+codes = ["storage/sd_card"]
+patterns = ["SD-card mode", "sd_only", "learning on the SD card"]
+symptoms = [
+    "the feed: 'learning on the SD card' and '(SD-card mode since …: the brain is on the SD card, N GB of room; the SSD is off)'",
+    "doctor: sd card ! 'SD-card mode since …: the whole brain runs on the SD card'",
+    "a problem line once a day: 'SD-card mode since …'",
+]
+causes = [
+    { cause = "switched on on purpose (scripts/sd-card-mode.sh on) because the SSD keeps freezing or dropping out", prior = 1.0 },
+]
+checks = [
+    "cd ~/polymath-src/polymath && ./scripts/sd-card-mode.sh status",
+    "df -h /var/lib/polymath/brain   (the SD card's free space)",
+    "ls /etc/polymath/polymath.d/   (sd-card.toml: the switch)",
+]
+self_healing = [
+    "it learns as usual, dumps included, inside what the card can give (what it uses + free − 2 GB); the guard and eviction keep 2 GB free",
+    "no drive is touched: no storage pool, no moving or mounting the brain's drive, no storage heal, no standby brain",
+    "the SD card wear guard watches its writes (saver mode when it writes too much); two nightly backups are kept",
+    "after sd-card-mode.sh off, what it learned on the SD card moves onto the SSD by itself (the fold job), then the SD-card brain is removed",
+]
+steps = [
+    { needs = "auto", do = "keep learning on the SD card; nothing to do while the SSD is being fixed" },
+    { needs = "you", do = "fix the SSD at the Pi: a blue USB 3 port, a USB 3 cable, no USB 2 hub; a powered hub if it still drops out (see brain-drive-usb2, brain-drive-uas, brain-drive-power)" },
+    { needs = "approval", do = "back to the SSD once it works (if the SSD does not come back, SD-card mode simply stays on)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off" },
+]
+since = "0.7.0"
+updated = "0.7.0"
+
+[[fault]]
+id = "sd-card-mode-switch"
+title = "Switching SD-card mode on or off did not finish"
+area = "install"
+codes = []
+patterns = ["sd-card-mode", "SD-card mode stays on", "has not said it is on the SD card", "polymath-sd-card"]
+symptoms = [
+    "sd-card-mode.sh shows ✗ lines and 'something above is marked ✗: send the log'",
+    "off: 'the SSD did not come back within 120 s: SD-card mode stays on, nothing else changed'",
+    "on: 'the agent runs, but has not said it is on the SD card'",
+]
+causes = [
+    { cause = "off: the SSD is still not answering (unplugged, USB 2 link, power)", prior = 0.5 },
+    { cause = "on: the install stopped (see install-interrupted) or the agent did not start", prior = 0.3 },
+    { cause = "on: a process stuck on the frozen SSD holds on (a reboot clears it; SD-card mode stays on)", prior = 0.2 },
+]
+checks = [
+    "cat ~/polymath-sd-card.txt   (the whole run, every command)",
+    "./scripts/sd-card-mode.sh status",
+    "journalctl -u polymath -n 60 --no-pager",
+]
+self_healing = [
+    "off puts SD-card mode back by itself when the SSD does not come back: the agent keeps learning on the SD card",
+    "on is safe to run again: the SD-card brain carries on, nothing is moved twice",
+]
+steps = [
+    { needs = "you", do = "send ~/polymath-sd-card.txt (or a photo of its summary)" },
+    { needs = "approval", do = "run it again (it carries on where it stopped)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
+    { needs = "approval", do = "if a process stays stuck on the old SSD: reboot (SD-card mode stays on, the SSD is not mounted again)", command = "sudo reboot" },
+]
+since = "0.7.0"
+updated = "0.7.0"
 
 [[fault]]
 id = "heal-actions"
@@ -488,12 +563,21 @@ area = "body"
 codes = ["body/disk:*"]
 patterns = ["GB free on the data disk"]
 symptoms = ["the feed: 'slowed: low on disk'", "a problem line: 'only N GB free on the data disk'"]
-causes = [{ cause = "the brain outgrew its disk budget, or other files filled the disk", prior = 1.0 }]
-checks = ["df -h /srv/polymath", "polymath storage list"]
-self_healing = ["it evicts the least valuable data first and spills documents onto plugged-in drives"]
-steps = [{ needs = "you", do = "plug in another drive: it becomes extra brain space by itself" }]
+causes = [
+    { cause = "the brain outgrew its disk budget, or other files filled the disk", prior = 0.7 },
+    { cause = "SD-card mode: the card is small (about 15 GB) and other files on it grew (logs, packages)", prior = 0.3 },
+]
+checks = ["df -h /srv/polymath /var/lib/polymath/brain", "polymath storage list", "sudo du -sh /var/lib/polymath/* /var/log"]
+self_healing = [
+    "it evicts the least valuable data first and spills documents onto plugged-in drives",
+    "in SD-card mode: no drives; eviction keeps the card 2 GB free (oldest feeds and web pages go first, facts stay)",
+]
+steps = [
+    { needs = "you", do = "plug in another drive: it becomes extra brain space by itself (not in SD-card mode)" },
+    { needs = "sudo", do = "in SD-card mode: see what else fills the card", command = "sudo du -xh --max-depth=2 / 2>/dev/null | sort -h | tail -20" },
+]
 since = "0.5.2"
-updated = "0.5.2"
+updated = "0.7.0"
 
 [[fault]]
 id = "body-read-only"
@@ -623,4 +707,13 @@ what = "Christian ran the manual sudo block (release, dpkg, install.sh): nothing
 cause = "not captured: install.sh stopped before installing the code and the terminal output was lost; the agent stayed 'activating'"
 fault = "update-not-installed"
 fixed_in = "0.6.3"
+open = true
+
+[[history]]
+date = "2026-10-15"
+version = "0.5.6"
+what = "Christian: 'still not working'; asked to run the agent and everything else off the SD card until the SSD is solved (about 15 GB instead of 1 TB)."
+cause = "the SSD keeps freezing on its USB 2 link; no rescue run has been reported"
+fault = "sd-card-mode"
+fixed_in = "0.7.0"
 open = true

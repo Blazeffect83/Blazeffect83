@@ -250,6 +250,18 @@ then the most facts, an article, and PageRank.
   answers. On the real brain, `standby.planner` queues `storage.fold_standby`: standby documents go through
   `DocumentStore.add` (dedup, state `new`, so the real brain perceives them again), then Wikidata records,
   crawled pages and issues; the standby id is recorded in kv `standby_folded` and the files are removed.
+- **SD-card mode** (`core/sdcard.py`, v0.7.0): `storage.sd_only`, set by a configuration drop-in
+  (`/etc/polymath/polymath.d/sd-card.toml`, merged by `load_config` after `polymath.toml`), makes
+  `config.apply_sd_only` move the data directory to `storage.sd_dir` (`/var/lib/polymath/brain`, a systemd
+  `StateDirectory`) and switch off everything that touches a drive: adoption, formatting, `move_home`, `heal`, the
+  standby brain, the pool (`mount_root` points nowhere). The budget is `config.sd_budget`: the brain's bytes plus
+  the card's free space less `sd_keep_free_gb`, so it stays constant as the brain grows; two backups. All job kinds
+  run. At start, `sdcard.start` writes the marker `sd-card.json` (`fold_after`: the newest document it started
+  with), kv `sd_card` (the feed and dashboard) and an issue `storage/sd_card`. Once the mode is off, the brain is
+  an `Away` brain for `standby.planner`, like the standby one: `fold_job` takes documents after `fold_after`,
+  and Wikidata records, crawled pages and issues since `started`, then removes it. `scripts/sd-card-mode.sh`
+  does the switching (drop-in, unmount, USB `authorized=0`, renaming the SD card's old copy into place, install,
+  checks); `scripts/ops-lib.sh` holds what it shares with `rescue.sh`.
 - **Caretaker knowledge** (`agents/faults.toml` + `agents/faults.py`, v0.6.1): known faults (codes, words,
   symptoms, causes with priors, checks, self-healing, steps tagged by who may act), the situation on the Pi,
   the incident history and per-release updates. `issues.report` tags each problem with its faults

@@ -776,6 +776,71 @@ development container, which runs as root. Everything it created there (the `pol
 two packages) was removed. The test now checks the order without running the script as root. On the Pi this is
 not yet run.
 
+## 12o. SD-card mode: the whole brain on the SD card (v0.7.0)
+
+**Why:** the SSD still freezes on its USB 2 link. On 2026-10-15 Christian asked to run the agent and everything
+else off the SD card until the SSD is solved: about 15 GB of room instead of 1 TB.
+
+**Added:**
+- **configuration drop-ins**: `/etc/polymath/polymath.d/*.toml`, merged after `polymath.toml` in name order;
+- **`storage.sd_only`** (`config.apply_sd_only`):
+  - the brain moves to `storage.sd_dir` (`/var/lib/polymath/brain`, a systemd state directory);
+  - nothing touches a drive: no adoption, no formatting, no move or mount of the brain's drive, no heal, no standby,
+    and the pool sees no drives;
+  - the budget is the brain's bytes plus the card's free space, less `sd_keep_free_gb` (2 GB);
+  - two backups are kept, and every job kind runs;
+- **`core/sdcard.py`**: the marker (with `fold_after`), kv `sd_card` for the feed and the dashboard, the issue
+  `storage/sd_card`, and the snapshot status;
+- **folding back** (`core/standby.py`): the planner and `fold_job` handle *away* brains, the standby brain and the
+  SD-card brain. From the SD-card brain they take only what is new: documents after `fold_after`, and Wikidata
+  records, crawled pages and issues since `started`;
+- **what you see**: the feed shows `learning on the SD card` and an SD-card note on the NOW line; doctor shows an
+  `sd card` line and `drives: none used`; heal reports `sd-card` without probing anything;
+- **`scripts/sd-card-mode.sh on|off|status`**, with `scripts/ops-lib.sh` shared with `rescue.sh`. In SD-card mode,
+  `rescue.sh` lets go of a stuck drive and keeps its USB device off, instead of waiting for it to come back;
+- **`install.sh`**: in SD-card mode it never touches `/srv/polymath` or edits `polymath.toml`;
+- **the units**: `StateDirectory=polymath/standby polymath/brain`, and the dashboard may write next to the
+  SD-card database;
+- **the caretaker's knowledge**: v0.7.0, the faults `sd-card-mode` and `sd-card-mode-switch`, updated remedies, the
+  situation and the history.
+
+**Tests:**
+- `tests/test_sdcard.py` (15):
+  - drop-ins: order, typos refused, `.off` files ignored;
+  - every SD-card setting and its limits, and the budget arithmetic with a faked `disk_usage`;
+  - every job kind registered;
+  - heal and attach touch nothing (any probe fails the test);
+  - `polymath run` marks the brain and reports to the caretaker;
+  - folding: only what is new, never into itself, a done fold only clears;
+  - a full cycle with real agents: SSD brain, then SD-card mode, then back, with the pages learned on the SD card
+    now on the SSD;
+  - the feed, the dashboard's feed status and doctor;
+  - the units, and a staged `install.sh` in SD-card mode.
+- `tests/test_sd_card_mode.py` (13): the real script against stand-in commands (systemctl, umount, udevadm, ps),
+  a fake sysfs USB tree, a fake mountinfo and temporary directories for everything it writes:
+  - `on` with a frozen SSD: lazy unmount, USB device off, the old copy checked and renamed into place, install,
+    the agent on the SD card;
+  - `on` with a healthy SSD: a clean unmount;
+  - `--fresh` with `--keep-ssd-on`;
+  - a damaged copy: kept, not used;
+  - a copy on another filesystem: never copied;
+  - running `on` again after a reboot;
+  - an agent that does not report the SD card;
+  - a failed install;
+  - `off` with the SSD back;
+  - `off` with the SSD still gone, so SD-card mode stays on;
+  - `status` without sudo;
+  - the root guard comes before any action, and nothing formats or deletes.
+- `tests/test_rescue.py` (+2): SD-card mode in the rescue.
+
+The newer `mypy` (2.4) in the development container flagged 18 typing slips in older tests; they are fixed.
+
+**Result (development container, x86_64, Python 3.11):** 679 tests pass and 1 is skipped, at 94 % coverage
+(pytest exit 0). `ruff`, `ruff format` and `mypy --strict` (package, tests, scripts) are clean, and ShellCheck 0.11
+reports no warnings on the three scripts.
+
+**Not yet run on the Pi.** The script has only run against stand-ins here.
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

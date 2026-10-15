@@ -81,6 +81,27 @@ def brain_check(data: Path) -> Check:
     return Check("brain", OK, f"at {data}")
 
 
+def sd_card_check(config: Config, st: dict[str, Any] | None = None) -> Check:
+    """SD-card mode: since when, how much room, and how to go back to the SSD. The agent's own snapshot says it
+    best (as you, the brain's directory cannot be read); the configuration and the marker otherwise."""
+    from polymath.core import sdcard
+
+    sd = (st or {}).get("sd_card") or {}
+    mark = sdcard.read_marker(config) or {}
+    started = sd.get("since") or mark.get("started")
+    since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(started))) if started else "now"
+    room = float(sd.get("budget_gb") or config.body.disk_budget_gb)
+    try:
+        free = f"; {shutil.disk_usage(config.paths.data_dir).free / 1e9:.1f} GB free on the card"
+    except OSError:
+        free = ""
+    new = f"; {int(sd['documents_new']):,} documents read here so far" if sd.get("documents_new") else ""
+    return Check("sd card", WARN, f"SD-card mode since {since}: the whole brain runs on the SD card "
+                 f"({room:.1f} GB of room{free}{new}); the SSD is not used",
+                 "once the SSD works again: cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off   "
+                 "(what it learned here moves onto the SSD by itself)")  # fmt: skip
+
+
 def http_health(url: str, timeout: float = 6.0) -> tuple[str, float, dict[str, Any] | None]:
     """(``answered`` | ``timeout`` | ``refused`` | ``error: …``, seconds, body) for ``<url>/health``."""
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -116,9 +137,11 @@ def run_checks(
 
     # where the brain lives
     checks.append(brain_check(data))
-
     # the agent, through its own snapshot (needs nothing but /run)
     st, age = snapshot.read_status(snapshot.path_for(config))
+    if config.storage.sd_only:  # SD-card mode (core.sdcard): chosen, but the SSD is out of use until it is switched off
+        checks.append(sd_card_check(config, st))
+
     agent_up = st is not None and age is not None and age <= snapshot.STALE_S
     if st is None:
         checks.append(Check("agent", BAD, "not running (no live snapshot in /run/polymath)", restart_agent))
@@ -192,6 +215,8 @@ def run_checks(
         mounted = sorted(d.name for d in root.iterdir() if os.path.ismount(d))
     except OSError:
         mounted = []
+    if config.storage.sd_only:
+        checks.append(Check("drives", OK, "none used: SD-card mode (the SSD is left alone)"))
     from polymath.body.sensors import DEAD_DRIVE_FIX, SLOW_DRIVE_FIX, slow_usb_disks, unresponsive_usb_disks
 
     for name in unresponsive_usb_disks():
@@ -200,7 +225,9 @@ def run_checks(
     for name, mbps in slow_usb_disks():
         checks.append(Check("drives", WARN, f"/dev/{name} runs at USB 2 speed ({mbps} Mbit/s), not USB 3",
                             SLOW_DRIVE_FIX))  # fmt: skip
-    if mounted:
+    if config.storage.sd_only:
+        pass
+    elif mounted:
         checks.append(Check("drives", OK, f"{len(mounted)} mounted: {', '.join(m[:12] for m in mounted)}"))
     else:
         checks.append(Check("drives", WARN, f"no drive mounted under {root}",
@@ -225,8 +252,10 @@ def run_checks(
         free = None
     if free is not None:
         low = free < config.body.disk_min_free_gb
-        checks.append(Check("disk", WARN if low else OK, f"{free:,.0f} GB free",
-                            "it frees space by itself; plug in a drive for more room" if low else ""))  # fmt: skip
+        more = ("it frees space by itself (oldest feeds and web pages first)" if config.storage.sd_only
+                else "it frees space by itself; plug in a drive for more room")  # fmt: skip
+        shown = f"{free:,.1f}" if free < 10 else f"{free:,.0f}"
+        checks.append(Check("disk", WARN if low else OK, f"{shown} GB free", more if low else ""))
     return checks
 
 

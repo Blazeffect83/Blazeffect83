@@ -44,8 +44,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 # The database is opened read-only; SQLite's WAL index (-shm) still needs a writable directory.
 ReadOnlyPaths=/srv/polymath -/mnt/polymath
-# "-": the dashboard must start even while the brain's drive is not mounted (it then shows why)
-ReadWritePaths=-/srv/polymath/db
+# "-": the dashboard must start even while the brain's drive is not mounted (it then shows why).
+# /var/lib/polymath/brain: the brain in SD-card mode (core.sdcard)
+ReadWritePaths=-/srv/polymath/db -/var/lib/polymath/brain/db
 
 [Install]
 WantedBy=multi-user.target

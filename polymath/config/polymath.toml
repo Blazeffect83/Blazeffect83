@@ -96,3 +96,11 @@ standby = true
 standby_after_s = 300
 standby_budget_gb = 3.0
 standby_dir = "/var/lib/polymath/standby"
+# SD-card mode: the whole brain runs on the SD card and no drive is touched, for while the brain's drive cannot be
+# trusted. Switched on and off by `sudo ./scripts/sd-card-mode.sh on|off`, which writes or removes the drop-in
+# /etc/polymath/polymath.d/sd-card.toml (sd_only = true): leave sd_only false here. What it learns on the SD card
+# moves onto the drive by itself once the mode is off and the drive is back.
+sd_only = false
+sd_dir = "/var/lib/polymath/brain"
+sd_budget_gb = 0.0                  # 0: everything the card can give, less sd_keep_free_gb
+sd_keep_free_gb = 2.0               # the SD card always keeps this much free for the system

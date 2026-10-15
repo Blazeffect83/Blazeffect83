@@ -353,6 +353,10 @@ brain on your 1 TB SSD). It raises settings you have not set yourself: word vect
 PubMed files, 3,000 books, 15 Stack Exchange sites and Spanish Wikipedia as a second language. The changelog says
 when it switches. Any of these set in `polymath.toml` stays as you set it.
 
+**Drop-ins.** Files in `/etc/polymath/polymath.d/*.toml` are read after `polymath.toml`, in name order, and override
+it key by key (a typo is refused there too). `scripts/sd-card-mode.sh` switches SD-card mode with one
+(`sd-card.toml`), so `polymath.toml` itself is never edited by a script.
+
 Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 
 ## 8. Storage pool: drives you plug in
@@ -457,6 +461,57 @@ To turn the move off: `move_home = false` under `[storage]`.
 The desktop no longer auto-mounts drives that Polymath adopts. Their files are under
 `/mnt/polymath/<uuid>/` (read them with `sudo`), or `eject` the drive first.
 
+### <a id="sd-card-mode"></a>SD-card mode: the whole brain on the SD card (v0.7.0)
+
+For when the brain's drive cannot be trusted: it keeps freezing, drops out, or runs at USB 2 speed and stalls.
+Polymath then runs entirely on the SD card until the drive is fixed, and nothing touches the drive.
+
+```bash
+cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent
+cd polymath && sudo ./scripts/sd-card-mode.sh on      # switch to the SD card (also installs this checkout)
+./scripts/sd-card-mode.sh status                       # which mode, how much room (no sudo)
+sudo ./scripts/sd-card-mode.sh off                     # back to the SSD, once it works again
+```
+
+**`on`**, in seven checked steps (each time-limited, marked ✓/–/✗, logged to `~/polymath-sd-card.txt`):
+1. shows what is installed, what will be installed, and the SD card's free space;
+2. stops the agent, the dashboard and the drive helper, without waiting on a frozen drive;
+3. switches the mode on with one drop-in, `/etc/polymath/polymath.d/sd-card.toml` (`sd_only = true`);
+4. lets go of the SSD. It is unmounted (cleanly if it answers, lazily if it is frozen), and its USB device is
+   switched off, which is like unplugging it: anything stuck on it is released. You may unplug it now;
+5. starts the brain in `/var/lib/polymath/brain`, from the copy the SD card kept when the brain moved onto the
+   SSD (`/srv/polymath-sd-copy`). The copy is checked first (SQLite `quick_check`), then **renamed, not copied**,
+   so it costs no room. Without a copy, with a damaged one, or with `--fresh`, it starts empty. The SSD's brain is
+   never touched;
+6. installs this checkout (`install.sh --allow-sd-card`);
+7. checks the installed version, the services, and that the agent says it runs on the SD card; then
+   `polymath doctor`.
+
+Running `on` again is safe: the SD-card brain carries on, and an SSD that a reboot switched back on is switched
+off again. `--keep-ssd-on` leaves its USB device on.
+
+**In SD-card mode**:
+- everything runs as usual, dumps included;
+- the brain may use all the card can give (what it uses plus what is free) but `sd_keep_free_gb` (2 GB), which
+  stays free for the system. When the card runs low, it slows down and evicts the least valuable bodies first
+  (old feeds and web pages; the facts stay);
+- two nightly backups are kept, and the SD card wear guard watches the writes;
+- no drive is used: no storage pool, no moving or mounting the brain's drive, no `storage heal`, no standby brain
+  (this *is* the brain);
+- the feed shows `learning on the SD card` and `(SD-card mode since …: the brain is on the SD card, N GB of room;
+  the SSD is off)`. Doctor shows an `sd card` line with the way back, and the caretaker's inbox gets a note once a
+  day.
+
+**`off`** switches the SSD's USB device back on, removes the drop-in and asks for the drive. Once it is mounted,
+the agent starts on its real brain and **moves what it learned on the SD card onto it**: every document it read
+in SD-card mode (not what the copy started with: the SSD has that already), the Wikidata records, the crawler's
+progress and the problems it noted. Then the SD-card brain is removed. The feed says `back on its drive after …
+on the SD card`. If the SSD does not come back within two minutes, **SD-card mode simply stays on**: nothing else
+changes, and the agent keeps learning on the SD card.
+
+Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/lib/polymath/brain`),
+`sd_budget_gb` (0: what the card can give), `sd_keep_free_gb` (2.0).
+
 ## 9. Troubleshooting
 
 | symptom | check |
@@ -475,6 +530,10 @@ The desktop no longer auto-mounts drives that Polymath adopts. Their files are u
 | "Input/output error" on `/srv/polymath` (doctor: "its storage does not answer") | the SSD dropped out and came back as a new device; the old mount is dead. `sudo reboot` clears it (v0.5.4 also replaces a dead mount by itself when the drive is attached again) |
 | the feed says `learning on standby` (doctor: `standby`) | the brain's drive has been gone for over 5 minutes, so Polymath learns on its small standby brain on the SD card. Nothing to do for Polymath: bring the drive back (see the rows above). What it read moves onto the drive by itself |
 | anything else, or you want the whole picture | `polymath caretaker` (no sudo) gives the situation now, the recent problems with what each one is, and the next steps. `polymath caretaker known` lists every known problem, `polymath caretaker show <id>` gives its symptoms, causes, checks and fix, and `polymath caretaker history` lists what happened on this Pi |
+| the SSD keeps freezing or dropping out, and you want Polymath working now | run everything on the SD card until the SSD is fixed: `cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/sd-card-mode.sh on` ([§8](#sd-card-mode)); the log is in `~/polymath-sd-card.txt` |
+| the feed says `learning on the SD card` (doctor: `sd card`) | SD-card mode is on: the brain runs on the SD card and the SSD is not used. Nothing to do. Once the SSD works again (blue USB 3 port, USB 3 cable, no USB 2 hub): `sudo ./scripts/sd-card-mode.sh off` |
+| `sd-card-mode.sh off`: "the SSD did not come back … SD-card mode stays on" | the SSD is still not answering: plug it into a blue USB 3 port, check that `lsblk` lists it (sda), then run `off` again. Polymath keeps learning on the SD card meanwhile |
+| `sd-card-mode.sh on` shows ✗ | send `~/polymath-sd-card.txt`. Running `on` again is safe; if a process stays stuck on the old SSD, `sudo reboot` (SD-card mode stays on, the SSD is not mounted again) |
 | Polymath is stuck and an install does not take (the Pi in general, one command) | `cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/rescue.sh`: it stops the services, frees a frozen drive (lazy unmounts, USB reset), finishes `dpkg`, adds `uhubctl`, installs, and checks the result. Every step is time-limited and marked ✓/–/✗; the full log is in `~/polymath-rescue.txt` |
 | an update "did nothing" (the same problem after `git pull` and `install.sh`) | check what is installed: `cat /opt/polymath/build.json`, and which branch the clone is on: `git -C ~/Blazeffect83 branch -vv`. Update Polymath's own clone, never another project's checkout: `git -C ~/polymath-src pull --ff-only origin claude/polymath-agent` (if it is missing: `git clone -b claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git ~/polymath-src`), then `cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card` |
 | doctor: `/dev/sda runs at USB 2 speed (480 Mbit/s)` | the SSD is in a black USB 2 port, or on a USB 2 cable or hub. Move it to a blue USB 3 port with a USB 3 cable; `lsusb -t` should then show it under the `5000M` bus |

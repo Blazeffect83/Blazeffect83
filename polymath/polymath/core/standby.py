@@ -20,6 +20,10 @@ the real brain reads them again with its whole knowledge graph), the Wikidata re
 and the problems it noted. Then the standby brain is removed. Folding is resumable (a job checkpoint) and
 idempotent (a document already there is "unchanged"; a standby brain once folded is recorded by id).
 
+The same fold brings back the **SD-card brain** (``core.sdcard``): the brain Polymath ran on while SD-card mode
+was on. Once the mode is off and the drive is back, it is folded in like a standby brain, from the first document
+it read in that mode (what it was seeded with is in the real brain already), and then removed.
+
 Nothing in here rewrites the real brain's existing knowledge: folding only adds.
 """
 
@@ -31,10 +35,11 @@ import json
 import shutil
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from polymath.core.config import Config
+from polymath.core.config import Config, PathsConfig
 from polymath.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -119,7 +124,12 @@ def pending(config: Config) -> dict[str, Any] | None:
 
 def discard(config: Config) -> None:
     """Remove the standby brain's files (the directory itself stays: systemd owns it)."""
-    root = Path(config.storage.standby_dir)
+    discard_dir(Path(config.storage.standby_dir))
+
+
+def discard_dir(root: Path) -> None:
+    """Remove everything in a brain kept while the real one was away (the directory itself stays: systemd owns
+    it)."""
     if not root.is_dir():
         return
     for entry in root.iterdir():
@@ -128,6 +138,41 @@ def discard(config: Config) -> None:
                 shutil.rmtree(entry)
             else:
                 entry.unlink()
+
+
+@dataclass(frozen=True)
+class Away:
+    """A brain Polymath learned on while its real one was away: the standby brain, or the SD-card brain."""
+
+    kind: str  # "standby" | "sd-card"
+    root: Path  # its data directory
+    marker: str  # its marker file in ``root``
+    where: str  # for the feed: "on the standby brain", "on the SD card"
+
+    @property
+    def db_path(self) -> Path:
+        return PathsConfig(data_dir=self.root).db_path
+
+    def read_marker(self) -> dict[str, Any] | None:
+        try:
+            raw = json.loads((self.root / self.marker).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return raw if isinstance(raw, dict) and raw.get("id") else None
+
+
+def away_brains(config: Config) -> list[Away]:
+    """The brains that may wait to be folded into this one. Never this brain itself: the standby brain folds
+    nothing, and the SD-card brain only ever folds a standby brain."""
+    from polymath.core import sdcard
+
+    if is_standby(config):
+        return []
+    out = [Away("standby", Path(config.storage.standby_dir), MARKER, "on the standby brain")]
+    sd = Path(config.storage.sd_dir)
+    if not config.storage.sd_only and sd != Path(config.paths.data_dir):
+        out.append(Away("sd-card", sd, sdcard.MARKER, "on the SD card"))
+    return out
 
 
 def status(config: Config, db: Any = None) -> dict[str, Any] | None:
@@ -144,17 +189,19 @@ def status(config: Config, db: Any = None) -> dict[str, Any] | None:
 
 # ------------------------------------------------------------------ in the real brain: the planner and the fold
 def planner(agent: Any) -> None:
-    """On the real brain: a standby brain waiting to be folded in gets its fold job (one at a time)."""
-    if is_standby(agent.config):
-        return
-    mark = pending(agent.config)
-    if mark is None:
-        return
-    folded = set(agent.db.kv_get(FOLDED_KEY) or [])
-    if mark["id"] in folded:  # folded already, only its files were left (a stop right after the fold)
-        discard(agent.config)
-        return
-    agent.scheduler.enqueue(FOLD_KIND, {"id": mark["id"]}, key=f"fold:{mark['id']}", priority=4.0)
+    """On the real brain: a standby or SD-card brain waiting to be folded in gets its fold job."""
+    folded: set[str] | None = None
+    for away in away_brains(agent.config):
+        mark = away.read_marker()
+        if mark is None or not away.db_path.exists():
+            continue
+        if folded is None:
+            folded = set(agent.db.kv_get(FOLDED_KEY) or [])
+        if mark["id"] in folded:  # folded already, only its files were left (a stop right after the fold)
+            discard_dir(away.root)
+            continue
+        agent.scheduler.enqueue(FOLD_KIND, {"id": mark["id"], "kind": away.kind}, key=f"fold:{mark['id']}",
+                                priority=4.0)  # fmt: skip
 
 
 def _fold_documents(main_db: Any, sdb: Any, after: int, deadline: float) -> tuple[int, int, bool]:
@@ -192,8 +239,13 @@ def _fold_documents(main_db: Any, sdb: Any, after: int, deadline: float) -> tupl
     return after, added, False
 
 
-def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int) -> dict[str, int]:
-    """Sources, Wikidata records, the crawler's progress and the problems noted, then the record of the fold."""
+def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int, away: Away | None = None) -> dict[str, int]:
+    """Sources, Wikidata records, the crawler's progress and the problems noted, then the record of the fold.
+
+    From an SD-card brain only what happened in SD-card mode (since its marker's ``started``): what it was seeded
+    with came from the real brain."""
+    away = away or Away("standby", Path(), MARKER, "on the standby brain")
+    since = float(mark.get("started") or 0.0) if away.kind == "sd-card" else 0.0
     n: dict[str, int] = {}
     with main_db.transaction():
         for r in sdb.query("SELECT * FROM sources"):
@@ -202,7 +254,8 @@ def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int) -> dict
                 (r["name"], r["license"], r["license_url"], r["homepage"], r["description"]),
             )
         n["wikidata"] = 0
-        for r in sdb.query("SELECT qid, label, description, aliases, enwiki, claims, fetched FROM wd_entities"):
+        for r in sdb.query("SELECT qid, label, description, aliases, enwiki, claims, fetched FROM wd_entities "
+                           "WHERE fetched >= ?", (since,)):  # fmt: skip
             cur = main_db.execute(
                 "INSERT OR IGNORE INTO wd_entities(qid, label, description, aliases, enwiki, claims, state, fetched) "
                 "VALUES(?,?,?,?,?,?,'new',?)",
@@ -210,7 +263,8 @@ def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int) -> dict
             )
             n["wikidata"] += cur.rowcount or 0
         n["pages"] = 0
-        for r in sdb.query("SELECT url, fetched_at, http_status, etag, last_modified FROM frontier WHERE state='done'"):
+        for r in sdb.query("SELECT url, fetched_at, http_status, etag, last_modified FROM frontier "
+                           "WHERE state='done' AND COALESCE(fetched_at, 0) >= ?", (since,)):  # fmt: skip
             cur = main_db.execute(
                 "UPDATE frontier SET state='done', fetched_at=?, http_status=?, etag=?, last_modified=? "
                 "WHERE url=? AND state='new'",
@@ -218,17 +272,18 @@ def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int) -> dict
             )  # read in standby: not fetched again
             n["pages"] += cur.rowcount or 0
         n["issues"] = 0
-        for r in sdb.query("SELECT at, text, detail FROM events WHERE kind = 'issue' ORDER BY id"):
+        tag = "(on standby) " if away.kind == "standby" else "(on the SD card) "
+        for r in sdb.query("SELECT at, text, detail FROM events WHERE kind = 'issue' AND at >= ? ORDER BY id",
+                           (since,)):  # fmt: skip
             main_db.execute("INSERT INTO events(at, kind, text, detail) VALUES(?, 'issue', ?, ?)",
-                            (r["at"], "(on standby) " + str(r["text"]), r["detail"]))  # fmt: skip
+                            (r["at"], tag + str(r["text"]), r["detail"]))  # fmt: skip
             n["issues"] += 1
         n["documents"] = added
-        since = float(mark.get("started") or time.time())
-        away = _duration(time.time() - since)
-        text = (f"back on its drive after {away} on the standby brain: {added:,} documents it read there are now "
+        took = _duration(time.time() - float(mark.get("started") or time.time()))
+        text = (f"back on its drive after {took} {away.where}: {added:,} documents it read there are now "
                 f"in the real brain (it reads them again with everything it knows)")  # fmt: skip
         main_db.execute("INSERT INTO events(at, kind, text, detail) VALUES(?, 'standby', ?, ?)",
-                        (time.time(), text, json.dumps({"status": "folded", **n})))  # fmt: skip
+                        (time.time(), text, json.dumps({"status": "folded", "from": away.kind, **n})))  # fmt: skip
         folded = list(main_db.kv_get(FOLDED_KEY) or [])
         main_db.kv_set(FOLDED_KEY, [*folded, mark["id"]][-20:])
     return n
@@ -241,33 +296,38 @@ def _duration(seconds: float) -> str:
 
 
 def fold_job(ctx: Any) -> Any:
-    """Fold the standby brain into the real one, a slice at a time; then remove the standby brain."""
+    """Fold a standby or SD-card brain into the real one, a slice at a time; then remove it."""
     from polymath.core.db import Database
     from polymath.core.jobs import JobOutcome
 
-    mark = read_marker(ctx.config)
+    kind = str(ctx.job.payload.get("kind") or "standby")
+    away = next((a for a in away_brains(ctx.config) if a.kind == kind), None)
+    if away is None:
+        return JobOutcome(done=True)  # not one this brain folds (SD-card mode switched on again meanwhile)
+    mark = away.read_marker()
     if mark is None or mark.get("id") != ctx.job.payload.get("id"):
         return JobOutcome(done=True)  # gone already, or a different one (its own job comes)
     if mark["id"] in set(ctx.db.kv_get(FOLDED_KEY) or []):
-        discard(ctx.config)
+        discard_dir(away.root)
         return JobOutcome(done=True)
-    path = standby_config(ctx.config).paths.db_path
+    path = away.db_path
     if not path.exists():
-        discard(ctx.config)
+        discard_dir(away.root)
         return JobOutcome(done=True)
     cp = dict(ctx.job.checkpoint or {})
+    start = int(cp.get("after", mark.get("fold_after") or 0))  # an SD-card brain: from its first new document
     sdb = Database(path, readonly=True)
     try:
         deadline = time.monotonic() + max(1.0, ctx.time_left() - 2.0)
-        after, added, finished = _fold_documents(ctx.db, sdb, int(cp.get("after", 0)), deadline)
+        after, added, finished = _fold_documents(ctx.db, sdb, start, deadline)
         added += int(cp.get("added", 0))
         if not finished:
             return JobOutcome(done=False, checkpoint={"after": after, "added": added}, value=float(added))
-        n = _fold_rest(ctx.db, sdb, mark, added)
+        n = _fold_rest(ctx.db, sdb, mark, added, away)
     finally:
         sdb.close()
-    discard(ctx.config)
-    log.warning("standby brain folded in", extra={"standby": mark["id"], **n})
+    discard_dir(away.root)
+    log.warning("brain folded in", extra={"from": away.kind, "id": mark["id"], **n})
     return JobOutcome(done=True, value=float(added))
 
 

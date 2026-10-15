@@ -710,6 +710,7 @@ class Feed:
             "counts": self.counts(now),
             "brain": self.brain(),
             "net": self.net(),
+            **({"sd_card": sd} if isinstance(sd := self.db.kv_get("sd_card"), dict) else {}),
         }
 
     def net(self) -> dict[str, Any]:
@@ -1175,6 +1176,11 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         since = f" since {clock(float(sb['since']))}" if sb.get("since") else ""
         segs.append((f"  (on the standby brain{since}: the SSD is not available; what it reads moves there later)",
                      "yellow"))  # fmt: skip
+    sd = st.get("sd_card") or {}
+    if sd:
+        since = f" since {clock(float(sd['since']))}" if sd.get("since") else ""
+        room = f", {float(sd['budget_gb']):.0f} GB of room" if sd.get("budget_gb") else ""
+        segs.append((f"  (SD-card mode{since}: the brain is on the SD card{room}; the SSD is off)", "yellow"))
     net = st.get("net") or {}
     if net.get("online") is False:
         since = f" since {clock(float(net['since']))}" if net.get("since") else ""
@@ -1208,6 +1214,8 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
         )
     elif st.get("standby"):
         dot, label = ("●", "yellow"), "learning on standby"
+    elif st.get("sd_card"):
+        dot, label = ("●", "green"), "learning on the SD card"
     elif (st.get("net") or {}).get("online") is False:
         dot, label = ("●", "yellow"), "learning offline"
     else:

@@ -27,7 +27,7 @@ from polymath.interface.face import Face
 from polymath.senses import connectivity
 from polymath.senses.net import FetchError, HttpClient, reachable
 from tests.conftest import make_config
-from tests.test_feed import build
+from tests.fixtures.kb import build
 from tests.test_interface import beat, req
 
 
@@ -222,9 +222,11 @@ def test_registered_network_kinds(config, db):
         "wikidata.properties", "gutenberg.books", "feeds.poll", "crawl.step", "wikipedia.titles",
         "web.blocklists", "web.vet",
     }  # fmt: skip
-    assert reg.get("net.probe") is not None and not reg.get("net.probe").network  # it must run while offline
+    probe = reg.get("net.probe")
+    assert probe is not None and not probe.network  # it must run while offline
     for kind in offline.STUDY:
-        assert reg.get(kind) is not None and not reg.get(kind).network, kind
+        spec = reg.get(kind)
+        assert spec is not None and not spec.network, kind
 
 
 # ------------------------------------------------------------------------------------------- probe
@@ -420,8 +422,12 @@ def test_resilient_source_falls_back_and_comes_back():
     assert texts[1:] == ["Faro"]  # Porto was shown already
     now[0] = 10.0  # the dashboard is not asked again yet: no 5 s wait on every poll
     calls = []
-    src2 = feed.resilient_source(lambda c: calls.append(c) or primary(c), [("the snapshot", fallback)],
-                                 clock=lambda: now[0])  # fmt: skip
+
+    def counted(c: Any) -> Any:
+        calls.append(c)
+        return primary(c)
+
+    src2 = feed.resilient_source(counted, [("the snapshot", fallback)], clock=lambda: now[0])
     src2(None)
     src2("x")
     assert len(calls) == 1
@@ -739,7 +745,8 @@ def test_the_agent_waits_for_its_drive_and_says_why(tmp_path):
         if len(rounds) == 2:  # the drive is plugged back in: the brain is mounted over the data directory
             (cfg.paths.data_dir / "MOVED-TO-DRIVE.json").unlink()
 
-    assert cli.wait_for_storage(cfg, notifier=FakeNotifier(), sleep=plug_in_after_two)
+    fake: Any = FakeNotifier()
+    assert cli.wait_for_storage(cfg, notifier=fake, sleep=plug_in_after_two)
     assert len(rounds) == 2 and sent[0].startswith("READY waiting: the brain lives on the drive Samsung T7")
     assert sent.count("WATCHDOG") == 2  # systemd keeps seeing it alive while it waits
     lines = feed.status_lines(snapshot.source(snapshot.path_for(cfg))(None)["status"], width=0)
@@ -749,7 +756,8 @@ def test_the_agent_waits_for_its_drive_and_says_why(tmp_path):
     stop = threading.Event()
     stop.set()
     moved_away(cfg)
-    assert not cli.wait_for_storage(cfg, notifier=FakeNotifier(), stop=stop)  # told to stop: returns False
+    fake2: Any = FakeNotifier()
+    assert not cli.wait_for_storage(cfg, notifier=fake2, stop=stop)  # told to stop: returns False
 
 
 def test_dashboard_explains_a_missing_drive_and_shows_the_agents_snapshot(tmp_path):

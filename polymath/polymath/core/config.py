@@ -1,7 +1,9 @@
 """Typed configuration loaded from TOML (stdlib ``tomllib``).
 
 Precedence: built-in defaults → ``/etc/polymath/polymath.toml`` (or the file
-named by ``$POLYMATH_CONFIG`` / ``--config``) → ``POLYMATH_DATA_DIR`` for the
+named by ``$POLYMATH_CONFIG`` / ``--config``) → the drop-ins next to it
+(``/etc/polymath/polymath.d/*.toml``, in name order; ``scripts/sd-card-mode.sh``
+writes one, so ``polymath.toml`` itself is never edited) → ``POLYMATH_DATA_DIR`` for the
 data directory. Unknown keys are rejected so a typo never silently does
 nothing; keys of retired features (``RETIRED_KEYS``) are ignored with a warning,
 so an upgrade never breaks a configuration file written for an older version.
@@ -187,6 +189,13 @@ class StorageConfig:
     standby_after_s: float = 300.0
     standby_budget_gb: float = 3.0
     standby_dir: Path = Path("/var/lib/polymath/standby")
+    # SD-card mode (core.sdcard): the whole brain runs on the SD card, the SSD and every other drive are left alone.
+    # For when the brain's drive cannot be trusted; switched on and off by scripts/sd-card-mode.sh (a drop-in).
+    # What it learns there moves onto the drive by itself once the mode is off and the drive is back.
+    sd_only: bool = False
+    sd_dir: Path = Path("/var/lib/polymath/brain")
+    sd_budget_gb: float = 0.0  # 0: everything the card can give (what the brain uses + what is free − sd_keep_free_gb)
+    sd_keep_free_gb: float = 2.0  # the SD card keeps this much free for the system
 
 
 @dataclass
@@ -242,6 +251,10 @@ class Config:
             raise ConfigError("storage.standby_after_s must be at least 30 seconds")
         if not 0.5 <= self.storage.standby_budget_gb <= 50:
             raise ConfigError("storage.standby_budget_gb must be between 0.5 and 50")
+        if self.storage.sd_budget_gb < 0:
+            raise ConfigError("storage.sd_budget_gb must be >= 0 (0: sized to the SD card)")
+        if not 0.5 <= self.storage.sd_keep_free_gb <= 50:
+            raise ConfigError("storage.sd_keep_free_gb must be between 0.5 and 50")
         if self.body.sd_target_years <= 0:
             raise ConfigError("body.sd_target_years must be > 0")
         if not 100 <= self.body.wal_autocheckpoint <= 100_000:
@@ -298,6 +311,34 @@ def _build(cls: type[Any], data: dict[str, Any], where: str) -> Any:
     return obj
 
 
+def dropin_dir(cfg_path: Path) -> Path:
+    """Where the drop-ins of a configuration file live: ``/etc/polymath/polymath.d`` for ``polymath.toml``."""
+    return cfg_path.with_name(cfg_path.stem + ".d")
+
+
+def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    """``extra`` over ``base``: tables are merged key by key, anything else is replaced."""
+    out = dict(base)
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def read_dropins(cfg_path: Path) -> tuple[dict[str, Any], list[Path]]:
+    """The drop-ins of ``cfg_path`` merged in name order, and which files they were."""
+    merged: dict[str, Any] = {}
+    files = sorted(dropin_dir(cfg_path).glob("*.toml")) if dropin_dir(cfg_path).is_dir() else []
+    for f in files:
+        try:
+            merged = _merge(merged, tomllib.loads(f.read_text(encoding="utf-8")))
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            raise ConfigError(f"{f}: {exc}") from exc
+    return merged, files
+
+
 def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = None) -> Config:
     """Load configuration. A missing default file yields built-in defaults."""
     env = dict(os.environ) if env is None else env
@@ -311,15 +352,67 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
             raise ConfigError(f"{cfg_path}: {exc}") from exc
     elif explicit:
         raise ConfigError(f"config file not found: {cfg_path}")
+    extra, _files = read_dropins(cfg_path)
+    data = _merge(data, extra)
     cfg: Config = _build(Config, data, "")
+    apply_sd_only(cfg)
     if env.get("POLYMATH_DATA_DIR"):
         cfg.paths.data_dir = Path(env["POLYMATH_DATA_DIR"])
     if env.get("POLYMATH_RUN_DIR"):
         cfg.paths.run_dir = Path(env["POLYMATH_RUN_DIR"])
-    apply_home(cfg)
-    apply_capacity(cfg, data)
+    if not cfg.storage.sd_only:
+        apply_home(cfg)  # home-drive.json lives on the drive: never looked for in SD-card mode
+        apply_capacity(cfg, data)
+    elif cfg.storage.sd_budget_gb <= 0:
+        cfg.body.disk_budget_gb = sd_budget(cfg)
     cfg.validate()
     return cfg
+
+
+SD_BACKUPS = 2  # nightly backups kept in SD-card mode (each one takes room on the card)
+
+
+def apply_sd_only(cfg: Config) -> None:
+    """SD-card mode (``storage.sd_only``, see ``core.sdcard``): the brain lives in ``storage.sd_dir`` on the SD card
+    and nothing touches a drive. No pool, no moving or mounting the brain's drive, no healing it, no standby brain
+    (this *is* the brain), two backups, and the card keeps ``sd_keep_free_gb`` free instead of the drive's 10 GB."""
+    st = cfg.storage
+    if not st.sd_only:
+        return
+    cfg.paths.data_dir = Path(st.sd_dir)
+    cfg.paths.require_separate_mount = False  # on the SD card on purpose
+    st.adopt = st.move_home = st.heal = st.heal_power_cycle = st.standby = False
+    st.format_blank_disks = st.format_fresh_drives = False
+    st.mount_root = Path(st.sd_dir) / "no-drives"  # the pool sees no drive, even one still mounted elsewhere
+    cfg.body.disk_min_free_gb = min(cfg.body.disk_min_free_gb, st.sd_keep_free_gb)
+    cfg.body.backup_keep = min(cfg.body.backup_keep, SD_BACKUPS)
+    if st.sd_budget_gb > 0:
+        cfg.body.disk_budget_gb = st.sd_budget_gb
+
+
+def sd_budget(cfg: Config) -> float:
+    """Room for the brain on the SD card: what it uses now plus what is free, less ``sd_keep_free_gb``.
+
+    Constant while the brain grows (what it writes comes out of the free space), so the guard and eviction keep the
+    card from filling up. At least 1 GB. Only the SD card is looked at (the brain's own directory): never a drive."""
+    import shutil
+
+    data = Path(cfg.paths.data_dir)
+    probe = data
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        free = shutil.disk_usage(probe).free
+    except OSError:
+        return 1.0
+    used = 0
+    for root, _dirs, files in os.walk(data):
+        for name in files:
+            try:
+                used += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                continue
+    return round(max(1.0, (used + free) / 1e9 - cfg.storage.sd_keep_free_gb), 1)
 
 
 # Big-brain mode: with a large drive (its budget at least BIG_BRAIN_GB) it reads and keeps much more. Only settings
