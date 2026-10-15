@@ -26,7 +26,7 @@ summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christ
 waiting_on = [
     "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
-    "later, at the Pi: fix the SSD (blue USB 3 port, USB 3 cable, no USB 2 hub; its own power if it still drops), then: sudo ./scripts/sd-card-mode.sh off",
+    "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
 ]
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
