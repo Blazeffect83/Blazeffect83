@@ -24,7 +24,7 @@ brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4,
 as_of = "2026-10-15"
 summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
-    "the end of the sd-card-mode.sh on run: step 7 (installed version, agent on the SD card, dashboard, doctor) and the summary; ~/polymath-sd-card.txt",
+    "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "later, at the Pi: fix the SSD (blue USB 3 port, USB 3 cable, no USB 2 hub; its own power if it still drops), then: sudo ./scripts/sd-card-mode.sh off",
 ]
