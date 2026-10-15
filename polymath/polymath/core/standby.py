@@ -278,15 +278,42 @@ def _fold_rest(main_db: Any, sdb: Any, mark: dict[str, Any], added: int, away: A
             main_db.execute("INSERT INTO events(at, kind, text, detail) VALUES(?, 'issue', ?, ?)",
                             (r["at"], tag + str(r["text"]), r["detail"]))  # fmt: skip
             n["issues"] += 1
+        n["agents"] = _fold_agents(main_db, sdb, since)
         n["documents"] = added
         took = _duration(time.time() - float(mark.get("started") or time.time()))
+        agents = f", and {n['agents']} agent(s) you set up there" if n["agents"] else ""
         text = (f"back on its drive after {took} {away.where}: {added:,} documents it read there are now "
-                f"in the real brain (it reads them again with everything it knows)")  # fmt: skip
+                f"in the real brain (it reads them again with everything it knows){agents}")  # fmt: skip
         main_db.execute("INSERT INTO events(at, kind, text, detail) VALUES(?, 'standby', ?, ?)",
                         (time.time(), text, json.dumps({"status": "folded", "from": away.kind, **n})))  # fmt: skip
         folded = list(main_db.kv_get(FOLDED_KEY) or [])
         main_db.kv_set(FOLDED_KEY, [*folded, mark["id"]][-20:])
     return n
+
+
+def _fold_agents(main_db: Any, sdb: Any, since: float) -> int:
+    """Agents Christian set up while the real brain was away (``origin = 'user'``, created since ``since``) are set
+    up again on the real brain from their directive, so their scope is resolved against its knowledge, with the
+    same name and status. One with that name or directive there already is left as it is. Evolved agents stay
+    behind: the real brain's society evolves its own, from its own track record."""
+    from polymath.agents import society, store
+
+    if not sdb.scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agents'"):
+        return 0
+    names = {str(r["name"]) for r in main_db.query("SELECT name FROM agents")}
+    known = {str(r["directive"]) for r in main_db.query("SELECT directive FROM agents WHERE status != 'retired'")}
+    added = 0
+    for r in sdb.query("SELECT name, directive, status FROM agents WHERE origin = 'user' AND created >= ? "
+                       "ORDER BY id", (since,)):  # fmt: skip
+        if str(r["name"]) in names or str(r["directive"]) in known:
+            continue
+        agent = society.spawn(main_db, str(r["directive"]), name=str(r["name"]))
+        if r["status"] != "active":
+            store.set_status(main_db, agent.id, str(r["status"]), "as it was set while the drive was away")
+        names.add(agent.name)
+        known.add(agent.directive)
+        added += 1
+    return added
 
 
 def _duration(seconds: float) -> str:

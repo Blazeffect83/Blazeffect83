@@ -793,7 +793,7 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
   `storage/sd_card`, and the snapshot status;
 - **folding back** (`core/standby.py`): the planner and `fold_job` handle *away* brains, the standby brain and the
   SD-card brain. From the SD-card brain they take only what is new: documents after `fold_after`, and Wikidata
-  records, crawled pages and issues since `started`;
+  records, crawled pages, issues and the agents Christian set up since `started`;
 - **what you see**: the feed shows `learning on the SD card` and an SD-card note on the NOW line; doctor shows an
   `sd card` line and `drives: none used`; heal reports `sd-card` without probing anything;
 - **`scripts/sd-card-mode.sh on|off|status`**, with `scripts/ops-lib.sh` shared with `rescue.sh`. In SD-card mode,
@@ -805,13 +805,14 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
   situation and the history.
 
 **Tests:**
-- `tests/test_sdcard.py` (15):
+- `tests/test_sdcard.py` (16):
   - drop-ins: order, typos refused, `.off` files ignored;
   - every SD-card setting and its limits, and the budget arithmetic with a faked `disk_usage`;
   - every job kind registered;
   - heal and attach touch nothing (any probe fails the test);
   - `polymath run` marks the brain and reports to the caretaker;
-  - folding: only what is new, never into itself, a done fold only clears;
+  - folding: only what is new, never into itself, a done fold only clears; agents set up on the SD card come
+    back (by directive, name and status), evolved ones stay behind;
   - a full cycle with real agents: SSD brain, then SD-card mode, then back, with the pages learned on the SD card
     now on the SSD;
   - the feed, the dashboard's feed status and doctor;
@@ -835,7 +836,7 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
 
 The newer `mypy` (2.4) in the development container flagged 18 typing slips in older tests; they are fixed.
 
-**Result (development container, x86_64, Python 3.11):** 679 tests pass and 1 is skipped, at 94 % coverage
+**Result (development container, x86_64, Python 3.11):** 680 tests pass and 1 is skipped, at 94 % coverage
 (pytest exit 0). `ruff`, `ruff format` and `mypy --strict` (package, tests, scripts) are clean, and ShellCheck 0.11
 reports no warnings on the three scripts.
 

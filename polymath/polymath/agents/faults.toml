@@ -393,7 +393,7 @@ self_healing = [
     "it learns as usual, dumps included, inside what the card can give (what it uses + free − 2 GB); the guard and eviction keep 2 GB free",
     "no drive is touched: no storage pool, no moving or mounting the brain's drive, no storage heal, no standby brain",
     "the SD card wear guard watches its writes (saver mode when it writes too much); two nightly backups are kept",
-    "after sd-card-mode.sh off, what it learned on the SD card moves onto the SSD by itself (the fold job), then the SD-card brain is removed",
+    "after sd-card-mode.sh off, what it learned on the SD card moves onto the SSD by itself (the fold job), with the agents Christian set up there; then the SD-card brain is removed",
 ]
 steps = [
     { needs = "auto", do = "keep learning on the SD card; nothing to do while the SSD is being fixed" },

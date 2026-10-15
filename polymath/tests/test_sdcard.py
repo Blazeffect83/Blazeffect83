@@ -296,6 +296,38 @@ def test_a_full_cycle_ssd_then_sd_card_then_back_to_the_ssd(tmp_path):
     agent.db.close()
 
 
+def test_agents_set_up_on_the_sd_card_come_back_to_the_ssd(tmp_path):
+    from polymath.agents import society, store
+
+    started = time.time() - 600
+    c = ssd_config(tmp_path)
+    sd_brain(c, started)
+    sdb = open_database(Path(c.storage.sd_dir) / "db" / "polymath.sqlite3")
+    with sdb.transaction():
+        old = society.spawn(sdb, "research black holes", name="old-one")  # from before: the SSD has it
+        sdb.execute("UPDATE agents SET created = ? WHERE id = ?", (started - 100, old.id))
+        society.spawn(sdb, "watch volcanoes", name="volcano-watch")  # set up on the SD card
+        paused = society.spawn(sdb, "research comets", name="comets")
+        store.set_status(sdb, paused.id, "paused", "by you")
+        evolved = store.create(sdb, kind="research", directive="research comets", subject="comets", scope={},
+                               origin="evolved", name="comets-child")  # fmt: skip
+        assert evolved
+    sdb.close()
+    main = open_database(c.paths.db_path)
+    with main.transaction():
+        society.spawn(main, "research black holes", name="old-one")
+    standby.planner(SimpleNamespace(config=c, db=main, scheduler=Scheduler(main)))
+    assert run_fold(c, main).done
+    rows = {r["name"]: r["status"] for r in main.query("SELECT name, status FROM agents")}
+    assert rows == {"old-one": "active", "volcano-watch": "active", "comets": "paused"}  # not the evolved child
+    watch = store.get(main, "volcano-watch")
+    assert watch is not None and watch.kind == "watch" and watch.origin == "user"
+    line = main.one("SELECT text, detail FROM events WHERE kind = 'standby'")
+    assert line is not None and "and 2 agent(s) you set up there" in line["text"]
+    assert json.loads(line["detail"])["agents"] == 2
+    main.close()
+
+
 # ------------------------------------------------------------------------------------------- what you see
 def test_feed_dashboard_and_doctor_show_sd_card_mode(tmp_path):
     c = sd_config(tmp_path)

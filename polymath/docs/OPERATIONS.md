@@ -505,7 +505,8 @@ off again. `--keep-ssd-on` leaves its USB device on.
 **`off`** switches the SSD's USB device back on, removes the drop-in and asks for the drive. Once it is mounted,
 the agent starts on its real brain and **moves what it learned on the SD card onto it**: every document it read
 in SD-card mode (not what the copy started with: the SSD has that already), the Wikidata records, the crawler's
-progress and the problems it noted. Then the SD-card brain is removed. The feed says `back on its drive after …
+progress, the problems it noted, and the agents you set up there (set up again from their directive, with the
+same name and status; agents it evolved by itself stay behind, the SSD's society evolves its own). Then the SD-card brain is removed. The feed says `back on its drive after …
 on the SD card`. If the SSD does not come back within two minutes, **SD-card mode simply stays on**: nothing else
 changes, and the agent keeps learning on the SD card.
 

@@ -259,7 +259,8 @@ then the most facts, an article, and PageRank.
   run. At start, `sdcard.start` writes the marker `sd-card.json` (`fold_after`: the newest document it started
   with), kv `sd_card` (the feed and dashboard) and an issue `storage/sd_card`. Once the mode is off, the brain is
   an `Away` brain for `standby.planner`, like the standby one: `fold_job` takes documents after `fold_after`,
-  and Wikidata records, crawled pages and issues since `started`, then removes it. `scripts/sd-card-mode.sh`
+  and Wikidata records, crawled pages, issues and the agents Christian set up (spawned again from their
+  directive) since `started`, then removes it. `scripts/sd-card-mode.sh`
   does the switching (drop-in, unmount, USB `authorized=0`, renaming the SD card's old copy into place, install,
   checks); `scripts/ops-lib.sh` holds what it shares with `rescue.sh`.
 - **Caretaker knowledge** (`agents/faults.toml` + `agents/faults.py`, v0.6.1): known faults (codes, words,
