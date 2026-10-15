@@ -178,11 +178,19 @@ def test_dashboard_endpoints(server):
     assert feed["badge"]["current"] is False and "agent still on v0" in feed["badge"]["text"]
     plain = get(srv, "/api/feed")
     assert "lines" not in plain and plain["face"]
-    for page, marker in (("/live", b"live-feed"), ("/static/live.js", b"PolyFace"), ("/static/face.js", b"PolyFace")):
+    for page, marker in (
+        ("/live", b"live-feed"),
+        ("/static/live.js", b"PolyFace"),
+        ("/static/face.js", b"PolyFace"),
+        ("/live", b"focus.js"),
+        ("/static/focus.js", b"PolyFocus"),
+        ("/static/live.js", b"PolyFocus"),
+    ):
         status, body, _ctype = fetch(srv, page)
         assert status == 200 and marker in body, page
     status, body, _ = fetch(srv, "/")
     assert b"c-map" in body and b"face.js" in body and b"/live" in body and b'id="changes"' in body
+    assert b"focus.js" in body and b'id="focus"' in body  # the LEARNING card
 
 
 def test_dashboard_insights_with_a_written_recap(server):

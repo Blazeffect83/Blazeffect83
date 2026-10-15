@@ -117,6 +117,24 @@ in a development checkout it reads the commit from `.git` with no subprocess. Th
 heartbeat. The feed compares it with the installed build for the `✓`/`↻` badge, and `os.execv`s itself into new
 code when the installed build changes.
 
+**What it is learning** (`interface/focus.py`, v0.8.1). `Feed.status` adds a `focus`: the learning thread under
+the job slices. `pick` takes the newest cycle of a learning job kind (reading, downloading, asked-for learning)
+from the last 15 minutes, and keeps the job already in focus while it is still queued and taking turns, so two
+interleaved jobs do not make it flicker. `current` reads, read-only:
+- who chose it, from the key its producer gave the job (`pursue:`, `learn:`, `relearn:`, `agent:`) and the
+  payload's `about` and `topic_id` (written by `drive.learn` and `eval.remedy` from v0.8.1);
+- this round's progress, from the job's own checkpoint: `wikipedia.titles` counts the batch's titles among the
+  documents, `wikidata.dump` the compressed bytes behind its cursor, the record readers their `stored` count;
+- the topic's `known`, the measure `drive/priority.py` ranks by: `(right + 1) / (asked + 2)` once quizzed on it,
+  else `(read + 1) / (linked + 2)` over the things its documents mention. It is computed live, with a 30 s cache,
+  for topics of up to 400 documents, and taken from `topic_priority` above that.
+
+`start`, the value when the process first saw the round, is kept in memory (at most 64 rounds), so nothing is
+written. Any database error leaves the focus out of that poll. The terminal renders it as two header lines (the
+header is 6 rows); `static/focus.js` renders the same data as a card on both web pages, with DOM text only (no
+HTML from data) and widths set through the CSSOM (the CSP forbids inline styles). `transitions` turns a new
+round and a finished one into `focus` feed lines.
+
 ## Open-web learning, the digest, learning from mistakes
 
 - **Open-web learning** (`senses/openweb.py`):

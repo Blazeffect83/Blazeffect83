@@ -105,7 +105,7 @@ def read_about(ctx: JobContext, item: Any) -> list[str]:
     if titles:
         ctx.scheduler.enqueue(
             "wikipedia.titles",
-            {"titles": titles},
+            {"titles": titles, "about": str(item["question"])[:120]},  # what the live feed says it reads up on
             key=f"relearn:{item['id']}:{int(item['attempts'])}",
             priority=2.6,
         )

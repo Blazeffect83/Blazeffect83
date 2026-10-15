@@ -283,8 +283,9 @@ def test_status_lines_and_states():
     base = {"online": True, "state": "running", "cycle": 1234, "activity": "reading Wikipedia articles",
             "mode": "normal", "temp_c": 61.0, "counts": {"documents": 12_345, "entities": 2_000_000, "facts": 3_456_789,
             "inferred": 19_917, "disputed": 12, "rules": 270, "agents": 6, "quiz": {"accuracy": 0.815, "chance": 0.25}}}  # fmt: skip
-    l1, now, l2 = (text_of(x) for x in status_lines(base))
+    l1, now, learning, progress, l2 = (text_of(x) for x in status_lines(base))
     assert "● learning" in l1 and "cycle 1,234" in l1 and now == " NOW   Reading Wikipedia articles"
+    assert learning == " LEARNING   between topics" and progress == ""  # nothing in focus yet
     assert l2 == (" 12,345 docs · 2.00M things · 3.46M facts (19,917 inferred, 12 disputed) · 270 rules"
                   " · quiz 82% · 6 agents · 61 °C")  # fmt: skip
     hot = text_of(status_lines(base | {"mode": "throttle", "temp_c": 76.0})[0])
@@ -382,7 +383,7 @@ def test_run_fancy_pins_header_spreads_lines_and_restores_terminal(monkeypatch):
     slept: list[float] = []
     assert feed.run(source, out=out, color=True, fancy=True, once=True, sleep=slept.append) == 0
     text = out.getvalue()
-    assert text.startswith("\033[?25l\033[2J\033[5;24r\033[24;1H")  # hide cursor, clear, scroll region below header
+    assert text.startswith("\033[?25l\033[2J\033[7;24r\033[24;1H")  # hide cursor, clear, scroll region below header
     assert "\0337\033[1;1H\033[2K" in text and "\0338" in text  # header drawn in place, cursor restored
     assert text.endswith("\033[r\033[?25h\033[24;1H\n")  # region reset, cursor shown
     assert len(slept) == 3 and all(s == 0.25 for s in slept)  # a batch is spread out
@@ -405,7 +406,7 @@ def test_resize_redraws_region(monkeypatch):
     s.start()
     s._on_resize()
     s.header(status_lines(status()))
-    assert "\033[5;40r" in out.getvalue() and s.cols == 120
+    assert "\033[7;40r" in out.getvalue() and s.cols == 120
 
 
 def test_wants_color():
@@ -548,14 +549,14 @@ def test_a_small_screen_gets_a_header_and_lines_that_fit():
           "counts": {"documents": 97566, "entities": 255734, "facts": 33204, "inferred": 0, "disputed": 0, "rules": 141,
                      "agents": 12, "quiz": {"accuracy": 0.44, "chance": 0.25}}}  # fmt: skip
     wide = feed.status_lines(st)
-    assert "cycle 41,233" in text_of(wide[0]) and "97,566 docs" in text_of(wide[2]) and "inferred" in text_of(wide[2])
+    assert "cycle 41,233" in text_of(wide[0]) and "97,566 docs" in text_of(wide[-1]) and "inferred" in text_of(wide[-1])
     small = feed.status_lines(st, width=72)
-    counts = text_of(small[2])
+    counts = text_of(small[-1])
     assert "cycle" not in text_of(small[0]) and len(counts) <= 71, counts
     assert "97.6k docs" in counts and "256k things" in counts and "33.2k facts" in counts and "quiz 44%" in counts
     assert "inferred" not in counts  # the least important detail made room
     hot = feed.status_lines(st | {"temp_c": 79.0}, width=60)
-    assert "79 °C" in text_of(hot[2]) and len(text_of(hot[2])) <= 59  # a hot Pi is always shown
+    assert "79 °C" in text_of(hot[-1]) and len(text_of(hot[-1])) <= 59  # a hot Pi is always shown
     b = Build("0.4.2", "34dfbb6", "2026-10-11", True)
     on = {"online": True, "build": b.key}
     assert text_of(feed.badge(b, on)) == "v0.4.2 · 34dfbb6 · 2026-10-11 ✓"

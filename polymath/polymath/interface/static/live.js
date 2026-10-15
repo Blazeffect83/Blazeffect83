@@ -39,6 +39,7 @@ function status(st, badge) {
   else if (st.state === "paused" || ["pause", "throttle", "yield"].includes(st.mode)) { s.textContent = {pause: "paused", throttle: "throttled", yield: "slowed"}[st.mode] || "paused"; s.className = "s-yellow"; }
   else { s.textContent = "● learning"; s.className = "s-green"; }
   setNow($("#now-banner"), $("#now"), st);
+  PolyFocus.render($("#focus"), st);
   const c = (st && st.counts) || {};
   const q = c.quiz ? ` · quiz ${Math.round(c.quiz.accuracy * 100)}%` : "";
   $("#counts").textContent = st ? `${compact(c.documents)} docs · ${compact(c.facts)} facts · ${c.rules || 0} rules${q}` : "";

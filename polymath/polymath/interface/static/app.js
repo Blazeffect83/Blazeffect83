@@ -196,10 +196,11 @@ async function pollFace() {
     PolyFace.update(d.face);
     if (d.status && !d.status.online) PolyFace.offline();
     setNow(d.status);
+    PolyFocus.render($("#focus"), d.status);
     const b = $("#badge");
     b.textContent = d.badge ? d.badge.text : "";
     b.className = "badge " + (d.badge && d.badge.current === false ? "s-byellow" : "muted");
-  } catch (e) { PolyFace.update(null); setNow(null); }
+  } catch (e) { PolyFace.update(null); setNow(null); PolyFocus.render($("#focus"), null); }
 }
 
 function setNow(st) {

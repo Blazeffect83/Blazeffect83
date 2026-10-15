@@ -258,6 +258,7 @@ def test_learn_job_topic_entity_and_unknown(config, db):
     assert "recognised “Country03” as Country03" in acts and "queued 1 Wikipedia articles" in acts
     job = db.one("SELECT payload, priority FROM jobs WHERE kind='wikipedia.titles'")
     assert json.loads(job["payload"])["titles"] == ["Capitol03"] and job["priority"] == 2.5
+    assert json.loads(job["payload"])["about"] == "Country03"  # what the live feed says this round is about
     geo = learn_job(ctx_for(config, db, "drive.learn", {"query": "Geography"}))
     assert "prioritising topics: Geography" in " ".join(geo.result["actions"])
     assert kb.topics["Geography"] in interests(db)

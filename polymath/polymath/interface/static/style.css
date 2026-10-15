@@ -105,3 +105,36 @@ body.live { min-height: 100vh; display: flex; flex-direction: column; }
 .now-banner.off { background: rgba(248,81,73,.12); } .now-banner.off .now-tag { background: var(--bad); color: #fff; }
 body.live .now-banner { position: sticky; top: 0; z-index: 3; font-size: 24px; padding: 16px; }
 @media (max-width: 520px) { .now-banner { font-size: 20px; padding: 12px 14px; } }
+
+/* LEARNING: what it is learning and how far along (focus.js) */
+.focus-card { display: grid; gap: 8px; border-left: 4px solid var(--ok); }
+.focus-card[hidden] { display: none; }
+.focus-card.between { border-left-color: var(--line); }
+.focus-card.finished { border-left-color: var(--s6); }
+body.live .focus-card { margin: 10px 12px 0; }
+@media (min-width: 900px) { body.live .focus-card { max-width: 1100px; margin: 12px auto 0; width: calc(100% - 24px); } }
+.focus-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.focus-tag { flex: none; font-size: 12px; font-weight: 700; letter-spacing: 1px; padding: 3px 8px; border-radius: 6px;
+  background: var(--ok); color: #0b1015; }
+.focus-card.between .focus-tag { background: var(--line); color: var(--muted); }
+.focus-card.finished .focus-tag { background: var(--s6); }
+.focus-what { font-size: 20px; font-weight: 700; overflow-wrap: anywhere; }
+.focus-why { font-size: 13px; color: var(--s4); font-weight: 600; }
+.focus-item { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+.focus-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 4px 12px; align-items: center; }
+.focus-label { color: var(--muted); font-size: 13px; }
+.focus-bar { height: 12px; border-radius: 6px; background: var(--line); overflow: hidden; }
+.focus-fill { height: 100%; border-radius: 6px; }
+.focus-bar.known .focus-fill { background: var(--ok); }
+.focus-bar.round .focus-fill { background: var(--s6); }
+.focus-bar.open-ended { background: repeating-linear-gradient(90deg, var(--line) 0 10px, transparent 10px 16px); }
+.focus-val { font-variant-numeric: tabular-nums; font-size: 14px; white-space: nowrap; }
+.focus-pct { font-weight: 700; }
+.focus-gain { color: var(--ok); font-weight: 600; }
+.focus-note { grid-column: 2 / -1; color: var(--muted); font-size: 12px; }
+@media (max-width: 520px) {
+  .focus-row { grid-template-columns: 1fr auto; }
+  .focus-label { grid-column: 1 / -1; }
+  .focus-note { grid-column: 1 / -1; }
+  .focus-what { font-size: 18px; }
+}

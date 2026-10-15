@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.8.0"
+updated_for = "0.8.1"
 updated = "2026-10-15"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -25,7 +25,7 @@ as_of = "2026-10-15"
 summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
     "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
-    "install v0.8.0 (Orin the Caretaker): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on; no --allow-sd-card needed)",
+    "install v0.8.1 (Orin the Caretaker, and the LEARNING lines: what it learns and how far along): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on; no --allow-sd-card needed)",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
 ]
@@ -38,6 +38,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.8.1"
+date = "2026-10-15"
+changes = """Christian asked to see what it is learning and how far along it is. The live feed's header has two LEARNING lines (header 6 rows instead of 4), and the dashboard and the live page have a LEARNING card: the subject (the topic curiosity pursues, what you asked about, the wrong answer it reads up on, an agent's subject, or the dump part or file), who chose it, what it read last, how well it knows the topic (a bar: right answers when quizzed on it, else the share of the things its articles mention that it has read; live for topics up to 400 articles, hourly above) with what this round added, and this round's progress (articles of the batch, share of a dump, books). Between topics it shows the last one and what is next. Feed lines when a round starts and when it finishes (knows 34% → 41%); the face is proud after a round that taught it something. New module interface/focus.py (read-only); reading jobs from polymath learn and from mistakes now name their subject (payload about/topic_id). Nothing new is written to the database."""
+
 [[update]]
 version = "0.8.0"
 date = "2026-10-15"
@@ -665,6 +670,27 @@ self_healing = ["the feed still reads the dashboard and the database"]
 steps = [{ needs = "sudo", do = "recreate the runtime directory", command = "sudo systemctl restart polymath" }]
 since = "0.5.1"
 updated = "0.5.1"
+
+[[fault]]
+id = "learning-lines-quiet"
+title = "The LEARNING lines say 'between topics' or a bar does not move"
+area = "feed"
+codes = []
+patterns = ["between topics", "learning lines", "progress bar"]
+symptoms = [
+    "the feed or dashboard says 'between topics' for a long time while NOW says it is reading",
+    "the 'knows' bar stays put while the round's articles arrive",
+]
+causes = [
+    { cause = "the work is not a reading round (indexing, reasoning, training): normal, NOW says which", prior = 0.5 },
+    { cause = "the articles arrived but are not linked into the topic yet (memory.graph runs every few minutes)", prior = 0.3 },
+    { cause = "a big topic (over 400 articles) uses the hourly value; or the dashboard restarted, so 'this round' counts from then", prior = 0.2 },
+]
+checks = ["polymath status", "polymath feed --once"]
+self_healing = ["the lines are read-only and never stop the feed: on any database error they are left out for that poll"]
+steps = [{ needs = "you", do = "wait a few minutes; if NOW keeps saying it reads but LEARNING stays empty, send polymath feed --once" }]
+since = "0.8.1"
+updated = "0.8.1"
 
 [[fault]]
 id = "agent-restarts"

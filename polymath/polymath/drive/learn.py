@@ -64,22 +64,24 @@ def learn_job(ctx: JobContext) -> JobOutcome:
         ):
             titles.append(str(r["wiki_title"]))
     titles = list(dict.fromkeys(titles))[:120]
+    topics = ctx.db.query(
+        "SELECT id, name FROM topics WHERE name LIKE ? ORDER BY n_total DESC LIMIT 5", (f"%{query}%",)
+    )
     if titles:
         q = ",".join("?" * len(titles))
         indexed = [str(r["title"]) for r in ctx.db.query(f"SELECT title FROM wiki_index WHERE title IN ({q})", titles)]
         if indexed:
             ctx.scheduler.enqueue(
                 "wikipedia.titles",
-                {"titles": indexed, "lang": "en"},
+                # about / topic_id: what the live feed shows this round is about (interface/focus.py)
+                {"titles": indexed, "lang": "en", "about": query[:120]}
+                | ({"topic_id": int(topics[0]["id"])} if topics else {}),
                 key=f"learn:{norm_alias(query)}:{int(time.time() // 3600)}",
                 priority=2.5,
             )
             actions.append(f"queued {len(indexed)} Wikipedia articles about it from the dump")
         if len(indexed) < len(titles):
             actions.append(f"{len(titles) - len(indexed)} related articles are not in the dump parts read so far")
-    topics = ctx.db.query(
-        "SELECT id, name FROM topics WHERE name LIKE ? ORDER BY n_total DESC LIMIT 5", (f"%{query}%",)
-    )
     if topics:
         cur = interests(ctx.db)
         for t in topics:

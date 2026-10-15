@@ -177,6 +177,12 @@ class Face:
             self.react("doubt", now, 3.0, 1)
         elif k == "error":
             self.react("error", now, 4.0, 2)
+        elif k == "focus":  # a new subject; a round that taught it something
+            gained = event.get("done") and float(event.get("known") or 0) > float(event.get("start") or 1) + 0.005
+            if gained:
+                self.react("proud", now, 6.0, 2)
+            elif not event.get("done"):
+                self.react("aha", now, 3.0, 1)
         elif k == "note":
             what, status = event.get("what"), event.get("status")
             if what == "fixed":

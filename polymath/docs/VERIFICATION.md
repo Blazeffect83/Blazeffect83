@@ -907,6 +907,45 @@ ShellCheck are clean.
 
 **Not yet run on the Pi.**
 
+## 12q. What it is learning, and how far along (v0.8.1)
+
+**Why:** Christian, 2026-10-15: "when it says it's learning something I want to see what and some type of progress
+of that topic while it's learning it", keeping everything else on the live dashboard.
+
+**Built:** `interface/focus.py` (read-only); two LEARNING lines in the feed's header (6 rows instead of 4);
+`focus` feed lines and a face reaction; a LEARNING card (`static/focus.js`) on the dashboard and the `/live` page.
+`drive.learn` and `eval.remedy` now name the subject in their reading jobs.
+
+**Tests:** `tests/test_focus.py` (12):
+- a curiosity round: the topic, `curious`, the batch's progress (titles normalised), the article read last, and
+  `known` against a hand computation; after two articles are read and linked, `known` rises from 3/8 to 5/8 once
+  the 30 s cache expires, with `start` kept;
+- quizzed topics use right answers; a topic over 400 articles uses the hourly value; an unknown topic is `None`;
+- who chose it: you (with and without the new payload fields, and `polymath learn` itself), a wrong answer (its
+  question), an agent (its name and subject); a non-learning job has no focus;
+- each kind's own progress: Wikipedia dump part, Wikidata bytes (unnamed `Q…` stubs never shown), a download, books,
+  records with no known total, Wikidata property parts; a stale document is not "what it read last"; a malformed
+  checkpoint never breaks it;
+- the focus stays on a running round while other jobs take turns, moves on when it is done, and expires;
+- the header's exact text and colours, wide and small (72 columns); between topics with the last subject and
+  what is next; six header rows always cleared; ASCII bars on an ASCII terminal; plain output skips empty lines;
+- feed lines when a round starts and finishes (`knows 38% → 62%`), none for repeats or rounds over when first
+  seen; the face is proud after a round that taught it something;
+- `Feed.status` carries `focus`, then `last_focus` between topics, and a database error leaves both out;
+- `eval.remedy` puts the question into the reading job (and `test_drive` checks `polymath learn`'s `about`).
+
+Changed for the new header: `test_feed`, `test_always_on` and `test_storage` find the counts on the last header line.
+`test_map_live` checks that `focus.js` is served and that both pages load it.
+
+**In a browser** (headless Chromium, the real dashboard on a test brain): the card on `/live` at phone width
+(390 px) and on `/` at 1280 px showed the topic, `curious`, the article read last, and both bars. While the page
+was open the round moved from 0 to 2 of 4 articles. There were no console errors.
+
+**Result:** 719 tests pass and 1 is skipped, at 93 % coverage (`interface/focus.py` 90 %). `ruff`, `ruff format`
+and `mypy --strict` are clean. No shell scripts changed.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

@@ -30,6 +30,9 @@ implemented here and learns only from data the agent downloads itself.
 - **Knowledge map:** an interactive star map of what it has read about on the dashboard, with a time-lapse of
   its brain growing. Click a topic and it tells you what it knows.
 - **Watch from your phone:** `http://<pi>:8765/live` shows the face and the live feed.
+- **See what it is learning, and how far along** (v0.8.1): the feed, the dashboard and `/live` name the topic it
+  is on and who chose it (curiosity, you, a mistake, an agent), the article it just read, a bar for how well it
+  knows the topic (and what this round added), and a bar for the round itself (`2 of 4 articles`).
 - **Protects the SD card:** it measures how much it writes and estimates how long the card lasts at that rate.
   It writes less (idle cycles now write nothing), and when you plug in a drive, the whole brain moves onto it.
 - **Watch it learn:** at login a terminal opens with a live feed of everything it reads, learns, infers,

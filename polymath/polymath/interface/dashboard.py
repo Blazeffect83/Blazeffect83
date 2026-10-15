@@ -56,6 +56,7 @@ STATIC = {
     "app.js": "text/javascript; charset=utf-8",
     "live.js": "text/javascript; charset=utf-8",
     "face.js": "text/javascript; charset=utf-8",
+    "focus.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
     "icon.svg": "image/svg+xml",
 }

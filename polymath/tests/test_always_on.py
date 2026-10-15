@@ -476,13 +476,13 @@ def test_header_never_shows_false_zero_counts_and_shows_offline():
     flat = ["".join(t for t, _ in line) for line in lines]
     assert "learning offline" in flat[0]
     assert "no internet since" in flat[1] and "studying what it has" in flat[1]
-    assert "counting what it knows" in flat[2] and "0 facts" not in flat[2]
+    assert "counting what it knows" in flat[-1] and "0 facts" not in flat[-1]
     st["counts"] = {"documents": 5, "entities": 3, "facts": 9, "rules": 4, "approx": True}
-    assert "~9 facts" in "".join(t for t, _ in feed.status_lines(st, width=0)[2])
+    assert "~9 facts" in "".join(t for t, _ in feed.status_lines(st, width=0)[-1])
     st["counts"] = {"documents": 5, "entities": 3, "facts": 9, "inferred": 1, "disputed": 0, "rules": 4}
     st["net"] = {"online": True}
     flat = ["".join(t for t, _ in line) for line in feed.status_lines(st, width=0)]
-    assert "learning" in flat[0] and "offline" not in flat[0] and "9 facts" in flat[2]
+    assert "learning" in flat[0] and "offline" not in flat[0] and "9 facts" in flat[-1]
 
 
 def test_net_notes_render_and_move_the_face():

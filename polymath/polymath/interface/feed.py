@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import signal
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -50,6 +51,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from polymath.core.db import Database
+from polymath.interface import focus
 from polymath.interface.answer import render_value
 from polymath.interface.face import FRAME_S, Face
 from polymath.version import Build, read_build
@@ -679,7 +681,8 @@ class Feed:
         state = str(hb.get("state") or "not started")
         online = age is not None and age < self.stale and state != "stopped"
         activity = action = ""
-        for r in self.db.query("SELECT action, status FROM cycles ORDER BY id DESC LIMIT 30"):
+        cycles = self.db.query("SELECT action, status, job_id, ended FROM cycles ORDER BY id DESC LIMIT 30")
+        for r in cycles:
             if r["status"] in {"done", "continue", "interrupted", "failed"} and r["action"]:
                 action = str(r["action"])
                 activity = ACTIVITY.get(action, action)
@@ -708,12 +711,26 @@ class Feed:
             "mode": str(vit["mode"]) if vit else "normal",
             "paused_reason": self.db.kv_get("paused_reason") if state == "paused" else None,
             "curious": curious,
+            **self.focus(cycles, now),
             "counts": self.counts(now),
             "brain": self.brain(),
             "net": self.net(),
             **({"sd_card": sd} if isinstance(sd := self.db.kv_get("sd_card"), dict) else {}),
             **({"caretaker": ct} if isinstance(ct := self.db.kv_get("caretaker"), dict) else {}),
         }
+
+    def focus(self, cycles: list[Any], now: float) -> dict[str, Any]:
+        """What it is learning and how far along (``interface.focus``): ``focus``, or ``last_focus`` between topics.
+
+        Never breaks the feed: an unexpected row (an old brain, a table being migrated) just leaves it out."""
+        try:
+            f = focus.current(self.db, focus.pick(self.db, cycles, now), now)
+            if f is not None:
+                return {"focus": f}
+            prev = focus.last(self.db)
+            return {"last_focus": prev} if prev is not None else {}
+        except (sqlite3.Error, KeyError, TypeError, ValueError):
+            return {}
 
     def net(self) -> dict[str, Any]:
         """The agent's view of the internet (``core.netstate``): offline means it studies what it has."""
@@ -881,6 +898,8 @@ ANSI = {
     "now": "1;30;46",  # black on cyan: the NOW tag stands out on any terminal theme
     "nowwarn": "1;30;43",  # black on yellow
     "nowoff": "1;37;41",  # white on red
+    "learn": "1;30;42",  # black on green: the LEARNING tag
+    "learnoff": "1;30;47",  # black on grey: between topics
 }
 ASCII_FALLBACK = {
     "→": "->",
@@ -932,6 +951,9 @@ ASCII_FALLBACK = {
     "⌂": "^",
     "♪": "~",
     "↓": "v",
+    # progress bars (the LEARNING lines)
+    "█": "#",
+    "░": "-",
 }
 
 
@@ -1157,6 +1179,26 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
         return [*head, _tag("body", str(e.get("style", "yellow"))), (str(e["text"]), "")]
     if k == "curious":
         return [*head, _tag("curious", "magenta"), ("most curious about: ", ""), (", ".join(e["topics"]), "bold")]
+    if k == "focus":
+        what = str(e.get("what") or "")
+        why = f" ({e['why']})" if e.get("why") else ""
+        step = focus.step_text(e["step"]) if isinstance(e.get("step"), dict) else ""
+        known, start = e.get("known"), e.get("start")
+        if e.get("done"):
+            segs = [*head, _tag("learned", "bgreen"), ("finished a round on ", ""), (what, "bold"), (why, "magenta")]
+            if step:
+                segs.append((f" · {step}", "dim"))
+            if known is not None and start is not None and abs(float(known) - float(start)) >= 0.005:
+                segs += [(" · knows ", "dim"), (f"{focus.pct(start)} → {focus.pct(known)}", "bgreen")]
+            elif known is not None:
+                segs.append((f" · knows {focus.pct(known)}", "dim"))
+            return segs
+        segs = [*head, _tag("learning", "bgreen"), ("started on ", ""), (what, "bold"), (why, "magenta")]
+        if known is not None:
+            segs.append((f" — knows {focus.pct(known)} so far", "dim"))
+        elif step:
+            segs.append((f" — {step}", "dim"))
+        return segs
     if k == "milestone":
         return [*head, _tag("milestone", "bmagenta"), (str(e["text"]), "bold"), (" ★", "byellow")]
     if k == "link":
@@ -1197,6 +1239,59 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
     return segs
 
 
+def bar(fraction: float, width: int) -> str:
+    """A progress bar of ``width`` cells: █ done, ░ to go."""
+    full = round(max(0.0, min(1.0, fraction)) * width)
+    return "█" * full + "░" * (width - full)
+
+
+def focus_lines(st: dict[str, Any], *, width: int = 0) -> list[list[Seg]]:
+    """The header's LEARNING lines (``interface.focus``): what it learns and for whom, then how far along.
+
+    Line one: the subject, who chose it and what it read last. Line two: how well it knows the topic (a bar, the
+    percentage, what this round added, and what that is based on) and this round's progress (a bar and counts).
+    Between topics: the last subject, dimmed, and what curiosity wants next.
+    """
+    short = 0 < width < NARROW
+    cells = 8 if short else 14
+    f = st.get("focus")
+    if not isinstance(f, dict):
+        prev, nxt = st.get("last_focus"), [str(t) for t in st.get("curious") or []]
+        first: list[Seg] = [(" LEARNING ", "learnoff"), ("  between topics", "dim")]
+        if isinstance(prev, dict) and prev.get("what"):
+            known = (prev.get("topic") or {}).get("known")
+            first.append((f" — last: {prev['what']}" + (f" (knows {focus.pct(known)})" if known is not None else ""),
+                          "dim"))  # fmt: skip
+        second: list[Seg] = [("  next: " + " · ".join(nxt[:3]), "dim")] if nxt else [("", "")]
+        return [first, second]
+    tag = " LEARNING " if not f.get("finished") else " LEARNED  "
+    first = [(tag, "learn"), ("  " + str(f.get("what") or ""), "bright")]
+    if f.get("why"):
+        first.append((f"  · {f['why']}", "magenta"))
+    if f.get("item"):
+        verb = "just read" if f.get("kind") != "wikidata.dump" else "just learned about"
+        first.append((f"  · {verb} “{f['item']}”", "dim"))
+    elif f.get("source") and str(f["source"]) not in str(f.get("what")):
+        first.append((f"  · from {f['source']}", "dim"))
+    second = []
+    topic = f.get("topic") or {}
+    if topic.get("known") is not None:
+        known = float(topic["known"])
+        name = "" if topic.get("name") == f.get("what") else f" {topic['name']}"
+        second += [(f"  knows{name} ", "dim"), (bar(known, cells), "green"), (f" {focus.pct(known)}", "bold")]
+        if (g := focus.gain(topic)) >= 0.005:
+            second.append((f" (+{focus.pct(g)})", "bgreen"))
+        if (why := focus.basis(topic)) and not short:
+            second.append((f" — {why}", "dim"))
+    step = f.get("step")
+    if isinstance(step, dict) and (text := focus.step_text(step)):
+        second.append(("   this round " if second else "  this round ", "dim"))
+        if (frac := focus.step_fraction(step)) is not None:
+            second += [(bar(frac, cells), "cyan"), (" ", "")]
+        second.append((text + (" ✓" if f.get("finished") else ""), ""))
+    return [first, second or [("", "")]]
+
+
 def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0) -> list[list[Seg]]:
     """The pinned header: state, then what it is doing now (its own line), then knowledge counts.
 
@@ -1207,6 +1302,8 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
         return [
             [(" POLYMATH ", "bold"), (" ○ ", "yellow"), (offline or "connecting…", "yellow")],
             [(" NOW ", "nowoff"), ("  waiting for the agent", "yellow")],
+            [],
+            [],
             [(" the feed starts by itself", "dim")],
         ]
     state = st.get("state", "")
@@ -1265,7 +1362,7 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
     if width:
         while len(parts) > 2 and sum(len(seg[0]) for _p, seg in parts) > width - 1:
             parts.remove(min(parts, key=lambda ps: ps[0]))
-    return [line1, now_line(st), [seg for _p, seg in parts]]
+    return [line1, now_line(st), *focus_lines(st, width=width), [seg for _p, seg in parts]]
 
 
 def badge(installed: Build, st: dict[str, Any] | None, *, width: int = 0) -> list[Seg]:
@@ -1304,6 +1401,41 @@ class _Seen:
     online: bool | None = None
     curious: list[str] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
+    focus_job: int | None = None
+    focus: dict[str, Any] | None = None
+    finished: set[int] = field(default_factory=set)
+
+
+def _worth_saying(f: dict[str, Any]) -> bool:
+    """A round worth a feed line: someone chose it, it is about a topic, or it has a known size."""
+    return bool(f.get("why") or (f.get("topic") or {}).get("known") is not None or (f.get("step") or {}).get("total"))
+
+
+def focus_events(seen: _Seen, st: dict[str, Any], now: float) -> list[dict[str, Any]]:
+    """A feed line when it starts learning something new, and when it finishes a round (with what it gained)."""
+    f = st.get("focus") if isinstance(st.get("focus"), dict) else None
+    out: list[dict[str, Any]] = []
+    if f is None or f.get("job") is None:
+        return out
+    job = int(f["job"])
+    first_sight = job != seen.focus_job
+    topic = f.get("topic") or {}
+    if first_sight:
+        seen.focus_job = job
+        if f.get("finished"):  # already over when first seen: nothing to announce
+            seen.finished.add(job)
+        elif _worth_saying(f):
+            out.append({"kind": "focus", "at": now, "what": f.get("what"), "why": f.get("why", ""),
+                        "known": topic.get("known"), "step": f.get("step")})  # fmt: skip
+    if f.get("finished") and job not in seen.finished:
+        seen.finished.add(job)
+        if _worth_saying(f):
+            out.append({"kind": "focus", "at": now, "done": True, "what": f.get("what"), "why": f.get("why", ""),
+                        "known": topic.get("known"), "start": topic.get("start"), "step": f.get("step")})  # fmt: skip
+    if len(seen.finished) > 200:
+        seen.finished = set(sorted(seen.finished)[-100:])
+    seen.focus = f
+    return out
 
 
 def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1337,13 +1469,14 @@ def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
             if m is not None:
                 out.append({"kind": "milestone", "at": now, "text": f"milestone: {compact(m)} {what}"})
         seen.counts[key] = n
+    out += focus_events(seen, st, now)
     return out
 
 
 class Screen:
     """Terminal output: a pinned header above a scrolling feed (tty), or plain lines (pipe / dumb terminal)."""
 
-    HEADER = 4  # state · NOW · counts · rule
+    HEADER = 6  # state · NOW · LEARNING (subject) · LEARNING (progress) · counts · rule
 
     def __init__(self, out: TextIO, *, color: bool, fancy: bool, clock: Callable[[], float] = time.time) -> None:
         self.out = out
@@ -1352,7 +1485,7 @@ class Screen:
         self.clock = clock
         enc = (getattr(out, "encoding", None) or "utf-8").lower()  # in-memory streams have no encoding
         try:
-            "→⇄✓✗●○·…─°“”".encode(enc)
+            "→⇄✓✗●○·…─°“”█░".encode(enc)
             self.unicode = True
         except (UnicodeEncodeError, LookupError):
             self.unicode = False
@@ -1415,7 +1548,8 @@ class Screen:
             rule: list[Seg] = [("─" * self.cols, "dim")]
             buf = ["\0337"]
             rw = self._width(right)
-            for i, segs in enumerate([*lines, rule][: self.HEADER]):
+            body = [*lines, *[[] for _ in range(self.HEADER)]][: self.HEADER - 1]  # fewer lines: clear the rest
+            for i, segs in enumerate([*body, rule]):
                 if i == 0 and rw:
                     left, col = self.paint(segs, width=self.cols - rw - 2), self.cols - rw + 1
                     buf.append(f"\033[1;1H\033[2K{left}\033[1;{col}H{self.paint(right or [], width=rw)}")
@@ -1429,7 +1563,7 @@ class Screen:
         if force_plain or now - self._plain_status_at >= 60.0:
             self._plain_status_at = now
             joined: list[Seg] = [("── ", "dim")]
-            for i, segs in enumerate(lines):
+            for i, segs in enumerate(seg for seg in lines if "".join(t for t, _ in seg).strip()):
                 joined += [(" ·", "dim")] if i else []
                 joined += segs
             if right:

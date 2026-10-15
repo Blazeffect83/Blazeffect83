@@ -122,7 +122,33 @@ Busy streams are capped per refresh (for example 5 facts and 4 documents every 1
 (`+4,312 more facts`), so a Wikidata ingest stays readable. The pinned header shows:
 - the state, and the version top right;
 - **a NOW line** with what it is doing right now, highlighted (cyan; yellow when paused; red when not running);
+- **two LEARNING lines** (v0.8.1): what it is learning and how far along it is (below);
 - its knowledge counts, the latest quiz score and the CPU temperature.
+
+**What it is learning, and how far along.** Jobs run in short slices that take turns, so NOW changes every few
+seconds. The LEARNING lines follow the reading round underneath and stay on it while other work takes a turn:
+
+```
+ LEARNING   Photosynthesis  · curious  · just read “Stoma”
+  knows █████████░░░░░ 62% (+25%) — read about 4 of 6 things it mentions   this round ███████░░░░░░░ 2 of 4 articles
+```
+
+- **The subject:** the topic curiosity pursues, what you asked for (`polymath learn …`), the wrong answer it reads
+  up on, an agent's subject, or the dump part or file it works through.
+- **Who chose it:** `curious`, `you asked`, `fixing a wrong answer`, `agent <name>`, or nothing (its reading plan).
+- **What it read last:** the newest article of the round (for Wikidata, the newest thing it learned a fact about).
+- **knows:** how well it knows the topic, the same measure curiosity ranks topics by. Once it has been quizzed on
+  the topic, it is the share of right answers. Before that, it is the share of the things the topic's articles
+  mention that it has read about too. `(+25%)` is what this round has added so far. It updates every 30 seconds
+  for topics of up to 400 articles, and hourly for bigger ones.
+- **this round:** the articles of the batch it has read, the share of a dump file, or the books of a list. `✓` and
+  `LEARNED` when the round is finished.
+- **Between topics** (indexing, reasoning, training): the last subject, dimmed, and the next topics curiosity wants.
+
+The feed also gets a line when a round starts (`learning  started on Photosynthesis (curious) — knows 38% so far`)
+and when it finishes (`learned  finished a round on Photosynthesis (curious) · 4 of 4 articles · knows 38% → 62%`),
+and the face is proud after a round that taught it something. The dashboard and the `/live` page show the same
+in a LEARNING card under the NOW banner, with the two bars.
 
 The feed window uses a larger font (14 pt) than other terminals. Change it with `POLYMATH_FEED_FONT_SIZE`, or
 edit `~/.config/polymath-feed/lxterminal/lxterminal.conf` (your other terminals are not affected). The dashboard
