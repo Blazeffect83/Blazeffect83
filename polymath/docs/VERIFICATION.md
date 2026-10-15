@@ -849,6 +849,64 @@ SD-card note.
 
 **Not yet run on the Pi.** The script has only run against stand-ins here.
 
+## 12p. Orin the Caretaker (v0.8.0)
+
+**Why:** Christian asked for an agent "dedicated just for fixing and working on the pi or the polymath intelligence
+… troubleshooting, security, and any simple to advanced issues it can handle", and moved forward with it on
+2026-10-15.
+
+**Built** (docs/CARETAKER.md C.1–C.10):
+- `agents/caretaker.py`: the senses, learned bands, incidents, Bayes and value-of-information checks, ten Tier 1
+  remedies with their bounds, verification and learning (`fault_stats`), escalation with the four parts, inbox
+  triage, and the install and security watch;
+- migration 0018;
+- the loop, guard, feed, face, doctor, snapshot and CLI hooks;
+- ten new known faults, `[situation] on_hold`, and `selftune.reset(by=…)`.
+
+**Tests:** `tests/test_caretaker.py` (26), the C.10 list:
+- detection: a blip opens nothing, a broken streak opens nothing, a lasting symptom opens one incident with its
+  evidence, and a hard limit opens one at once;
+- Bayes against a hand computation; value of information choosing the telling check (never a coin toss); every
+  model complete and known to `faults.toml`;
+- heat: checked, slowed down, verified, learned, back to full speed;
+- a failed remedy escalates with all four parts, quoting the fault's step; escalations repeat at most daily;
+- a self-resolving symptom makes Orin less jumpy;
+- dead jobs: requeued once for a passing problem, told (not retried) for a bug;
+- crash loops: quarantined, never core kinds, never more than three; the real loop holds a quarantined kind back
+  and runs a requested checkpoint; the guard obeys the slowdown, and Orin runs in a pause;
+- every reported problem reaches it: a new one is escalated as "new to me", SD-card mode (on hold) is noted only,
+  and quiet ones close after a day;
+- the build, configuration and permissions are watched; in SD-card mode the SSD's USB speed is not raised;
+- safety: an AST scan finds no subprocess, socket or ctypes imports, and no file, permission or process calls; no
+  allow-list or vetting names appear in its source; malformed kv switches never break the loop;
+- end to end, a real agent at 74 °C: Orin's job opens the heat incident and slows it down. The snapshot, the face
+  (`mending`), doctor, the feed's `Orin` line, `polymath caretaker` and the incident list show it.
+
+Other test files changed for the new behaviour: `test_body` (Orin is allowed during a pause), `test_face` and
+`test_feed` (the `mending` face, the `caretaker.step` activity label), and `test_sdcard` (SSD work on hold).
+
+**Not built yet** (C.12 defaults kept):
+- mailbox and blackboard hooks (society v2);
+- the dashboard pulse;
+- the clock-skew and outbound-host audits;
+- the weekly `quick_check` of the newest backup;
+- `/api/ask` abuse counting;
+- a phone channel for escalations.
+
+**Rehearsal:** on the brain built by the real v0.5.6 code (§12o), in SD-card mode, through the real CLI:
+- migration 0018 applied;
+- a job that died of a timeout was checked (a passing problem, p 0.87), requeued and run;
+- the daily SD-card note was recorded as on hold, said once, never raised;
+- `polymath caretaker` and `polymath caretaker incidents --all` showed both.
+
+That rehearsal also caught a flaw, now fixed. The on-hold note stayed open as an incident, which would have kept
+the face at `mending` for as long as SD-card mode lasted.
+
+**Result:** 707 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict` and
+ShellCheck are clean.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

@@ -263,6 +263,34 @@ then the most facts, an article, and PageRank.
   directive) since `started`, then removes it. `scripts/sd-card-mode.sh`
   does the switching (drop-in, unmount, USB `authorized=0`, renaming the SD card's old copy into place, install,
   checks); `scripts/ops-lib.sh` holds what it shares with `rescue.sh`.
+- **Orin the Caretaker** (`agents/caretaker.py`, v0.8.0).
+  - **When it runs.** Job `caretaker.step` is kept recurring every 120 s by `caretaker.planner` at priority 3.6,
+    above the bandit's `URGENT`. The body guard allows it during a pause.
+  - **A turn.**
+    - It reads `SIGNALS` from `vitals`, `/proc/self/status`, the `-wal` file, `backups`, `netstate`, `documents`,
+      `quizzes` and `jobs`.
+    - It samples them into `signal_samples` (every 10 min, a week kept) and recomputes `signal_bands`
+      (median/MAD).
+    - A reading outside its band (k·1.4826·MAD, never narrower than the signal's floor; k in kv `caretaker_k`, raised
+      by self-resolving false alarms) twice in a row, or past a hard limit once, opens an `incidents` row (one per
+      key).
+    - `watch_jobs` adds crash loops (`cycles` failures per kind) and dead jobs. `watch_body_and_install` adds
+      firmware under-voltage, slow USB disks, a build mismatch, the config hash and the data-directory mode.
+      `triage_inbox` turns `events` issues into `inbox` incidents tagged with their known fault (on-hold faults
+      only noted).
+  - **Working an incident.** Each `MODELS` entry has causes with priors, read-only checks with likelihoods, and
+    remedies per cause.
+    - Priors are blended with how often each cause was it before (`fault_stats` remedy `''`).
+    - `posterior` is Bayes. `best_check` picks by expected entropy drop per cost, at most 3 checks a turn.
+    - At p ≥ 0.6 it applies the remedy with the best Beta P(fix)/cost. Tier 1 remedies change the database only:
+      jobs; the kv switches `caretaker_slowdown` (read by `Guard.observe`), `caretaker_quarantine` (read by
+      `Agent._quarantine_filter`) and `caretaker_checkpoint` (run by `Agent._checkpoint_if_asked`, outside a
+      transaction); `selftune.reset(by="Orin")`.
+    - After the model's window it verifies, updates `fault_stats`, and tries the next remedy or escalates.
+  - **Escalation.** It quotes the fault's first `you`/`sudo`/`approval` step, repeats at most daily, and goes to
+    events kind `caretaker` (the feed), kv `caretaker` (snapshot, dashboard feed status, face mood `mending`,
+    doctor) and `polymath caretaker`.
+  - **Migration 0018** adds `incidents`, `fault_stats`, `signal_samples` and `signal_bands`.
 - **Caretaker knowledge** (`agents/faults.toml` + `agents/faults.py`, v0.6.1): known faults (codes, words,
   symptoms, causes with priors, checks, self-healing, steps tagged by who may act), the situation on the Pi,
   the incident history and per-release updates. `issues.report` tags each problem with its faults

@@ -103,10 +103,10 @@ def test_disk_pressure_requests_eviction_and_allows_it_while_paused(config, db):
     assert db.one("SELECT kind, priority FROM jobs")["kind"] == "body.evict"
     state["free"] = 3.0
     st = g.observe()
-    assert st.mode == "pause" and st.allow == ["body.evict"]
+    assert st.mode == "pause" and st.allow == ["body.evict", "caretaker.step"]  # Orin keeps watching too
     assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind='body.evict'") == 1  # one request per hour
     state["temp"] = 90.0
-    assert g.observe().allow == []  # too hot: nothing runs, not even eviction
+    assert g.observe().allow == ["caretaker.step"]  # too hot: nothing runs, not even eviction; only Orin watches
     config.body.disk_budget_gb = 0.000001
     state.update(temp=50.0, free=500.0)
     clock.t += 3600

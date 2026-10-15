@@ -4,7 +4,30 @@
 - spec written 2026-10-13 on Christian's request;
 - its inbox has been live since v0.5.2 (C.2b);
 - its knowledge base has been live since v0.6.1 (C.6b);
-- the agent itself is built after stage S1.
+- **Orin is built in v0.8.0** (`polymath/agents/caretaker.py`, 2026-10-15, on Christian's go-ahead), ahead of
+  society v2. Without stage S1 it is not a society agent: it is a system job, `caretaker.step`, that runs whether
+  the society runs or not.
+
+  Built:
+  - the senses, minus the dashboard pulse;
+  - the incident loop;
+  - Tier 1 remedies and Tier 2 messages;
+  - the inbox;
+  - the security watch, for the configuration, the build and permissions;
+  - persistence;
+  - where it shows up, minus mission control;
+  - the C.10 tests.
+
+  Deferred:
+  - mail, blackboard and mission-control hooks (with S2/S3b);
+  - the dashboard pulse;
+  - the clock-skew check;
+  - the outbound-host audit;
+  - the weekly backup `quick_check`;
+  - `/api/ask` abuse counting;
+  - a phone channel (C-Q2).
+
+  Its k (C.7) is a kv value tuned by false alarms, not yet a `selftune.Knob`.
 
 Christian's request:
 

@@ -358,8 +358,8 @@ def test_the_caretaker_knows_sd_card_mode():
     off = [s for s in f.steps if "sd-card-mode.sh off" in s.command]
     assert off and off[0].needs == "approval"
     assert any("sd-card-mode.sh on" in s.command for s in k.by_id["brain-mount-frozen"].steps)
-    assert any("sd-card-mode.sh on" in w for w in k.situation["waiting_on"])
     assert any(h.fault == "sd-card-mode" and h.open for h in k.history)
+    assert "sd-card-mode" in k.situation["on_hold"]  # Christian: leave the SSD alone for now
 
 
 # ------------------------------------------------------------------------------------------- deployment

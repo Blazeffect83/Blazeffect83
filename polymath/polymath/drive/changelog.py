@@ -15,7 +15,7 @@ from typing import Any
 from polymath.core.db import Database
 from polymath.senses.openweb import event
 
-AREAS = ("tuning", "rules", "specialists", "reading", "writing")
+AREAS = ("tuning", "rules", "specialists", "reading", "writing", "caretaker")
 
 
 def record(

@@ -1004,10 +1004,23 @@ def cmd_caretaker(config: Config, args: argparse.Namespace) -> int:
             state = "still open" if h.open else f"fixed in v{h.fixed_in}"
             print(f"{h.date}  v{h.version}: {h.what}\n    cause: {h.cause}\n    → {h.fault}, {state}")
         return 0
+    from polymath.agents import caretaker
+
     st, _age = snapshot.read_status(snapshot.path_for(config))  # readable by everyone: no database needed
-    lines = faults.briefing((st or {}).get("issues") or [], version=__version__)
+    orin = (st or {}).get("caretaker") or None
+    if args.op == "incidents":
+        rows = caretaker.incident_rows(config, every=args.all)
+        if rows is None:  # the brain belongs to the polymath user: what the agent's snapshot says
+            rows = [dict(i, outcome="") for i in (orin or {}).get("open", [])]
+        if args.json:
+            print(json.dumps(rows, indent=2, default=str))
+        else:
+            print("\n".join(caretaker.incident_lines(rows)) or f"{caretaker.NAME}: no incidents")
+        return 0
+    lines = faults.briefing((st or {}).get("issues") or [], version=__version__) + caretaker.describe(orin)
     if args.json:
-        print(json.dumps({"updated_for": k.updated_for, "situation": k.situation, "lines": lines}, indent=2))
+        print(json.dumps({"updated_for": k.updated_for, "situation": k.situation, "lines": lines, "orin": orin},
+                         indent=2))  # fmt: skip
     else:
         print("\n".join(lines))
     return 0
@@ -1254,9 +1267,10 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--json", action="store_true")
     dr.set_defaults(func=cmd_doctor)
 
-    ct = sub.add_parser("caretaker", help="what the caretaker knows: the situation now, known problems, fixes")
-    ct.add_argument("op", nargs="?", default="brief", choices=["brief", "known", "show", "history"])
+    ct = sub.add_parser("caretaker", help="Orin the caretaker: the situation, its incidents, known problems, fixes")
+    ct.add_argument("op", nargs="?", default="brief", choices=["brief", "known", "show", "history", "incidents"])
     ct.add_argument("fault", nargs="?", help="with `show`: the known problem's id (`polymath caretaker known`)")
+    ct.add_argument("--all", action="store_true", help="with `incidents`: closed ones too (the last 30)")
     ct.add_argument("--json", action="store_true")
     ct.set_defaults(func=cmd_caretaker)
 

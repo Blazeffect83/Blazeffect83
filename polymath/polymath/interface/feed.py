@@ -146,6 +146,7 @@ ACTIVITY: dict[str, str] = {
     "reason.sanity": "checking for facts that cannot be true",
     "net.probe": "checking whether the internet is back",
     "storage.fold_standby": "moving what it read on the standby brain onto its drive",
+    "caretaker.step": "Orin the caretaker checks on everything",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
     "eval.quiz": "quizzing itself",
@@ -711,6 +712,7 @@ class Feed:
             "brain": self.brain(),
             "net": self.net(),
             **({"sd_card": sd} if isinstance(sd := self.db.kv_get("sd_card"), dict) else {}),
+            **({"caretaker": ct} if isinstance(ct := self.db.kv_get("caretaker"), dict) else {}),
         }
 
     def net(self) -> dict[str, Any]:
@@ -901,6 +903,7 @@ ASCII_FALLBACK = {
     "◔": "o",
     "◕": "o",
     "‿": "_",
+    "⚙": "*",  # Orin the caretaker at work
     "≖": "=",
     "¬": "-",
     "•": "o",
@@ -1097,6 +1100,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "net": "byellow" if status == "offline" else "bgreen",
             "issue": "red" if status == "bad" else "yellow",
             "standby": "bgreen" if status == "folded" else "byellow",
+            "caretaker": {"resolved": "bgreen", "tell": "byellow", "acting": "bcyan"}.get(str(status), "cyan"),
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -1111,6 +1115,7 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "net": "offline" if status == "offline" else "online",
             "issue": "problem",
             "standby": "standby",
+            "caretaker": "Orin ✓" if status == "resolved" else "Orin",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":

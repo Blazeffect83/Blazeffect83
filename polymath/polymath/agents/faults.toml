@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.7.0"
+updated_for = "0.8.0"
 updated = "2026-10-15"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -25,9 +25,11 @@ as_of = "2026-10-15"
 summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
     "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
+    "install v0.8.0 (Orin the Caretaker): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on; no --allow-sd-card needed)",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
 ]
+on_hold = ["sd-card-mode"]  # Christian, 2026-10-15: leave the SSD alone for now (Orin notes these, never escalates)
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
     "sd-card-mode",
@@ -36,6 +38,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.8.0"
+date = "2026-10-15"
+changes = """Orin the Caretaker is built (agents/caretaker.py, job caretaker.step every 2 minutes, urgent, also during a pause). Each turn: learned normal bands (median ± k·MAD over a week, k tuned by false alarms) and hard limits on temperature, free space, memory, the WAL, backups, the internet, reading rate, quiz accuracy and safety lists; failing and dead jobs; the problems inbox; power, USB speed, build, configuration and permissions. Incidents (table incidents) rank causes by Bayes, run the most informative read-only check, apply a bounded Tier 1 remedy (slow down, evict, backup, WAL checkpoint, probe, requeue, quarantine 6 h, safety lists, roll back a tuned setting, replan), verify it after its window and learn what works (fault_stats), or escalate once a day with what/evidence/cause/step quoted from this file. Faults on hold ([situation] on_hold) are noted, never escalated. Shown in the feed (tag Orin), the face (mending, proud), doctor (Orin lines) and polymath caretaker [incidents]. New faults: agent-memory-high, wal-growing, backup-stale, blocklists-stale, ingest-stall, quiz-accuracy-drop, pi-under-voltage, update-not-running, config-changed, data-dir-permissions."""
+
 [[update]]
 version = "0.7.0"
 date = "2026-10-15"
@@ -437,6 +444,179 @@ since = "0.7.0"
 updated = "0.7.0"
 
 [[fault]]
+id = "agent-memory-high"
+title = "The agent uses a lot of memory"
+area = "body"
+codes = []
+patterns = ["uses a lot of memory", "MemoryHigh", "oom"]
+symptoms = ["Orin: 'the agent uses a lot of memory'", "the agent restarts with no traceback (an out-of-memory kill)"]
+causes = [{ cause = "several big jobs at once on a big brain (embeddings, the alias automaton)", prior = 1.0 }]
+checks = ["systemctl status polymath --no-pager   (Memory: … high: 2.5G max: 3G)", "free -m"]
+self_healing = ["Orin slows the agent down (intensity 60 %) until memory is normal again; systemd keeps it under 3 GB"]
+steps = [
+    { needs = "caretaker", do = "slow the agent down for an hour, then check again" },
+    { needs = "sudo", do = "if it keeps happening, send what systemd saw", command = "journalctl -u polymath -n 120 --no-pager | grep -iE 'memory|oom|killed'" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "wal-growing"
+title = "The database's write-ahead log keeps growing"
+area = "database"
+codes = []
+patterns = ["write-ahead log", "polymath.sqlite3-wal"]
+symptoms = ["Orin: 'the database's write-ahead log keeps growing'", "ls -l db/: polymath.sqlite3-wal is hundreds of MB"]
+causes = [{ cause = "a long read (the dashboard, a backup) held the checkpoint back", prior = 1.0 }]
+checks = ["sudo ls -l /var/lib/polymath/brain/db /srv/polymath/db 2>/dev/null"]
+self_healing = ["Orin asks for a checkpoint (TRUNCATE) between job slices, at most every 10 minutes"]
+steps = [
+    { needs = "caretaker", do = "checkpoint the write-ahead log" },
+    { needs = "sudo", do = "if it stays big, restart the dashboard (a stuck reader)", command = "sudo systemctl restart polymath-dashboard" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "backup-stale"
+title = "No good backup for a day and a half"
+area = "database"
+codes = []
+patterns = ["no good backup", "backup skipped", "backup failed"]
+symptoms = ["Orin: 'no good backup for a day and a half'", "the feed: 'backup failed: …' or 'skipped: … GB free'"]
+causes = [
+    { cause = "the backup was skipped for lack of room", prior = 0.6 },
+    { cause = "the backup failed its check, or the agent was never up at 3 am", prior = 0.4 },
+]
+checks = ["polymath backup --list", "df -h /var/lib/polymath/brain /srv/polymath"]
+self_healing = ["Orin asks for a backup now (at most every 6 hours); eviction frees room first when the disk is short"]
+steps = [
+    { needs = "caretaker", do = "take a backup now" },
+    { needs = "you", do = "if it keeps failing, see why", command = "polymath backup --list; journalctl -u polymath -n 80 --no-pager | grep -i backup" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "blocklists-stale"
+title = "The safety lists are old"
+area = "security"
+codes = []
+patterns = ["safety lists are old", "blocklists"]
+symptoms = ["Orin: 'the safety lists are old' (not refreshed for 14 days)"]
+causes = [{ cause = "no internet when the weekly refresh was due, or a list's server was down", prior = 1.0 }]
+checks = ["polymath sites"]
+self_healing = ["Orin asks for fresh lists (at most weekly); until then the old lists still apply"]
+steps = [
+    { needs = "caretaker", do = "refresh the safety lists" },
+    { needs = "you", do = "if it keeps failing, check the internet (polymath doctor)" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "ingest-stall"
+title = "It reads much less than usual"
+area = "learning"
+codes = []
+patterns = ["reads much less than usual"]
+symptoms = ["Orin: 'it reads much less than usual' (documents per hour far below its own week)"]
+causes = [
+    { cause = "no internet", prior = 0.25 },
+    { cause = "low disk space (yield or pause)", prior = 0.2 },
+    { cause = "heat or a full disk paused it", prior = 0.2 },
+    { cause = "reading jobs died", prior = 0.15 },
+    { cause = "nothing left to read in its plan", prior = 0.2 },
+]
+checks = ["polymath doctor", "polymath status"]
+self_healing = ["Orin finds which, and probes the internet, frees room, requeues jobs or asks the planner for more reading"]
+steps = [
+    { needs = "caretaker", do = "find the cause and fix what it may" },
+    { needs = "you", do = "if Orin says so: run polymath doctor and follow its line" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "quiz-accuracy-drop"
+title = "Its self-test scores dropped"
+area = "learning"
+codes = []
+patterns = ["self-test scores dropped"]
+symptoms = ["Orin: 'its self-test scores dropped'", "polymath status: last_quiz accuracy lower than its week"]
+causes = [
+    { cause = "a self-tuned setting made answers worse", prior = 0.4 },
+    { cause = "new kinds of facts in the held-out set", prior = 0.6 },
+]
+checks = ["polymath changes", "polymath status"]
+self_healing = ["the self-tuning guard rolls back on its own; Orin also rolls back a setting tuned in the 3 days before and pins it"]
+steps = [
+    { needs = "caretaker", do = "roll back the most recent self-tuned setting and pin it" },
+    { needs = "you", do = "to let it tune that setting again", command = "polymath changes --allow <setting>" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "pi-under-voltage"
+title = "The Pi reports under-voltage"
+area = "body"
+codes = []
+patterns = ["under-voltage", "undervoltage", "throttled=0x5", "throttled=0x50005"]
+symptoms = ["Orin: 'the Pi reports under-voltage'", "vcgencmd get_throttled: not 0x0", "a lightning bolt on the desktop"]
+causes = [
+    { cause = "a weak power supply (not the official 5.1 V / 3 A one)", prior = 0.7 },
+    { cause = "a thin or long USB-C cable, or bus-powered drives drawing too much", prior = 0.3 },
+]
+checks = ["vcgencmd get_throttled", "vcgencmd measure_volts"]
+self_healing = ["none: power is hardware"]
+steps = [{ needs = "you", do = "use the official 5.1 V / 3 A supply and a short cable; power drives from a powered hub. Weak power corrupts SD cards" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "update-not-running"
+title = "An update is installed but the agent still runs the old version"
+area = "install"
+codes = []
+patterns = ["is installed, the agent runs"]
+symptoms = ["Orin: 'vX is installed, the agent runs vY'", "polymath version: the agent runs an older build"]
+causes = [{ cause = "the agent was not restarted after the install (or the restart did not finish)", prior = 1.0 }]
+checks = ["polymath version"]
+self_healing = ["none: restarting the service is a system change"]
+steps = [{ needs = "sudo", do = "restart the agent onto the installed version", command = "sudo systemctl restart polymath polymath-dashboard" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "config-changed"
+title = "The configuration changed"
+area = "security"
+codes = []
+patterns = ["the configuration changed"]
+symptoms = ["Orin: 'the configuration changed (seen …): /etc/polymath/polymath.toml …'"]
+causes = [{ cause = "you (or a script you ran, like sd-card-mode.sh) edited it", prior = 1.0 }]
+checks = ["ls -l /etc/polymath /etc/polymath/polymath.d", "sudo journalctl _COMM=sudo -n 20 --no-pager"]
+self_healing = ["Orin only tells: it never edits configuration"]
+steps = [{ needs = "you", do = "if that was not you, check who has sudo on this Pi", command = "sudo journalctl _COMM=sudo -n 20 --no-pager" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "data-dir-permissions"
+title = "The brain's folder changed owner or permissions"
+area = "security"
+codes = []
+patterns = ["changed permissions", "was 750"]
+symptoms = ["Orin: \"the brain's folder changed permissions: was 750 …, now …\""]
+causes = [{ cause = "a chmod or chown on it (by hand, or a restore as root)", prior = 1.0 }]
+checks = ["sudo ls -ld /var/lib/polymath/brain /srv/polymath"]
+self_healing = ["Orin only tells: it never changes permissions"]
+steps = [{ needs = "approval", do = "give the brain back to the polymath user, readable only by it", command = "sudo chown -R polymath:polymath <the folder> && sudo chmod 0750 <the folder>" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
 id = "heal-actions"
 title = "The drive helper had to bring the drive back"
 area = "storage"
@@ -534,7 +714,10 @@ causes = [
     { cause = "a bug or bad input", prior = 0.4 },
 ]
 checks = ["polymath status", "journalctl -u polymath -n 80 | grep <kind>"]
-self_healing = ["network jobs are held back while offline without spending retries (v0.5.1)"]
+self_healing = [
+    "network jobs are held back while offline without spending retries (v0.5.1)",
+    "Orin requeues jobs that died of a passing problem (network, disk, a lock), once each, and pauses a kind that keeps failing for 6 hours (v0.8.0)",
+]
 steps = [
     { needs = "caretaker", do = "requeue the dead jobs once their cause is gone (≤ once per job)" },
     { needs = "sudo", do = "if it repeats, send the log", command = "journalctl -u polymath -n 120 --no-pager" },
@@ -551,10 +734,16 @@ patterns = ["running hot", "°C"]
 symptoms = ["the feed: 'slowed: running hot' or 'paused'", "a problem line: 'throttle: … °C'"]
 causes = [{ cause = "no heatsink or fan, a closed case, a hot room", prior = 1.0 }]
 checks = ["vcgencmd measure_temp"]
-self_healing = ["it throttles at 75 °C and pauses at 82 °C, and resumes by itself"]
-steps = [{ needs = "approval", do = "add a heatsink or fan, or open the case" }]
+self_healing = [
+    "it throttles at 75 °C and pauses at 82 °C, and resumes by itself",
+    "Orin slows the agent down when it nears the throttle point, and back to full speed once it is cool (v0.8.0)",
+]
+steps = [
+    { needs = "caretaker", do = "slow the agent down until it is cool again" },
+    { needs = "approval", do = "add a heatsink or fan, or open the case" },
+]
 since = "0.5.2"
-updated = "0.5.2"
+updated = "0.8.0"
 
 [[fault]]
 id = "body-disk"

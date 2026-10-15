@@ -57,6 +57,17 @@ implemented here and learns only from data the agent downloads itself.
     *standby brain* on the SD card and keeps reading (feeds, the web, single articles; no big dumps, at most
     3 GB, wear-guarded). When the drive is back, everything it read moves onto it by itself, and the real brain
     reads it again with all it knows. The feed shows `learning on standby`.
+  - **Orin the Caretaker looks after it** (v0.8.0). Every two minutes, even during a pause, Orin:
+    - checks the Pi and Polymath (heat, disk, memory, the database, backups, the internet, how much it reads, its
+      self-test scores, failing jobs, every reported problem, power, USB speed, the install);
+    - learns what is normal for this Pi;
+    - finds the most likely cause of anything unusual with a few read-only checks;
+    - fixes what it may itself (slow down, free room, back up, retry jobs that died of a passing problem, pause a
+      job that keeps failing), then checks that the fix held;
+    - tells you the exact step for everything else, once a day at most.
+
+    It never runs commands, never edits files or permissions, and never widens what Polymath may visit. See
+    `polymath caretaker` and the `Orin` lines in the feed and in `polymath doctor`.
   - **SD-card mode, for a drive that cannot be trusted** (v0.7.0): `sudo ./scripts/sd-card-mode.sh on` runs the
     whole brain on the SD card. It lets go of the SSD and switches its USB device off, and the SSD's brain is not
     touched. It carries on from the copy the SD card kept when the brain moved onto the SSD, installs, and checks

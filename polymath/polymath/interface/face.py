@@ -77,6 +77,8 @@ MOODS: dict[str, Mood] = {
     "missing": Mood(("◐_◐", "◐_◐", "◑_◑", "◑_◑"), "yellow", ("□?", "□", "□?", ""), blink=False),  # looking for it
     "waving": Mood(("^_^",), "bmagenta", ("▣/", "▣", "▣/", ""), blink=False),  # a retired drive: bye!
     "standby": Mood(("◔‿◔", "◔‿◔", "◕‿◕", "◕‿◕"), "yellow", ("□", "□✎", "□", "□✎")),  # its SSD is away: SD notes
+    # Orin the caretaker at work on an incident (a spanner), and pleased when a fix is verified
+    "mending": Mood(("•_•", "•_•", "•‿•", "•‿•"), "cyan", ("⚙", "⚙", " ⚙", "")),
 }
 
 # job kind (or its prefix before the dot) → mood while that job runs
@@ -196,6 +198,10 @@ class Face:
             elif what == "selfchange" and status != "reset":  # your reset is not its doing
                 worse = status in {"rolled_back", "demoted"}
                 self.react("oops" if worse else "proud", now, 6.0, 2)
+            elif what == "caretaker" and status == "resolved":  # Orin verified a fix
+                self.react("proud", now, 8.0, 3)
+            elif what == "caretaker" and status in {"acting", "open"}:  # Orin is on it
+                self.react("mending", now, 6.0, 2)
             elif what == "standby":  # back on its drive, with what it read on standby
                 self.react("newhome" if status == "folded" else "missing", now, 8.0, 3)
             elif what == "net":  # the internet went away or came back
@@ -238,6 +244,8 @@ class Face:
             return "hot"
         if st.get("standby"):
             return "standby"
+        if (st.get("caretaker") or {}).get("mood") == "mending":  # Orin is working an incident
+            return "mending"
         if (st.get("net") or {}).get("online") is False:
             return "studying"
         if st.get("activity") == "waiting for work":

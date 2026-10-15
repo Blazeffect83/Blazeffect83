@@ -329,8 +329,9 @@ def pinned(db: Database) -> set[str]:
     return set(db.kv_get("tune_pinned") or [])
 
 
-def reset(db: Database, names: list[str]) -> list[str]:
-    """Put settings back to their defaults and stop tuning them (``polymath changes --reset``)."""
+def reset(db: Database, names: list[str], *, by: str = "You") -> list[str]:
+    """Put settings back to their defaults and stop tuning them (``polymath changes --reset``, or Orin the caretaker
+    when a tuned setting is followed by worse self-test scores)."""
     values = dict(db.kv_get(KV) or {})
     names = list(KNOBS) if names == ["all"] else names
     unknown = [n for n in names if n not in KNOBS]
@@ -340,13 +341,13 @@ def reset(db: Database, names: list[str]) -> list[str]:
     for name in names:
         old = values.pop(name, None)
         for ch in db.query("SELECT id, detail FROM self_changes WHERE state = 'watching' AND subject = ?", (name,)):
-            detail = json.loads(ch["detail"] or "{}") | {"outcome": "reset by you"}
+            detail = json.loads(ch["detail"] or "{}") | {"outcome": f"reset by {by.lower() if by == 'You' else by}"}
             db.execute(
                 "UPDATE self_changes SET state = 'final', detail = ? WHERE id = ?", (json.dumps(detail), ch["id"])
             )
         if old is not None:
             changelog.record(db, "tuning", name, "reset",
-                             f"You reset {KNOBS[name].label} to {fmt(KNOBS[name].default)} (it was {fmt(old)}); "
+                             f"{by} reset {KNOBS[name].label} to {fmt(KNOBS[name].default)} (it was {fmt(old)}); "
                              "it will not tune it again until you allow it",
                              old=old, new=KNOBS[name].default)  # fmt: skip
         done.append(name)

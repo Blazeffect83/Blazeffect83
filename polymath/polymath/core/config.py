@@ -156,6 +156,8 @@ class AgentsConfig:
     evolve: bool = True  # strong agents fork mutated children; weak evolved children retire
     step_interval: float = 120.0  # seconds between agent society slices
     min_tasks_to_judge: int = 30  # verified tasks before an agent can be forked or retired
+    # Orin the caretaker (agents/caretaker.py): watches Polymath and the Pi, fixes what it may, tells you the rest
+    caretaker: bool = True
 
 
 @dataclass

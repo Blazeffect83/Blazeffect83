@@ -201,6 +201,64 @@ These limits always apply, whatever the mode:
 - numpy is limited to 2 threads;
 - the dashboard is limited to 25 % CPU and 1.2 GB (400 MB was too tight for the ask box on a big brain).
 
+### <a id="orin"></a>Orin the Caretaker (v0.8.0)
+
+Orin keeps Polymath and the Pi running smoothly and safely. It is a job of its own, `caretaker.step`, that runs every
+two minutes ahead of everything else, and still runs while the body guard pauses the agent. One turn takes well under
+a second.
+
+**What it watches:**
+- **The Pi:** the CPU temperature, free space, the agent's memory, and power (the firmware's under-voltage flags).
+- **The database:** the write-ahead log, and the age of the last good backup.
+- **Learning:** the internet, documents read per hour, and self-test accuracy.
+- **Jobs:** jobs that fail again and again, and jobs that gave up.
+- **The safety lists:** their age.
+- **Every reported problem:** the problem inbox, `core/issues`.
+- **Drives:** the brain drive's USB speed (not in SD-card mode).
+- **The install:** the installed build against the running one, changes to the configuration, and the brain folder's
+  permissions.
+
+**How it decides:**
+- **What is normal.** It learns this from a week of its own readings (median ± k·MAD, k = 4 to start). It also
+  knows hard limits: 2 °C under the throttle point, 1.5 × `disk_min_free_gb` free, 2.4 GB of memory, a 256 MB
+  write-ahead log, 36 h without a good backup, 30 min offline, 14-day-old safety lists.
+- **When to open an incident.** A reading outside its normal range twice in a row, or past a hard limit once.
+- **Finding the cause.** It ranks the likely causes, runs the most telling read-only checks, then acts.
+
+**What it does itself.** Each fix is bounded, written to `polymath changes` (area `caretaker`), and checked after a
+while; when one does not work, it tries the next:
+
+| fix | when | bound |
+|---|---|---|
+| slow the agent down to 60 % | hot, or high memory | ends by itself after an hour; back to full speed once normal |
+| eviction and housekeeping now | the disk is filling | at most every 6 h |
+| a backup now | no good backup for 36 h | at most every 6 h |
+| a write-ahead log checkpoint | the log keeps growing | at most every 10 min, between job slices |
+| ask whether the internet is back | offline for 30 min | at most every 5 min |
+| requeue jobs that died of a passing problem (network, disk, a lock) | jobs gave up | once per job, 50 at a time |
+| pause a job kind for 6 h | it failed 3 times in an hour | never core work, at most 3 kinds |
+| fresh safety lists | older than 14 days | weekly |
+| roll back a setting it tuned in the last 3 days, and pin it | self-test scores dropped | daily |
+| ask the planner for more reading | nothing left to read | at most every 6 h |
+
+**What it tells you.** Under-voltage, the drive's USB speed, an update that is not running, a configuration or
+permission change, unknown problems, and any fix that did not work. Each message comes once, then at most once a day,
+and has four parts: what is wrong, the evidence, the most likely cause and how sure it is, and the exact step. The
+step is quoted from the known fault in `polymath/agents/faults.toml`, with who may do it (`[needs your approval]`
+means it changes the system). Faults you put on hold (`[situation] on_hold`, today: SD-card mode) are noted, never
+raised.
+
+**Where you see it:**
+- **The feed:** `Orin` lines (`Orin ✓` when a fix held), and the face turns to `•_• ⚙` while it works.
+- **`polymath doctor`:** `Orin` lines with its advice.
+- **`polymath caretaker`:** the briefing ends with Orin's open incidents and anything it slowed down or paused.
+- **`polymath caretaker incidents [--all]`:** its incidents, open ones (or, with `--all`, the last 30 with their
+  outcome).
+
+**It never** runs commands, opens network connections, changes permissions, mounts, formats, deletes files, writes
+configuration or code, or widens what Polymath may visit. A test reads its source to check. Switch it off with
+`caretaker = false` under `[agents]`.
+
 ### <a id="always-on"></a>Always on (v0.5.1)
 
 **Without the internet** it keeps working:
@@ -530,6 +588,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | `Job for polymath.service failed because a timeout was exceeded`, or doctor: "does not answer at all" | the brain's drive froze (reads never return). v0.5.7 waits instead of hanging and `storage heal` resets the drive within a minute or two. By hand: `sudo systemctl stop polymath-heal.timer; sudo umount -l /srv/polymath; sudo umount -l /mnt/polymath/*; sudo usbreset 31db:9210` (your enclosure's ID from `lsusb`), wait 10 s, `sudo systemctl restart 'polymath-volume@*' polymath polymath-dashboard; sudo systemctl start polymath-heal.timer`. A reboot or a replug also clears it |
 | "Input/output error" on `/srv/polymath` (doctor: "its storage does not answer") | the SSD dropped out and came back as a new device; the old mount is dead. `sudo reboot` clears it (v0.5.4 also replaces a dead mount by itself when the drive is attached again) |
 | the feed says `learning on standby` (doctor: `standby`) | the brain's drive has been gone for over 5 minutes, so Polymath learns on its small standby brain on the SD card. Nothing to do for Polymath: bring the drive back (see the rows above). What it read moves onto the drive by itself |
+| an `Orin` line in the feed or doctor | Orin the caretaker found something: its line says what, the evidence, the likely cause and the exact step ([§4](#orin)). `polymath caretaker incidents` lists what it is working on. A fix it made itself needs nothing from you |
 | anything else, or you want the whole picture | `polymath caretaker` (no sudo) gives the situation now, the recent problems with what each one is, and the next steps. `polymath caretaker known` lists every known problem, `polymath caretaker show <id>` gives its symptoms, causes, checks and fix, and `polymath caretaker history` lists what happened on this Pi |
 | the SSD keeps freezing or dropping out, and you want Polymath working now | run everything on the SD card until the SSD is fixed: `cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/sd-card-mode.sh on` ([§8](#sd-card-mode)); the log is in `~/polymath-sd-card.txt` |
 | the feed says `learning on the SD card` (doctor: `sd card`) | SD-card mode is on: the brain runs on the SD card and the SSD is not used. Nothing to do. Once the SSD works again (blue USB 3 port, USB 3 cable, no USB 2 hub): `sudo ./scripts/sd-card-mode.sh off` |

@@ -204,6 +204,17 @@ def run_checks(
                             f"{len(problems)} in the last 24 h; latest at {when}: {problems[0].get('text', '')}",
                             fix))  # fmt: skip
 
+    orin = (st or {}).get("caretaker") or {}
+    if agent_up and orin:  # Orin the caretaker: what it is working on, and what it asks of you
+        open_ = orin.get("open") or []
+        if not open_:
+            checks.append(Check("Orin", OK, "the caretaker is watching: all calm"))
+        for inc in open_[:3]:
+            level = BAD if inc.get("severity") == "bad" and inc.get("state") == "escalated" else WARN
+            state = {"escalated": "needs you", "verifying": "fixed, checking it holds", "open": "looking into it"}
+            what = state.get(str(inc.get("state")), str(inc.get("state")))
+            checks.append(Check("Orin", level, f"{inc.get('title')} ({what})", str(inc.get("advice") or "")))
+
     if not agent_up and kind != "answered":  # both down: one thing to look at, not two
         checks.append(Check("services", BAD, "the agent and the dashboard are both stopped",
                             "systemctl status polymath polymath-dashboard --no-pager   (says why), then: "

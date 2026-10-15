@@ -115,7 +115,7 @@ class Components:
 
 
 def build_components(config: Config, db: Database, *, planners: bool = True) -> Components:
-    from polymath.agents import society
+    from polymath.agents import caretaker, society
     from polymath.body import maintenance
     from polymath.drive import capacity, offline, selftune, specialists, strategy
     from polymath.drive import jobs as djobs
@@ -295,6 +295,9 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("net.probe", connectivity.probe_job, "Is the internet back? (asked while offline)", action="maintain")
     if not on_standby:
         reg(standby.FOLD_KIND, standby.fold_job, "Fold the standby brain into the real one", action="maintain")
+    reg(
+        caretaker.KIND, caretaker.step_job, "Orin the caretaker: notice, find the cause, fix or tell", action="maintain"
+    )
     services: dict[str, Any] = {"http": http, "docs": docs, "crawler": crawl}
     plan: list[tuple[float, Planner]] = (
         [
@@ -327,6 +330,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (30.0, connectivity.planner),
             (60.0, offline.planner),
             (60.0, standby.planner),
+            (30.0, caretaker.planner),
             (SNAPSHOT_EVERY, snapshot.planner),
         ]
         if planners

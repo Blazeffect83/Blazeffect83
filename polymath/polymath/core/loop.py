@@ -312,6 +312,8 @@ class Agent:
         else:
             decision = self.policy.decide(obs, self.registry)  # DECIDE
             decision = self._offline_filter(decision)
+        decision = self._quarantine_filter(decision)
+        self._checkpoint_if_asked()
         responses, failed_mark = self._responses(), self._failed_mark()
         job = self.scheduler.claim(decision.kinds)
         if job is None:
@@ -412,6 +414,31 @@ class Agent:
         allowed = [k for k in kinds if k not in self.network_kinds]
         reason = f"{decision.reason}; offline: studying what it has" if decision.reason else "offline"
         return Decision(allowed, decision.action, reason, decision.context, decision.scores)
+
+    def _quarantine_filter(self, decision: Decision) -> Decision:
+        """Job kinds Orin the caretaker paused (a kind that kept failing the same way) are held back for a while."""
+        from polymath.agents.caretaker import quarantined
+
+        held = quarantined(self.db)
+        if not held or decision.kinds == []:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        return Decision([k for k in kinds if k not in held], decision.action, decision.reason, decision.context,
+                        decision.scores)  # fmt: skip
+
+    def _checkpoint_if_asked(self) -> None:
+        """Orin asked for a write-ahead log checkpoint (the WAL kept growing): run it between slices, when no
+        transaction is open on this connection."""
+        try:
+            asked = self.db.kv_get("caretaker_checkpoint")
+            if not asked:
+                return
+            row = self.db.one("PRAGMA wal_checkpoint(TRUNCATE)")
+            with self.db.transaction():
+                self.db.kv_set("caretaker_checkpoint", None)
+            log.info("write-ahead log checkpoint", extra={"result": list(row) if row is not None else None})
+        except Exception:  # not an issue: a checkpoint that cannot run now is asked for again by Orin
+            log.debug("checkpoint skipped", exc_info=True)
 
     def _network_down(self, job: Job, rec: CycleRecord, started: float, t0: float, c0: float) -> CycleRecord:
         """A slice died on a dead connection: the job keeps its attempts and checkpoint and waits; enough of these

@@ -147,6 +147,12 @@ class Guard:
         if data_gb > b.disk_budget_gb or (v.disk_free_gb is not None and v.disk_free_gb < b.disk_min_free_gb):
             self._request_eviction(data_gb, v.disk_free_gb)
         intensity = {"normal": 1.0, "throttle": 0.5, "yield": 0.5, "pause": 0.0}[mode]
+        from polymath.agents.caretaker import slowdown
+
+        factor, why = slowdown(self.db, self.clock())
+        if factor < 1.0 and mode != "pause":  # Orin the caretaker slowed it down (heat or memory rising)
+            intensity *= factor
+            reasons.append(f"slowed by Orin the caretaker: {why}")
         if mode != self._last_mode:
             log.info("body mode changed", extra={"from": self._last_mode, "to": mode, "reasons": reasons})
             if mode != "normal":  # the caretaker's inbox (core/issues): heat, a full disk, a failing card
@@ -158,6 +164,8 @@ class Guard:
         self._log_vitals(v, data_gb, mode)
         # a disk-full pause still lets eviction run (it is what ends the pause); a thermal pause stops everything
         allow = ["body.evict"] if mode == "pause" and disk_critical and thermal != "pause" else []
+        if mode == "pause":
+            allow.append("caretaker.step")  # Orin keeps watching during a pause (its turn is light)
         if self.saver and mode in {"normal", "throttle"}:
             reasons.append("saving SD card writes: longer job slices")
         return BodyState(
