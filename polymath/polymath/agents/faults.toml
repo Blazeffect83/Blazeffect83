@@ -22,16 +22,16 @@ brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4,
 
 [situation]
 as_of = "2026-10-15"
-summary = """The SSD still cannot be trusted: on 2026-10-14 it was seen frozen at USB 2 speed (480M) with polymath init and usb-storage stuck in state D, and /opt/polymath still ran v0.5.6. No rescue.sh run has been reported. On 2026-10-15 Christian asked to run everything off the SD card until the SSD is solved (about 15 GB of room instead of 1 TB). v0.7.0 adds SD-card mode for that: scripts/sd-card-mode.sh on lets go of the SSD (unmounts it, switches its USB device off), starts the brain on the SD card (/var/lib/polymath/brain) from the copy the SD card kept when the brain moved onto the SSD (/srv/polymath-sd-copy, renamed, not copied), installs v0.7.0 and checks the agent runs there. The brain on the SSD is not touched; what Polymath learns on the SD card moves onto the SSD by itself after sd-card-mode.sh off."""
+summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
-    "now, Christian with sudo: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/sd-card-mode.sh on   (✓/✗ per step; log in ~/polymath-sd-card.txt)",
-    "then: send the summary or ~/polymath-sd-card.txt if anything shows ✗",
+    "the end of the sd-card-mode.sh on run: step 7 (installed version, agent on the SD card, dashboard, doctor) and the summary; ~/polymath-sd-card.txt",
+    "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "later, at the Pi: fix the SSD (blue USB 3 port, USB 3 cable, no USB 2 hub; its own power if it still drops), then: sudo ./scripts/sd-card-mode.sh off",
 ]
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
     "sd-card-mode",
-    "update-not-installed",
+    "install-interrupted",
     "brain-drive-usb2",
 ]
 
@@ -715,5 +715,14 @@ version = "0.5.6"
 what = "Christian: 'still not working'; asked to run the agent and everything else off the SD card until the SSD is solved (about 15 GB instead of 1 TB)."
 cause = "the SSD keeps freezing on its USB 2 link; no rescue run has been reported"
 fault = "sd-card-mode"
+fixed_in = "0.7.0"
+open = true
+
+[[history]]
+date = "2026-10-15"
+version = "0.7.0"
+what = "sd-card-mode.sh on: the brain was started from the SD card's old copy (3.6 GB) and v0.7.0 installed; apt said 'dpkg was interrupted', so uhubctl was not installed."
+cause = "an earlier package install was interrupted (seen 2026-10-12 too) and never finished"
+fault = "install-interrupted"
 fixed_in = "0.7.0"
 open = true

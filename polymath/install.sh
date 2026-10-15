@@ -327,16 +327,19 @@ if [ "$SYSTEM" = 1 ]; then
     say "looking for drives already plugged in"
     run udevadm trigger --action=add --subsystem-match=block
     if [ "$DRY" = 0 ]; then
+        # "not answering yet" and 503 ("the agent has not reported in yet") are normal while it starts: not shown
+        say "waiting for the agent to report in (up to 2 minutes; a big brain on an SD card can take longer)"
         for _ in $(seq 60); do
-            curl -fsS -o /dev/null --max-time 2 http://localhost:8765/health && break
+            curl -fsS -o /dev/null --max-time 2 http://localhost:8765/health 2>/dev/null && break
             sleep 2
         done
-        if curl -fsS --max-time 2 http://localhost:8765/health; then
+        if curl -fsS --max-time 2 http://localhost:8765/health 2>/dev/null; then
             echo
             say "Polymath is running. Live feed: polymath feed (opens by itself at login)." \
                 "Dashboard: http://$(hostname -I | awk '{print $1}'):8765/"
         else
-            warn "the agent has not reported healthy yet; see: journalctl -u polymath -n 50"
+            warn "the agent has not reported in yet (it may still be starting): polymath doctor in a few minutes;" \
+                "details: journalctl -u polymath -n 50"
         fi
     fi
 fi
