@@ -817,7 +817,7 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
     now on the SSD;
   - the feed, the dashboard's feed status and doctor;
   - the units, and a staged `install.sh` in SD-card mode.
-- `tests/test_sd_card_mode.py` (13): the real script against stand-in commands (systemctl, umount, udevadm, ps),
+- `tests/test_sd_card_mode.py` (14): the real script against stand-in commands (systemctl, umount, udevadm, ps),
   a fake sysfs USB tree, a fake mountinfo and temporary directories for everything it writes:
   - `on` with a frozen SSD: lazy unmount, USB device off, the old copy checked and renamed into place, install,
     the agent on the SD card;
@@ -826,7 +826,7 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
   - a damaged copy: kept, not used;
   - a copy on another filesystem: never copied;
   - running `on` again after a reboot;
-  - an agent that does not report the SD card;
+  - an agent that does not report the SD card, and one still starting (a big brain: up to 5 min);
   - a failed install;
   - `off` with the SSD back;
   - `off` with the SSD still gone, so SD-card mode stays on;
@@ -836,9 +836,16 @@ else off the SD card until the SSD is solved: about 15 GB of room instead of 1 T
 
 The newer `mypy` (2.4) in the development container flagged 18 typing slips in older tests; they are fixed.
 
-**Result (development container, x86_64, Python 3.11):** 680 tests pass and 1 is skipped, at 94 % coverage
+**Result (development container, x86_64, Python 3.11):** 681 tests pass and 1 is skipped, at 94 % coverage
 (pytest exit 0). `ruff`, `ruff format` and `mypy --strict` (package, tests, scripts) are clean, and ShellCheck 0.11
 reports no warnings on the three scripts.
+
+**Rehearsal of the upgrade path:** brains built by the real v0.5.0 and v0.5.6 code (git worktrees of those
+commits) were renamed into place as the script does, then started in SD-card mode by the v0.7.0 CLI
+(`polymath init`, `polymath run --until-idle`, `polymath doctor`). Both are schema 17 like v0.7.0, so no
+migration was needed. Their documents and agents were kept, the marker's `fold_after` was their newest document,
+and the room was sized to the free space (2 GB kept free). Adoption and heal were off, and the inbox had the
+SD-card note.
 
 **Not yet run on the Pi.** The script has only run against stand-ins here.
 

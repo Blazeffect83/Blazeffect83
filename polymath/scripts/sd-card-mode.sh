@@ -34,7 +34,7 @@ STUCK_WAIT_S="${RESCUE_STUCK_WAIT_S:-60}"   # after the SSD is let go of, wait t
 MOUNT_WAIT_S="${RESCUE_MOUNT_WAIT_S:-120}"  # off: wait this long for the SSD to be mounted again
 DBCHECK_S="${RESCUE_DBCHECK_S:-900}"        # checking the SD card's copy of the brain before starting from it
 INSTALL_S="${RESCUE_INSTALL_S:-1200}"
-CHECK_S="${RESCUE_CHECK_S:-120}"
+CHECK_S="${RESCUE_CHECK_S:-300}"          # a big brain on an SD card can take minutes to start
 STOP_WAIT_S="${RESCUE_STOP_WAIT_S:-30}"     # a clean stop of the agent (one job slice is at most 15 s)
 MOUNTINFO="${RESCUE_MOUNTINFO:-/proc/self/mountinfo}"
 DROPIN="$ETC/polymath.d/sd-card.toml"
@@ -360,7 +360,10 @@ case "$now" in
     *) bad "still installed: ${now:-nothing} (expected v$want)" ;;
 esac
 agent="$(wait_active)"
-if [ "$agent" != active ]; then
+if [ "$agent" = activating ]; then
+    bad "the agent is still starting after ${CHECK_S} s (a big brain is slow on an SD card)"
+    say "  → give it a few minutes, then: polymath doctor   (details: journalctl -u polymath -n 60)"
+elif [ "$agent" != active ]; then
     bad "the agent is '$agent' after ${CHECK_S} s (details: journalctl -u polymath -n 60)"
 else
     waited=0

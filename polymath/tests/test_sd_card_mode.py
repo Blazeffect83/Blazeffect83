@@ -245,6 +245,13 @@ def test_an_agent_that_does_not_report_the_sd_card_is_named(pi):
     assert "✗ the agent runs, but has not said it is on the SD card within 2 s" in out.stdout
 
 
+def test_an_agent_still_starting_is_named_with_what_to_do(pi):
+    (pi.state / "active").write_text("activating\n")
+    out = pi.run("on")
+    assert out.returncode == 1
+    assert "the agent is still starting after 2 s" in out.stdout and "polymath doctor" in out.stdout
+
+
 def test_a_failed_install_is_shown(pi):
     out = pi.run("on", INSTALL_RC="1")
     assert out.returncode == 1
