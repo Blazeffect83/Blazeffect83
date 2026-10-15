@@ -1,0 +1,52 @@
+# Polymath dashboard (read-only web UI on port 8765). Installed by install.sh.
+[Unit]
+Description=Polymath dashboard
+Documentation=file:///opt/polymath/src/docs/OPERATIONS.md
+After=network.target local-fs.target
+RequiresMountsFor=/srv/polymath
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+# The dashboard checks itself (it asks its own /health every 15 s) and pings systemd only while it answers;
+# a hung dashboard is restarted within a minute.
+WatchdogSec=60
+TimeoutStartSec=60
+User=polymath
+Group=polymath
+Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
+Environment=PYTHONUNBUFFERED=1
+Environment=OPENBLAS_NUM_THREADS=1
+ExecStart=/opt/polymath/venv/bin/polymath dashboard
+Restart=always
+RestartSec=5
+RestartSteps=5
+RestartMaxDelaySec=60
+CPUQuota=25%
+# The ask box loads the alias index (large on a big brain): 400M was too tight and got it killed.
+MemoryHigh=800M
+MemoryMax=1200M
+Nice=15
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# The database is opened read-only; SQLite's WAL index (-shm) still needs a writable directory.
+ReadOnlyPaths=/srv/polymath -/mnt/polymath
+# "-": the dashboard must start even while the brain's drive is not mounted (it then shows why).
+# /var/lib/polymath/brain: the brain in SD-card mode (core.sdcard)
+ReadWritePaths=-/srv/polymath/db -/var/lib/polymath/brain/db
+
+[Install]
+WantedBy=multi-user.target
