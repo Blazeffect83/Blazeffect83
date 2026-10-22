@@ -1,0 +1,77 @@
+# Polymath autonomous learning agent. Installed to /etc/systemd/system/polymath.service by install.sh.
+[Unit]
+Description=Polymath autonomous learning agent
+Documentation=file:///opt/polymath/src/docs/OPERATIONS.md
+After=network-online.target local-fs.target
+Wants=network-online.target
+# Data lives on the NVMe drive: never start (and write to the SD card) without it.
+RequiresMountsFor=/srv/polymath
+# Never give up restarting: the pauses between attempts grow instead (RestartSteps below), so a crash loop costs
+# little and the agent comes back by itself once whatever stopped it is fixed (drive replugged, disk freed).
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=polymath
+Group=polymath
+# Not the data directory: if its drive freezes, systemd would hang entering it before Polymath even starts.
+WorkingDirectory=/
+Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
+Environment=PYTHONUNBUFFERED=1
+# numpy must not grab every core: the desktop and the live feed stay responsive.
+Environment=OPENBLAS_NUM_THREADS=2
+Environment=OMP_NUM_THREADS=2
+ExecStartPre=/opt/polymath/venv/bin/polymath init
+ExecStart=/opt/polymath/venv/bin/polymath run
+# The agent stops at the end of its current job slice (≤ 15 s) and commits atomically.
+KillSignal=SIGTERM
+TimeoutStartSec=300
+TimeoutStopSec=90
+WatchdogSec=120
+Restart=always
+RestartSec=10
+RestartSteps=6
+RestartMaxDelaySec=300
+# /run/polymath (memory, readable by all): the agent's live snapshot, so the feed works even without the
+# dashboard; kept after a stop so the feed can tell "not running" from "gone"
+RuntimeDirectory=polymath
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# /var/lib/polymath/standby (SD card): the standby brain it learns on while the brain's drive is gone
+# (core.standby, [storage] standby*); emptied once what it read has moved onto the drive.
+# /var/lib/polymath/brain (SD card): the whole brain in SD-card mode (core.sdcard, scripts/sd-card-mode.sh); emptied
+# once what it learned there has moved onto the drive
+StateDirectory=polymath/standby polymath/brain
+StateDirectoryMode=0750
+
+# Leave half the CPU and a quarter of the memory to the desktop (live feed terminal, browser).
+CPUQuota=200%
+MemoryMax=3G
+MemoryHigh=2600M
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hardening: the agent only writes its data directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+# Plugged-in drives (the storage pool) are mounted under /mnt/polymath; mounts made later propagate in.
+ReadWritePaths=/srv/polymath -/mnt/polymath
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=2000
+
+[Install]
+WantedBy=multi-user.target

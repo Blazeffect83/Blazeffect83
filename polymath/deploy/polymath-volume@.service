@@ -1,0 +1,15 @@
+[Unit]
+Description=Polymath storage: add drive %I to the brain
+Documentation=file:///opt/polymath/src/docs/OPERATIONS.md
+# Pulling the drive out stops this unit, which releases the mount.
+BindsTo=dev-%i.device
+After=dev-%i.device local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
+ExecStart=/opt/polymath/venv/bin/polymath storage attach /dev/%I
+ExecStop=/opt/polymath/venv/bin/polymath storage detach /dev/%I
+# formatting a large blank drive takes a minute or two; moving the brain off the SD card (copy + check) longer
+TimeoutStartSec=60min

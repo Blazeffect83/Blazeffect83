@@ -1,0 +1,989 @@
+# The caretaker's knowledge: every problem Polymath has met, how to recognise it, what Polymath already does about
+# it by itself, and the exact steps for Christian. Read by `polymath caretaker`, `polymath doctor`, the issue inbox
+# (core/issues tags each problem with the faults it matches) and, once built, Orin the Caretaker (docs/CARETAKER.md).
+#
+# KEEP IT CURRENT. Every update of Polymath updates this file in the same commit (tests/test_faults.py fails
+# otherwise):
+#   * [meta] updated_for = the new version, and an [[update]] entry saying what changed for the caretaker;
+#   * a [[fault]] for every new way things can fail, and every issue code the code reports must match one;
+#   * [situation] = what is true on the Pi right now; [[history]] = what happened on it, in order.
+#
+# Step `needs`:  auto     = Polymath does it by itself (nothing to do)
+#                caretaker = the caretaker may do it itself (Tier 1: bounded, logged, reversible)
+#                you      = Christian, no sudo
+#                sudo     = Christian, with sudo (Tier 2: the caretaker only tells, with the exact command)
+#                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
+
+[meta]
+updated_for = "0.8.2"
+updated = "2026-10-22"
+pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
+brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
+
+[situation]
+as_of = "2026-10-22"
+summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
+waiting_on = [
+    "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
+    "2026-10-22: Christian: 'it's going good' (v0.8.1 installed, on the SD card), but the agent goes offline for a few minutes after learning something",
+    "install v0.8.2 (the vigil: busy, not offline; faster quizzes and search): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on)",
+    "after v0.8.2 has run a day, see which steps were slow: polymath caretaker (lines 'jobs/slow:…'), and whether the watchdog restarted it before: journalctl -u polymath --since -2d | grep -ciE 'watchdog|SIGABRT'",
+    "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
+    "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
+]
+on_hold = ["sd-card-mode"]  # Christian, 2026-10-15: leave the SSD alone for now (Orin notes these, never escalates)
+suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
+recommended = [
+    "sd-card-mode",
+    "install-interrupted",
+    "brain-drive-usb2",
+]
+
+# ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.8.2"
+date = "2026-10-22"
+changes = """Christian: the agent goes offline for a few minutes after learning something. Measured on a copy of a real brain: single steps ran for minutes (the backup 250 s, a quiz 82 s, embedding training 24 s, on a fast x86; the Pi is several times slower and its SD card far slower). The feed called the agent offline after 60 s without a sign of life, and systemd's watchdog restarted it after 120 s, with growing pauses (RestartSteps), so the step started over. Fixes: the vigil (core/vigil.py), a thread that vouches for the agent while it makes progress (systemd watchdog, pulse, /run/polymath/pulse.json) and goes quiet after 15 min without progress, so a real hang is still restarted; the feed and dashboard read the pulse: online, what it is doing right now, and 'one long step: 4 min so far'; slow steps are recorded (kv slow_steps) and reported once a day (jobs/slow:<kind>, fault job-slow). Efficiency: search keeps recently decoded documents (24M characters, keyed by content hash) and counting hits no longer opens documents, so a quiz is about 3 times faster (22 s to 8 s); Orin no longer queues a backup, probe or eviction already due (the backup ran twice back to back); embedding training reads its vocabulary every 15 min instead of every slice; Orin's reading-rate signal and the LEARNING lines no longer scan or sort the whole documents table; the watchdog notifier no longer keeps every message it sent."""
+
+[[update]]
+version = "0.8.1"
+date = "2026-10-15"
+changes = """Christian asked to see what it is learning and how far along it is. The live feed's header has two LEARNING lines (header 6 rows instead of 4), and the dashboard and the live page have a LEARNING card: the subject (the topic curiosity pursues, what you asked about, the wrong answer it reads up on, an agent's subject, or the dump part or file), who chose it, what it read last, how well it knows the topic (a bar: right answers when quizzed on it, else the share of the things its articles mention that it has read; live for topics up to 400 articles, hourly above) with what this round added, and this round's progress (articles of the batch, share of a dump, books). Between topics it shows the last one and what is next. Feed lines when a round starts and when it finishes (knows 34% → 41%); the face is proud after a round that taught it something. New module interface/focus.py (read-only); reading jobs from polymath learn and from mistakes now name their subject (payload about/topic_id). Nothing new is written to the database."""
+
+[[update]]
+version = "0.8.0"
+date = "2026-10-15"
+changes = """Orin the Caretaker is built (agents/caretaker.py, job caretaker.step every 2 minutes, urgent, also during a pause). Each turn: learned normal bands (median ± k·MAD over a week, k tuned by false alarms) and hard limits on temperature, free space, memory, the WAL, backups, the internet, reading rate, quiz accuracy and safety lists; failing and dead jobs; the problems inbox; power, USB speed, build, configuration and permissions. Incidents (table incidents) rank causes by Bayes, run the most informative read-only check, apply a bounded Tier 1 remedy (slow down, evict, backup, WAL checkpoint, probe, requeue, quarantine 6 h, safety lists, roll back a tuned setting, replan), verify it after its window and learn what works (fault_stats), or escalate once a day with what/evidence/cause/step quoted from this file. Faults on hold ([situation] on_hold) are noted, never escalated. Shown in the feed (tag Orin), the face (mending, proud), doctor (Orin lines) and polymath caretaker [incidents]. New faults: agent-memory-high, wal-growing, backup-stale, blocklists-stale, ingest-stall, quiz-accuracy-drop, pi-under-voltage, update-not-running, config-changed, data-dir-permissions."""
+
+[[update]]
+version = "0.7.0"
+date = "2026-10-15"
+changes = """SD-card mode: the whole brain runs on the SD card (/var/lib/polymath/brain, storage.sd_only) while the SSD cannot be trusted. scripts/sd-card-mode.sh on|off|status switches it with one drop-in (/etc/polymath/polymath.d/sd-card.toml; polymath.toml is never edited): on stops everything, unmounts the SSD and switches its USB device off, starts the SD-card brain from the SD card's old copy (renamed, not copied) or empty, installs and checks; off switches the SSD back on and the mode off, and keeps SD-card mode if the SSD does not come back. In SD-card mode no drive is touched (no pool, no move or mount of the brain's drive, no heal, no standby), the budget is what the card can give less 2 GB, two backups are kept, and the feed, doctor and the inbox (storage/sd_card) say so. After off, the fold job (storage.fold_standby) moves what was learned on the SD card onto the SSD, then removes the SD-card brain. Configuration drop-ins (polymath.d/*.toml) are new; scripts/ops-lib.sh holds what rescue.sh and sd-card-mode.sh share; rescue.sh lets go of a drive in SD-card mode instead of waiting for it."""
+
+[[update]]
+version = "0.6.3"
+date = "2026-10-14"
+changes = """scripts/rescue.sh: one command that stops the services, frees a frozen brain drive (lazy unmounts from mountinfo, USB reset through sysfs, waits for stuck processes), finishes dpkg, adds uhubctl, installs the checkout and checks the result, every step time-limited with ✓/✗ and a log (~/polymath-rescue.txt). install.sh names the line it stops at, never waits on a frozen agent (--no-block) and reads mounts from mountinfo."""
+
+[[update]]
+version = "0.6.2"
+date = "2026-10-14"
+changes = """From the Pi itself: probes read past the page cache (O_DIRECT), so a frozen drive whose data is still cached is caught; 'database is locked' / disk I/O errors on opening the brain mean BrainDriveMissing (wait, then standby) instead of a crash loop; doctor names a brain drive linked at USB 2. New faults: update-not-installed, brain-drive-usb2."""
+
+[[update]]
+version = "0.6.1"
+date = "2026-10-14"
+changes = """The caretaker's knowledge base itself (this file, `polymath caretaker`, issue tagging, doctor hints), \
+and the rule that every update keeps it current."""
+
+[[update]]
+version = "0.6.0"
+date = "2026-10-13"
+changes = """Standby brain on the SD card while the brain's drive is gone (storage/standby; fold job \
+storage.fold_standby). load_config no longer reads the drive without a time limit."""
+
+[[update]]
+version = "0.5.7"
+date = "2026-10-13"
+changes = """core/fsprobe: every look at the brain's storage has a time limit (a frozen drive reads as 'hang'). \
+storage heal: lazy unmount first, USB-reset frozen drives, restart with --no-block. WorkingDirectory=/."""
+
+[[update]]
+version = "0.5.6"
+date = "2026-10-13"
+changes = "storage heal restarts polymath-volume@* units (udev ignores 'add' for units that already ran)."
+
+[[update]]
+version = "0.5.5"
+date = "2026-10-12"
+changes = "polymath-heal.timer: drop dead mounts, soft USB reset of 0-byte drives, USB power cut with uhubctl."
+
+[[update]]
+version = "0.5.4"
+date = "2026-10-12"
+changes = "A dead brain mount (Input/output error) is found by reading and replaced when the drive attaches."
+
+[[update]]
+version = "0.5.3"
+date = "2026-10-12"
+changes = "A USB drive reporting 0 bytes is detected and named; it is never treated as blank."
+
+[[update]]
+version = "0.5.2"
+date = "2026-10-12"
+changes = "The agent waits visibly for a missing drive; the dashboard starts without the brain; core/issues inbox."
+
+[[update]]
+version = "0.5.1"
+date = "2026-10-11"
+changes = "The dashboard cannot freeze the feed; the feed falls back to the agent's snapshot; offline mode."
+
+# ------------------------------------------------------------------------------------------------ faults
+[[fault]]
+id = "brain-drive-missing"
+title = "The brain's drive is not there"
+area = "storage"
+codes = ["storage/brain_missing"]
+patterns = ["which is not plugged in", "not mounted", "MOVED-TO-DRIVE"]
+symptoms = [
+    "the feed says 'paused — the brain lives on the drive …, which is not plugged in'",
+    "doctor: brain ✗ 'the brain lives on …, which is not mounted'",
+    "lsblk shows no sda, or sda without a mount under /mnt/polymath",
+]
+causes = [
+    { cause = "the enclosure stayed in its safe-off state after a reboot (DockCase capacitor)", prior = 0.35 },
+    { cause = "the drive browned out: not enough power from the Pi's USB port", prior = 0.3 },
+    { cause = "unplugged, or a loose or charge-only cable", prior = 0.2 },
+    { cause = "the USB bridge froze (UAS) and dropped off the bus", prior = 0.15 },
+]
+checks = [
+    "lsblk -o NAME,SIZE,TRAN,MOUNTPOINTS",
+    "lsusb | grep 31db:9210",
+    "vcgencmd get_throttled   (anything but 0x0: the Pi saw low voltage)",
+    "journalctl -u 'polymath-volume@*' -n 30",
+]
+self_healing = [
+    "the agent waits visibly and starts by itself when the drive is back (v0.5.2)",
+    "storage heal: asks udev again, soft-resets a 0-byte drive, then cuts the USB power with uhubctl (v0.5.5)",
+    "after 5 minutes it learns on the standby brain on the SD card (v0.6.0)",
+]
+steps = [
+    { needs = "auto", do = "wait: storage heal tries every minute (polymath doctor shows what it did)" },
+    { needs = "you", do = "check the cable and that the SSD sits in a blue USB 3 port" },
+    { needs = "sudo", do = "bring it back now", command = "sudo polymath storage heal" },
+    { needs = "you", do = "unplug the enclosure for 10 s and plug it back in (a real power cycle)" },
+]
+since = "0.5.2"
+updated = "0.6.0"
+
+[[fault]]
+id = "brain-drive-zero-bytes"
+title = "The USB enclosure answers but the drive inside reports 0 bytes"
+area = "storage"
+codes = []
+patterns = ["reports 0 bytes", "0B usb"]
+symptoms = ["lsblk shows 'sda 0B usb'", "doctor: drives ✗ '/dev/sda is connected by USB but reports 0 bytes'"]
+causes = [
+    { cause = "the SSD did not power up behind the bridge (power, safe-off state)", prior = 0.6 },
+    { cause = "the bridge is stuck after a brown-out", prior = 0.4 },
+]
+checks = ["lsblk -o NAME,SIZE,TRAN", "cat /sys/block/sda/size", "vcgencmd get_throttled"]
+self_healing = [
+    "never treated as blank, never formatted (v0.5.3)",
+    "storage heal soft-resets that USB device every 2 min, then cuts the USB power (v0.5.5)",
+]
+steps = [
+    { needs = "auto", do = "wait for storage heal (USB reset, then a power cut)" },
+    { needs = "approval", do = "install uhubctl so the power cut can work", command = "sudo dpkg --configure -a && sudo apt-get install -y uhubctl" },
+    { needs = "you", do = "unplug the enclosure for 10 s; if it recurs, power it from a powered USB hub" },
+]
+since = "0.5.3"
+updated = "0.5.5"
+
+[[fault]]
+id = "brain-mount-dead"
+title = "The brain's mount is dead (Input/output error)"
+area = "storage"
+codes = ["storage/heal:dead_mount:*"]
+patterns = ["Input/output error", "storage does not answer"]
+symptoms = [
+    "doctor: brain ✗ 'its storage at /srv/polymath does not answer (Input/output error)'",
+    "install.sh: 'changing ownership of /srv/polymath: Input/output error'",
+    "the drive came back as a new device (sdb) while /srv/polymath still points at the old one",
+]
+causes = [{ cause = "the drive dropped off USB and re-enumerated; the old bind mount points at the dead device", prior = 1.0 }]
+checks = ["findmnt /srv/polymath", "lsblk -o NAME,SIZE,TRAN,MOUNTPOINTS", "sudo dmesg | grep -iE 'usb|I/O error|reset' | tail -30"]
+self_healing = [
+    "found by reading, not trusted (v0.5.4); the agent waits instead of crashing",
+    "storage heal drops the dead mount, resets the drive and attaches it again (v0.5.5–v0.5.7)",
+]
+steps = [
+    { needs = "auto", do = "storage heal replaces the mount within a minute or two" },
+    { needs = "sudo", do = "now", command = "sudo polymath storage heal" },
+    { needs = "sudo", do = "if that does not help", command = "sudo reboot" },
+]
+since = "0.5.4"
+updated = "0.5.7"
+
+[[fault]]
+id = "brain-mount-frozen"
+title = "The brain's drive froze: reads never return"
+area = "storage"
+codes = []
+patterns = ["does not answer at all", "a timeout was exceeded", "database is locked", "start-pre operation timed out"]
+symptoms = [
+    "systemctl: 'Job for polymath.service failed because a timeout was exceeded'",
+    "the dashboard is not listening; processes sit in state D (ps -eo stat,cmd | grep ' D')",
+    "doctor: brain ✗ '… does not answer (it does not answer at all)'",
+]
+causes = [
+    { cause = "the enclosure's USB bridge froze under UAS (common on the Pi 4)", prior = 0.55 },
+    { cause = "power dip on the USB port", prior = 0.35 },
+    { cause = "the SSD itself is failing", prior = 0.1 },
+]
+checks = [
+    "sudo dmesg | grep -iE 'uas|reset|I/O error|task .* blocked' | tail -30",
+    "ps -eo pid,stat,cmd | awk '$2 ~ /D/'",
+    "vcgencmd get_throttled",
+]
+self_healing = [
+    "nothing in Polymath waits on it: every look has a time limit (v0.5.7); loading the config too (v0.6.0)",
+    "storage heal: lazy unmount, USB reset of the frozen drive, restart without waiting (v0.5.7)",
+    "after 5 minutes: the standby brain on the SD card (v0.6.0)",
+    "probes read past the page cache, so a frozen drive with cached data is caught too (v0.6.2)",
+    "'database is locked' from a process stuck on the drive reads as a missing drive, not a crash loop (v0.6.2)",
+]
+steps = [
+    { needs = "auto", do = "wait: storage heal resets the drive; the agent learns on standby meanwhile" },
+    { needs = "approval", do = "free it and reinstall in one command (✓/✗ per step; log in ~/polymath-rescue.txt; installs uhubctl)", command = "cd ~/polymath-src/polymath && sudo ./scripts/rescue.sh" },
+    { needs = "approval", do = "stop the freezes at their root: see brain-drive-uas and brain-drive-power" },
+    { needs = "approval", do = "until the SSD is fixed: run everything on the SD card (the SSD is let go of and switched off; nothing on it is touched)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
+]
+since = "0.5.7"
+updated = "0.7.0"
+
+[[fault]]
+id = "update-not-installed"
+title = "An update was pulled but never installed (the Pi runs an older Polymath)"
+area = "install"
+codes = []
+patterns = ["is installed but the agent", "build.json", "not the Polymath branch", "still installed:", "nothing changed"]
+symptoms = [
+    "polymath version (or /opt/polymath/build.json) shows an older version than the newest on GitHub",
+    "git -C ~/Blazeffect83 branch shows a branch other than claude/polymath-agent (on 2026-10-14: claude/aegis-agent)",
+    "fixes that should be there are not: the tracebacks' line numbers match an old release",
+]
+causes = [
+    { cause = "the clone is checked out on another project's branch, so git pull fetched that branch", prior = 0.7 },
+    { cause = "git pull ran, but install.sh was not run afterwards (or stopped early)", prior = 0.3 },
+]
+checks = [
+    "cat /opt/polymath/build.json",
+    "git -C ~/Blazeffect83 status -sb; git -C ~/Blazeffect83 branch -vv",
+    "git -C ~/Blazeffect83 log --oneline --branches --not --remotes   (local-only commits: never reset these)",
+]
+self_healing = ["none: installing changes the system"]
+steps = [
+    { needs = "you", do = "update Polymath's own clone (on this Pi: ~/polymath-src, on claude/polymath-agent; never the AEGIS checkout ~/Blazeffect83)", command = "git -C ~/polymath-src pull --ff-only origin claude/polymath-agent" },
+    { needs = "approval", do = "install it, with every step checked and logged (a stuck drive is freed first)", command = "cd ~/polymath-src/polymath && sudo ./scripts/rescue.sh" },
+    { needs = "you", do = "if that clone is missing, make a separate one (never switch another project's checkout)", command = "git clone -b claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git ~/polymath-src" },
+]
+since = "0.6.2"
+updated = "0.6.3"
+
+[[fault]]
+id = "brain-drive-usb2"
+title = "The brain's SSD runs at USB 2 speed"
+area = "storage"
+codes = []
+patterns = ["runs at USB 2 speed", "480M", "480 Mbit/s"]
+symptoms = [
+    "doctor: drives ! '/dev/sda runs at USB 2 speed (480 Mbit/s), not USB 3'",
+    "lsusb -t: the Mass Storage device sits under the 480M bus; the 5000M bus is empty",
+]
+causes = [
+    { cause = "plugged into a black USB 2 port instead of a blue USB 3 port", prior = 0.5 },
+    { cause = "a USB 2 cable, or a USB 2 hub in between", prior = 0.35 },
+    { cause = "the enclosure fell back to USB 2 after resets", prior = 0.15 },
+]
+checks = ["lsusb -t", "cat /sys/bus/usb/devices/*/speed"]
+self_healing = ["doctor names it; storage heal resets the drive when it stalls; the standby brain keeps learning"]
+steps = [
+    { needs = "you", do = "move the DockCase to a blue USB 3 port, with a USB 3 cable and no USB 2 hub; check: lsusb -t shows it under 5000M" },
+    { needs = "approval", do = "until then: run everything on the SD card", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
+]
+since = "0.6.2"
+updated = "0.7.0"
+
+[[fault]]
+id = "brain-drive-uas"
+title = "The enclosure's USB bridge misbehaves under UAS"
+area = "storage"
+codes = []
+patterns = ["uas_eh_abort_handler", "Driver=uas", "reset SuperSpeed USB device"]
+symptoms = ["dmesg: 'uas_eh_abort_handler', 'reset SuperSpeed USB device', I/O errors, then the drive drops or freezes"]
+causes = [{ cause = "many USB-to-SSD bridges handle UAS badly on the Pi 4", prior = 1.0 }]
+checks = ["sudo dmesg | grep -iE 'uas|reset SuperSpeed' | tail -20", "lsusb -t   (Driver=uas means UAS is on)"]
+self_healing = ["storage heal resets the drive when it freezes; the standby brain keeps learning meanwhile"]
+steps = [
+    { needs = "approval", do = "turn UAS off for this enclosure and stop USB autosuspend (boot setting; then reboot)", command = "sudo sed -i '1 s/$/ usb-storage.quirks=31db:9210:u usbcore.autosuspend=-1/' /boot/firmware/cmdline.txt && sudo reboot" },
+    { needs = "you", do = "check afterwards: lsusb -t shows Driver=usb-storage, not uas" },
+]
+since = "0.6.1"
+updated = "0.6.1"
+
+[[fault]]
+id = "brain-drive-power"
+title = "The brain's drive does not get enough power"
+area = "storage"
+codes = ["storage/heal:usb_power:*", "storage/heal:usb_reset:*"]
+patterns = ["under-voltage", "low voltage"]
+symptoms = [
+    "vcgencmd get_throttled is not 0x0",
+    "the drive helper keeps bringing the drive back (doctor: 'drive helper … N time(s) in the last 24 h')",
+]
+causes = [
+    { cause = "a bus-powered NVMe enclosure draws more than the Pi's port gives reliably", prior = 0.6 },
+    { cause = "a weak power supply for the Pi", prior = 0.4 },
+]
+checks = ["vcgencmd get_throttled", "sudo dmesg | grep -i voltage"]
+self_healing = ["storage heal brings the drive back each time; the standby brain keeps learning in between"]
+steps = [
+    { needs = "approval", do = "power the enclosure from a powered USB hub, or use the official 5.1 V / 3 A Pi supply" },
+]
+since = "0.6.1"
+updated = "0.6.1"
+
+[[fault]]
+id = "uhubctl-missing"
+title = "The USB power cut cannot work: uhubctl is not installed"
+area = "storage"
+codes = []
+patterns = ["uhubctl is not installed", "could not install uhubctl", "dpkg was interrupted"]
+symptoms = ["doctor / the drive helper: 'cannot cut the USB power: uhubctl is not installed'", "apt: 'E: dpkg was interrupted'"]
+causes = [{ cause = "an earlier package install was interrupted, so apt refuses to install anything", prior = 1.0 }]
+checks = ["command -v uhubctl", "sudo dpkg --audit"]
+self_healing = ["the installer carries on without it (it is optional)"]
+steps = [
+    { needs = "approval", do = "finish the interrupted install, then add uhubctl", command = "sudo dpkg --configure -a && sudo apt-get install -y uhubctl" },
+]
+since = "0.5.5"
+updated = "0.5.6"
+
+[[fault]]
+id = "standby-active"
+title = "Learning on the standby brain (the drive is gone)"
+area = "storage"
+codes = ["storage/standby"]
+patterns = ["learning on standby", "standby brain"]
+symptoms = ["the feed header says 'learning on standby'", "doctor: standby ! 'learning on the standby brain on the SD card since …'"]
+causes = [{ cause = "the brain's drive has been missing, frozen or dead for over 5 minutes (see the brain-* faults)", prior = 1.0 }]
+checks = ["polymath doctor (the brain line says why the drive is gone)"]
+self_healing = [
+    "the standby brain learns (light reading, ≤ 3 GB, wear-guarded) and moves everything to the drive when it is back",
+]
+steps = [
+    { needs = "auto", do = "keep learning on standby, then move it all onto the drive when it is back" },
+    { needs = "you", do = "bring the drive back: run polymath doctor; its brain line names the brain-* fault to follow" },
+]
+since = "0.6.0"
+updated = "0.6.0"
+
+[[fault]]
+id = "standby-fold-failed"
+title = "What the standby or SD-card brain learned could not be moved to the drive"
+area = "jobs"
+codes = ["jobs/dead:storage.fold_standby", "jobs/permanent:storage.fold_standby"]
+patterns = ["storage.fold_standby"]
+symptoms = [
+    "a problem line: 'storage.fold_standby …'",
+    "/var/lib/polymath/standby or /var/lib/polymath/brain still holds a brain long after the drive is back",
+]
+causes = [{ cause = "an error while folding (disk full on the drive, a damaged standby or SD-card database)", prior = 1.0 }]
+checks = ["journalctl -u polymath -n 80 | grep -iE 'standby|folded'", "df -h /srv/polymath"]
+self_healing = ["the fold is resumable and idempotent: requeueing it continues where it stopped; the standby or SD-card brain is kept until it is done"]
+steps = [
+    { needs = "caretaker", do = "requeue the fold job once the cause is gone" },
+    { needs = "sudo", do = "send the log", command = "journalctl -u polymath -n 120 --no-pager" },
+]
+since = "0.6.0"
+updated = "0.7.0"
+
+[[fault]]
+id = "sd-card-mode"
+title = "SD-card mode: the whole brain runs on the SD card (the SSD is not used)"
+area = "storage"
+codes = ["storage/sd_card"]
+patterns = ["SD-card mode", "sd_only", "learning on the SD card"]
+symptoms = [
+    "the feed: 'learning on the SD card' and '(SD-card mode since …: the brain is on the SD card, N GB of room; the SSD is off)'",
+    "doctor: sd card ! 'SD-card mode since …: the whole brain runs on the SD card'",
+    "a problem line once a day: 'SD-card mode since …'",
+]
+causes = [
+    { cause = "switched on on purpose (scripts/sd-card-mode.sh on) because the SSD keeps freezing or dropping out", prior = 1.0 },
+]
+checks = [
+    "cd ~/polymath-src/polymath && ./scripts/sd-card-mode.sh status",
+    "df -h /var/lib/polymath/brain   (the SD card's free space)",
+    "ls /etc/polymath/polymath.d/   (sd-card.toml: the switch)",
+]
+self_healing = [
+    "it learns as usual, dumps included, inside what the card can give (what it uses + free − 2 GB); the guard and eviction keep 2 GB free",
+    "no drive is touched: no storage pool, no moving or mounting the brain's drive, no storage heal, no standby brain",
+    "the SD card wear guard watches its writes (saver mode when it writes too much); two nightly backups are kept",
+    "after sd-card-mode.sh off, what it learned on the SD card moves onto the SSD by itself (the fold job), with the agents Christian set up there; then the SD-card brain is removed",
+]
+steps = [
+    { needs = "auto", do = "keep learning on the SD card; nothing to do while the SSD is being fixed" },
+    { needs = "you", do = "fix the SSD at the Pi: a blue USB 3 port, a USB 3 cable, no USB 2 hub; a powered hub if it still drops out (see brain-drive-usb2, brain-drive-uas, brain-drive-power)" },
+    { needs = "approval", do = "back to the SSD once it works (if the SSD does not come back, SD-card mode simply stays on)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off" },
+]
+since = "0.7.0"
+updated = "0.7.0"
+
+[[fault]]
+id = "sd-card-mode-switch"
+title = "Switching SD-card mode on or off did not finish"
+area = "install"
+codes = []
+patterns = ["sd-card-mode", "SD-card mode stays on", "has not said it is on the SD card", "polymath-sd-card"]
+symptoms = [
+    "sd-card-mode.sh shows ✗ lines and 'something above is marked ✗: send the log'",
+    "off: 'the SSD did not come back within 120 s: SD-card mode stays on, nothing else changed'",
+    "on: 'the agent runs, but has not said it is on the SD card'",
+]
+causes = [
+    { cause = "off: the SSD is still not answering (unplugged, USB 2 link, power)", prior = 0.5 },
+    { cause = "on: the install stopped (see install-interrupted) or the agent did not start", prior = 0.3 },
+    { cause = "on: a process stuck on the frozen SSD holds on (a reboot clears it; SD-card mode stays on)", prior = 0.2 },
+]
+checks = [
+    "cat ~/polymath-sd-card.txt   (the whole run, every command)",
+    "./scripts/sd-card-mode.sh status",
+    "journalctl -u polymath -n 60 --no-pager",
+]
+self_healing = [
+    "off puts SD-card mode back by itself when the SSD does not come back: the agent keeps learning on the SD card",
+    "on is safe to run again: the SD-card brain carries on, nothing is moved twice",
+]
+steps = [
+    { needs = "you", do = "send ~/polymath-sd-card.txt (or a photo of its summary)" },
+    { needs = "approval", do = "run it again (it carries on where it stopped)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh on" },
+    { needs = "approval", do = "if a process stays stuck on the old SSD: reboot (SD-card mode stays on, the SSD is not mounted again)", command = "sudo reboot" },
+]
+since = "0.7.0"
+updated = "0.7.0"
+
+[[fault]]
+id = "agent-memory-high"
+title = "The agent uses a lot of memory"
+area = "body"
+codes = []
+patterns = ["uses a lot of memory", "MemoryHigh", "oom"]
+symptoms = ["Orin: 'the agent uses a lot of memory'", "the agent restarts with no traceback (an out-of-memory kill)"]
+causes = [{ cause = "several big jobs at once on a big brain (embeddings, the alias automaton)", prior = 1.0 }]
+checks = ["systemctl status polymath --no-pager   (Memory: … high: 2.5G max: 3G)", "free -m"]
+self_healing = ["Orin slows the agent down (intensity 60 %) until memory is normal again; systemd keeps it under 3 GB"]
+steps = [
+    { needs = "caretaker", do = "slow the agent down for an hour, then check again" },
+    { needs = "sudo", do = "if it keeps happening, send what systemd saw", command = "journalctl -u polymath -n 120 --no-pager | grep -iE 'memory|oom|killed'" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "wal-growing"
+title = "The database's write-ahead log keeps growing"
+area = "database"
+codes = []
+patterns = ["write-ahead log", "polymath.sqlite3-wal"]
+symptoms = ["Orin: 'the database's write-ahead log keeps growing'", "ls -l db/: polymath.sqlite3-wal is hundreds of MB"]
+causes = [{ cause = "a long read (the dashboard, a backup) held the checkpoint back", prior = 1.0 }]
+checks = ["sudo ls -l /var/lib/polymath/brain/db /srv/polymath/db 2>/dev/null"]
+self_healing = ["Orin asks for a checkpoint (TRUNCATE) between job slices, at most every 10 minutes"]
+steps = [
+    { needs = "caretaker", do = "checkpoint the write-ahead log" },
+    { needs = "sudo", do = "if it stays big, restart the dashboard (a stuck reader)", command = "sudo systemctl restart polymath-dashboard" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "backup-stale"
+title = "No good backup for a day and a half"
+area = "database"
+codes = []
+patterns = ["no good backup", "backup skipped", "backup failed"]
+symptoms = ["Orin: 'no good backup for a day and a half'", "the feed: 'backup failed: …' or 'skipped: … GB free'"]
+causes = [
+    { cause = "the backup was skipped for lack of room", prior = 0.6 },
+    { cause = "the backup failed its check, or the agent was never up at 3 am", prior = 0.4 },
+]
+checks = ["polymath backup --list", "df -h /var/lib/polymath/brain /srv/polymath"]
+self_healing = ["Orin asks for a backup now (at most every 6 hours); eviction frees room first when the disk is short"]
+steps = [
+    { needs = "caretaker", do = "take a backup now" },
+    { needs = "you", do = "if it keeps failing, see why", command = "polymath backup --list; journalctl -u polymath -n 80 --no-pager | grep -i backup" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "blocklists-stale"
+title = "The safety lists are old"
+area = "security"
+codes = []
+patterns = ["safety lists are old", "blocklists"]
+symptoms = ["Orin: 'the safety lists are old' (not refreshed for 14 days)"]
+causes = [{ cause = "no internet when the weekly refresh was due, or a list's server was down", prior = 1.0 }]
+checks = ["polymath sites"]
+self_healing = ["Orin asks for fresh lists (at most weekly); until then the old lists still apply"]
+steps = [
+    { needs = "caretaker", do = "refresh the safety lists" },
+    { needs = "you", do = "if it keeps failing, check the internet (polymath doctor)" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "ingest-stall"
+title = "It reads much less than usual"
+area = "learning"
+codes = []
+patterns = ["reads much less than usual"]
+symptoms = ["Orin: 'it reads much less than usual' (documents per hour far below its own week)"]
+causes = [
+    { cause = "no internet", prior = 0.25 },
+    { cause = "low disk space (yield or pause)", prior = 0.2 },
+    { cause = "heat or a full disk paused it", prior = 0.2 },
+    { cause = "reading jobs died", prior = 0.15 },
+    { cause = "nothing left to read in its plan", prior = 0.2 },
+]
+checks = ["polymath doctor", "polymath status"]
+self_healing = ["Orin finds which, and probes the internet, frees room, requeues jobs or asks the planner for more reading"]
+steps = [
+    { needs = "caretaker", do = "find the cause and fix what it may" },
+    { needs = "you", do = "if Orin says so: run polymath doctor and follow its line" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "quiz-accuracy-drop"
+title = "Its self-test scores dropped"
+area = "learning"
+codes = []
+patterns = ["self-test scores dropped"]
+symptoms = ["Orin: 'its self-test scores dropped'", "polymath status: last_quiz accuracy lower than its week"]
+causes = [
+    { cause = "a self-tuned setting made answers worse", prior = 0.4 },
+    { cause = "new kinds of facts in the held-out set", prior = 0.6 },
+]
+checks = ["polymath changes", "polymath status"]
+self_healing = ["the self-tuning guard rolls back on its own; Orin also rolls back a setting tuned in the 3 days before and pins it"]
+steps = [
+    { needs = "caretaker", do = "roll back the most recent self-tuned setting and pin it" },
+    { needs = "you", do = "to let it tune that setting again", command = "polymath changes --allow <setting>" },
+]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "pi-under-voltage"
+title = "The Pi reports under-voltage"
+area = "body"
+codes = []
+patterns = ["under-voltage", "undervoltage", "throttled=0x5", "throttled=0x50005"]
+symptoms = ["Orin: 'the Pi reports under-voltage'", "vcgencmd get_throttled: not 0x0", "a lightning bolt on the desktop"]
+causes = [
+    { cause = "a weak power supply (not the official 5.1 V / 3 A one)", prior = 0.7 },
+    { cause = "a thin or long USB-C cable, or bus-powered drives drawing too much", prior = 0.3 },
+]
+checks = ["vcgencmd get_throttled", "vcgencmd measure_volts"]
+self_healing = ["none: power is hardware"]
+steps = [{ needs = "you", do = "use the official 5.1 V / 3 A supply and a short cable; power drives from a powered hub. Weak power corrupts SD cards" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "update-not-running"
+title = "An update is installed but the agent still runs the old version"
+area = "install"
+codes = []
+patterns = ["is installed, the agent runs"]
+symptoms = ["Orin: 'vX is installed, the agent runs vY'", "polymath version: the agent runs an older build"]
+causes = [{ cause = "the agent was not restarted after the install (or the restart did not finish)", prior = 1.0 }]
+checks = ["polymath version"]
+self_healing = ["none: restarting the service is a system change"]
+steps = [{ needs = "sudo", do = "restart the agent onto the installed version", command = "sudo systemctl restart polymath polymath-dashboard" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "config-changed"
+title = "The configuration changed"
+area = "security"
+codes = []
+patterns = ["the configuration changed"]
+symptoms = ["Orin: 'the configuration changed (seen …): /etc/polymath/polymath.toml …'"]
+causes = [{ cause = "you (or a script you ran, like sd-card-mode.sh) edited it", prior = 1.0 }]
+checks = ["ls -l /etc/polymath /etc/polymath/polymath.d", "sudo journalctl _COMM=sudo -n 20 --no-pager"]
+self_healing = ["Orin only tells: it never edits configuration"]
+steps = [{ needs = "you", do = "if that was not you, check who has sudo on this Pi", command = "sudo journalctl _COMM=sudo -n 20 --no-pager" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "data-dir-permissions"
+title = "The brain's folder changed owner or permissions"
+area = "security"
+codes = []
+patterns = ["changed permissions", "was 750"]
+symptoms = ["Orin: \"the brain's folder changed permissions: was 750 …, now …\""]
+causes = [{ cause = "a chmod or chown on it (by hand, or a restore as root)", prior = 1.0 }]
+checks = ["sudo ls -ld /var/lib/polymath/brain /srv/polymath"]
+self_healing = ["Orin only tells: it never changes permissions"]
+steps = [{ needs = "approval", do = "give the brain back to the polymath user, readable only by it", command = "sudo chown -R polymath:polymath <the folder> && sudo chmod 0750 <the folder>" }]
+since = "0.8.0"
+updated = "0.8.0"
+
+[[fault]]
+id = "heal-actions"
+title = "The drive helper had to bring the drive back"
+area = "storage"
+codes = ["storage/heal:*"]
+patterns = ["the drive helper brought the brain's drive back"]
+symptoms = ["a problem line: 'the drive helper brought the brain's drive back: …'"]
+causes = [{ cause = "the drive keeps dropping out: power, UAS, cable (see brain-drive-power, brain-drive-uas)", prior = 1.0 }]
+checks = ["polymath doctor (drive helper line: how often in the last 24 h)", "cat /run/polymath/heal.json"]
+self_healing = ["it brings the drive back each time"]
+steps = [{ needs = "approval", do = "if it happens more than once a day: fix the root cause (brain-drive-uas, brain-drive-power)" }]
+since = "0.5.5"
+updated = "0.5.7"
+
+[[fault]]
+id = "dashboard-unresponsive"
+title = "The dashboard does not answer"
+area = "dashboard"
+codes = []
+patterns = ["no answer from http://127.0.0.1:8765", "nothing listens at", "226/NAMESPACE"]
+symptoms = [
+    "the feed: 'waiting: no answer from http://127.0.0.1:8765'",
+    "doctor: dashboard ✗ 'not running' or 'no answer within 6 s'",
+    "systemctl: polymath-dashboard status=226/NAMESPACE (could not set up its sandbox)",
+]
+causes = [
+    { cause = "a request path did a full-table count (fixed in v0.5.1)", prior = 0.2 },
+    { cause = "its sandbox path /srv/polymath/db was missing (fixed in v0.5.2)", prior = 0.2 },
+    { cause = "the brain's drive is frozen (see brain-mount-frozen)", prior = 0.6 },
+]
+checks = ["systemctl status polymath-dashboard --no-pager -n 20", "journalctl -u polymath-dashboard -n 40"]
+self_healing = ["the feed falls back to the agent's snapshot", "its watchdog restarts it within a minute (v0.5.1)"]
+steps = [{ needs = "sudo", do = "restart it", command = "sudo systemctl restart polymath-dashboard" }]
+since = "0.5.1"
+updated = "0.5.7"
+
+[[fault]]
+id = "feed-snapshot"
+title = "The feed's fallback snapshot cannot be written"
+area = "feed"
+codes = ["feed/snapshot"]
+patterns = ["fallback snapshot cannot be written"]
+symptoms = ["a problem line: 'the feed's fallback snapshot cannot be written'"]
+causes = [{ cause = "/run/polymath is missing or not writable (RuntimeDirectory)", prior = 1.0 }]
+checks = ["ls -ld /run/polymath"]
+self_healing = ["the feed still reads the dashboard and the database"]
+steps = [{ needs = "sudo", do = "recreate the runtime directory", command = "sudo systemctl restart polymath" }]
+since = "0.5.1"
+updated = "0.5.1"
+
+[[fault]]
+id = "learning-lines-quiet"
+title = "The LEARNING lines say 'between topics' or a bar does not move"
+area = "feed"
+codes = []
+patterns = ["between topics", "learning lines", "progress bar"]
+symptoms = [
+    "the feed or dashboard says 'between topics' for a long time while NOW says it is reading",
+    "the 'knows' bar stays put while the round's articles arrive",
+]
+causes = [
+    { cause = "the work is not a reading round (indexing, reasoning, training): normal, NOW says which", prior = 0.5 },
+    { cause = "the articles arrived but are not linked into the topic yet (memory.graph runs every few minutes)", prior = 0.3 },
+    { cause = "a big topic (over 400 articles) uses the hourly value; or the dashboard restarted, so 'this round' counts from then", prior = 0.2 },
+]
+checks = ["polymath status", "polymath feed --once"]
+self_healing = ["the lines are read-only and never stop the feed: on any database error they are left out for that poll"]
+steps = [{ needs = "you", do = "wait a few minutes; if NOW keeps saying it reads but LEARNING stays empty, send polymath feed --once" }]
+since = "0.8.1"
+updated = "0.8.1"
+
+[[fault]]
+id = "job-slow"
+title = "One step of a job ran for minutes"
+area = "jobs"
+codes = ["jobs/slow:*"]
+patterns = ["without a sign of life", "busy for .* min in one step", "one long step"]
+symptoms = [
+    "an inbox line: '<kind> went 95 s without a sign of life' or '<kind> kept the agent busy for 6 min in one step'",
+    "the feed's NOW line: '(one long step: 4 min so far — busy, not stuck)'",
+    "before v0.8.2: 'agent offline' for a few minutes after learning, and restarts by the watchdog",
+]
+causes = [
+    { cause = "a big brain on a slow disk (the SD card): one SQL query or decompression takes minutes", prior = 0.6 },
+    { cause = "a job that does all its work in one step (backup, quiz, training)", prior = 0.3 },
+    { cause = "the Pi is throttled (heat or power)", prior = 0.1 },
+]
+checks = ["polymath caretaker", "polymath status", "vcgencmd get_throttled"]
+self_healing = [
+    "the vigil vouches for the agent while it makes progress, so it is neither shown offline nor restarted (v0.8.2)",
+    "after 15 min without any progress the vigil stops, and systemd restarts a truly stuck agent",
+]
+steps = [
+    { needs = "you", do = "nothing while it is rare; if one kind is slow every day, send the slow_steps", command = "polymath status | grep -A12 slow_steps" },
+]
+since = "0.8.2"
+updated = "0.8.2"
+
+[[fault]]
+id = "agent-restarts"
+title = "The agent keeps restarting"
+area = "agent"
+codes = ["agent/restarts"]
+patterns = ["started .* times in the last"]
+symptoms = ["a problem line: 'the agent started N times in the last 10 min'"]
+causes = [
+    { cause = "the brain's drive comes and goes (see the brain-* faults)", prior = 0.5 },
+    { cause = "a crash at start (a bug)", prior = 0.3 },
+    { cause = "out of memory (sudden restarts with no traceback)", prior = 0.2 },
+]
+checks = ["journalctl -u polymath -n 80 --no-pager", "systemctl status polymath --no-pager"]
+self_healing = [
+    "systemd restarts it forever, waiting longer between attempts",
+    "a long step no longer gets it restarted: the vigil vouches for it while it makes progress (v0.8.2, job-slow)",
+]
+steps = [{ needs = "sudo", do = "send the log", command = "journalctl -u polymath -n 120 --no-pager" }]
+since = "0.5.2"
+updated = "0.8.2"
+
+[[fault]]
+id = "agent-unclean-stop"
+title = "The last run ended without a clean stop"
+area = "agent"
+codes = ["agent/unclean_stop"]
+patterns = ["without a clean stop"]
+symptoms = ["a problem line: 'the last run ended without a clean stop'"]
+causes = [
+    { cause = "a power cut or a pulled plug", prior = 0.5 },
+    { cause = "the watchdog killed a hung agent (often a frozen drive)", prior = 0.3 },
+    { cause = "out of memory", prior = 0.2 },
+]
+checks = ["journalctl -u polymath -b -1 -n 40 --no-pager", "vcgencmd get_throttled"]
+self_healing = ["every step commits atomically; jobs resume where they stopped"]
+steps = [{ needs = "approval", do = "if it repeats: check the power supply (brain-drive-power)" }]
+since = "0.5.2"
+updated = "0.5.2"
+
+[[fault]]
+id = "job-dead"
+title = "A job gave up"
+area = "jobs"
+codes = ["jobs/dead:*", "jobs/permanent:*"]
+patterns = ["cannot be done", "gave up"]
+symptoms = ["a problem line naming a job kind"]
+causes = [
+    { cause = "its cause is temporary (no internet, a full disk, a missing drive)", prior = 0.6 },
+    { cause = "a bug or bad input", prior = 0.4 },
+]
+checks = ["polymath status", "journalctl -u polymath -n 80 | grep <kind>"]
+self_healing = [
+    "network jobs are held back while offline without spending retries (v0.5.1)",
+    "Orin requeues jobs that died of a passing problem (network, disk, a lock), once each, and pauses a kind that keeps failing for 6 hours (v0.8.0)",
+]
+steps = [
+    { needs = "caretaker", do = "requeue the dead jobs once their cause is gone (≤ once per job)" },
+    { needs = "sudo", do = "if it repeats, send the log", command = "journalctl -u polymath -n 120 --no-pager" },
+]
+since = "0.5.2"
+updated = "0.5.2"
+
+[[fault]]
+id = "body-thermal"
+title = "The Pi is running hot"
+area = "body"
+codes = ["body/thermal:*"]
+patterns = ["running hot", "°C"]
+symptoms = ["the feed: 'slowed: running hot' or 'paused'", "a problem line: 'throttle: … °C'"]
+causes = [{ cause = "no heatsink or fan, a closed case, a hot room", prior = 1.0 }]
+checks = ["vcgencmd measure_temp"]
+self_healing = [
+    "it throttles at 75 °C and pauses at 82 °C, and resumes by itself",
+    "Orin slows the agent down when it nears the throttle point, and back to full speed once it is cool (v0.8.0)",
+]
+steps = [
+    { needs = "caretaker", do = "slow the agent down until it is cool again" },
+    { needs = "approval", do = "add a heatsink or fan, or open the case" },
+]
+since = "0.5.2"
+updated = "0.8.0"
+
+[[fault]]
+id = "body-disk"
+title = "The data disk is nearly full"
+area = "body"
+codes = ["body/disk:*"]
+patterns = ["GB free on the data disk"]
+symptoms = ["the feed: 'slowed: low on disk'", "a problem line: 'only N GB free on the data disk'"]
+causes = [
+    { cause = "the brain outgrew its disk budget, or other files filled the disk", prior = 0.7 },
+    { cause = "SD-card mode: the card is small (about 15 GB) and other files on it grew (logs, packages)", prior = 0.3 },
+]
+checks = ["df -h /srv/polymath /var/lib/polymath/brain", "polymath storage list", "sudo du -sh /var/lib/polymath/* /var/log"]
+self_healing = [
+    "it evicts the least valuable data first and spills documents onto plugged-in drives",
+    "in SD-card mode: no drives; eviction keeps the card 2 GB free (oldest feeds and web pages go first, facts stay)",
+]
+steps = [
+    { needs = "you", do = "plug in another drive: it becomes extra brain space by itself (not in SD-card mode)" },
+    { needs = "sudo", do = "in SD-card mode: see what else fills the card", command = "sudo du -xh --max-depth=2 / 2>/dev/null | sort -h | tail -20" },
+]
+since = "0.5.2"
+updated = "0.7.0"
+
+[[fault]]
+id = "body-read-only"
+title = "The data disk turned read-only"
+area = "body"
+codes = ["body/read_only:*"]
+patterns = ["read-only", "EROFS"]
+symptoms = ["the agent pauses: 'the data disk is read-only'"]
+causes = [{ cause = "the kernel remounted a failing disk (often an SD card) read-only", prior = 1.0 }]
+checks = ["findmnt -o TARGET,OPTIONS /srv/polymath", "sudo dmesg | grep -i 'remount\\|error' | tail -20"]
+self_healing = ["it pauses instead of losing work"]
+steps = [
+    { needs = "you", do = "back up now", command = "polymath backup" },
+    { needs = "approval", do = "replace the failing card or drive" },
+]
+since = "0.5.2"
+updated = "0.5.2"
+
+[[fault]]
+id = "offline"
+title = "No internet"
+area = "net"
+codes = []
+patterns = ["no internet", "learning offline"]
+symptoms = ["the feed: 'learning offline' / 'no internet since …: studying what it has'"]
+causes = [{ cause = "the router, the Wi-Fi, or the internet provider", prior = 1.0 }]
+checks = ["ping -c 3 1.1.1.1", "ip route"]
+self_healing = ["it holds back network jobs, studies what it has, and resumes by itself (v0.5.1)"]
+steps = [{ needs = "you", do = "check the router or cable if it lasts" }]
+since = "0.5.1"
+updated = "0.5.1"
+
+[[fault]]
+id = "install-interrupted"
+title = "The installer stopped on a package error"
+area = "install"
+codes = []
+patterns = ["E: dpkg was interrupted", "dpkg --configure -a"]
+symptoms = ["install.sh: 'E: dpkg was interrupted, you must manually run sudo dpkg --configure -a'"]
+causes = [{ cause = "an earlier apt run was cut off (power, a closed terminal)", prior = 1.0 }]
+checks = ["sudo dpkg --audit"]
+self_healing = ["the installer carries on past optional packages (c27b2f4)"]
+steps = [{ needs = "approval", do = "finish the interrupted install", command = "sudo dpkg --configure -a" }]
+since = "0.5.5"
+updated = "0.5.5"
+
+# ------------------------------------------------------------------------------------------------ history
+[[history]]
+date = "2026-10-11"
+version = "0.5.0"
+what = "The feed stuck on 'waiting: no answer from http://127.0.0.1:8765'."
+cause = "every dashboard request shared one locked database connection; full-table counts blocked the feed"
+fault = "dashboard-unresponsive"
+fixed_in = "0.5.1"
+
+[[history]]
+date = "2026-10-12"
+version = "0.5.1"
+what = "Both services down: agent init status=3, dashboard 226/NAMESPACE, lsblk 'sda 0B usb'."
+cause = "the SSD dropped off; detach switched everything off; the dashboard's sandbox needed /srv/polymath/db"
+fault = "brain-drive-zero-bytes"
+fixed_in = "0.5.3"
+
+[[history]]
+date = "2026-10-12"
+version = "0.5.3"
+what = "install.sh: 'changing ownership of /srv/polymath: Input/output error'; doctor: database unreadable."
+cause = "the SSD came back as a new device; /srv/polymath still pointed at the dead one"
+fault = "brain-mount-dead"
+fixed_in = "0.5.4"
+
+[[history]]
+date = "2026-10-12"
+version = "0.5.4"
+what = "After 'sudo reboot' the SSD did not come back (DockCase safe power-off keeps it off)."
+cause = "the enclosure does not power-cycle on a reboot"
+fault = "brain-drive-missing"
+fixed_in = "0.5.5"
+
+[[history]]
+date = "2026-10-12"
+version = "0.5.5"
+what = "'E: dpkg was interrupted' blocked the install; uhubctl could not be installed."
+cause = "an earlier apt run was interrupted"
+fault = "install-interrupted"
+fixed_in = "0.5.5"
+
+[[history]]
+date = "2026-10-13"
+version = "0.5.6"
+what = "'Job for polymath.service failed because a timeout was exceeded'; dashboard not listening."
+cause = "the brain's mount froze: reads never return, so startup checks hung"
+fault = "brain-mount-frozen"
+fixed_in = "0.5.7"
+
+[[history]]
+date = "2026-10-13"
+version = "0.5.6 or 0.5.7"
+what = "Christian: 'this is still not working'."
+cause = "load_config still read the drive without a time limit; the drive itself keeps freezing (UAS / power suspected)"
+fault = "brain-mount-frozen"
+fixed_in = "0.6.0"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "Seen on the Pi itself: none of v0.5.7–v0.6.1 was installed; ~/Blazeffect83 was on claude/aegis-agent."
+cause = "git pull fetched the other project's branch, so install.sh kept installing the old Polymath tree"
+fault = "update-not-installed"
+fixed_in = "0.6.2"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "SSD at 480M, usb-storage and polymath init in state D; init timed out, then 'database is locked' on every restart."
+cause = "the SSD stalls on its USB 2 link; the stuck init keeps the database lock; cached probes did not see the freeze"
+fault = "brain-drive-usb2"
+fixed_in = "0.6.2"
+open = true
+
+[[history]]
+date = "2026-10-14"
+version = "0.5.6"
+what = "Christian ran the manual sudo block (release, dpkg, install.sh): nothing changed, build.json still 0.5.6."
+cause = "not captured: install.sh stopped before installing the code and the terminal output was lost; the agent stayed 'activating'"
+fault = "update-not-installed"
+fixed_in = "0.6.3"
+open = true
+
+[[history]]
+date = "2026-10-15"
+version = "0.5.6"
+what = "Christian: 'still not working'; asked to run the agent and everything else off the SD card until the SSD is solved (about 15 GB instead of 1 TB)."
+cause = "the SSD keeps freezing on its USB 2 link; no rescue run has been reported"
+fault = "sd-card-mode"
+fixed_in = "0.7.0"
+open = true
+
+[[history]]
+date = "2026-10-15"
+version = "0.7.0"
+what = "sd-card-mode.sh on: the brain was started from the SD card's old copy (3.6 GB) and v0.7.0 installed; apt said 'dpkg was interrupted', so uhubctl was not installed."
+cause = "an earlier package install was interrupted (seen 2026-10-12 too) and never finished"
+fault = "install-interrupted"
+fixed_in = "0.7.0"
+open = true
+
+[[history]]
+date = "2026-10-22"
+version = "0.8.1"
+what = "Christian: it's going good, but the agent constantly goes offline for a few minutes after learning something."
+cause = "single job steps ran for minutes without a sign of life on the SD card (measured on a copy of a real brain: backup 250 s, quiz 82 s on a fast PC); the feed shows offline after 60 s and the watchdog restarts after 120 s; a quiz spent 77 % of its time decompressing the same documents; Orin queued a second backup next to the nightly one"
+fault = "job-slow"
+fixed_in = "0.8.2"
+open = true
