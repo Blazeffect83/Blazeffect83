@@ -15,17 +15,19 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.8.1"
-updated = "2026-10-15"
+updated_for = "0.8.2"
+updated = "2026-10-22"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
 
 [situation]
-as_of = "2026-10-15"
+as_of = "2026-10-22"
 summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
     "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
-    "install v0.8.1 (Orin the Caretaker, and the LEARNING lines: what it learns and how far along): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on; no --allow-sd-card needed)",
+    "2026-10-22: Christian: 'it's going good' (v0.8.1 installed, on the SD card), but the agent goes offline for a few minutes after learning something",
+    "install v0.8.2 (the vigil: busy, not offline; faster quizzes and search): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on)",
+    "after v0.8.2 has run a day, see which steps were slow: polymath caretaker (lines 'jobs/slow:…'), and whether the watchdog restarted it before: journalctl -u polymath --since -2d | grep -ciE 'watchdog|SIGABRT'",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
 ]
@@ -38,6 +40,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.8.2"
+date = "2026-10-22"
+changes = """Christian: the agent goes offline for a few minutes after learning something. Measured on a copy of a real brain: single steps ran for minutes (the backup 250 s, a quiz 82 s, embedding training 24 s, on a fast x86; the Pi is several times slower and its SD card far slower). The feed called the agent offline after 60 s without a sign of life, and systemd's watchdog restarted it after 120 s, with growing pauses (RestartSteps), so the step started over. Fixes: the vigil (core/vigil.py), a thread that vouches for the agent while it makes progress (systemd watchdog, pulse, /run/polymath/pulse.json) and goes quiet after 15 min without progress, so a real hang is still restarted; the feed and dashboard read the pulse: online, what it is doing right now, and 'one long step: 4 min so far'; slow steps are recorded (kv slow_steps) and reported once a day (jobs/slow:<kind>, fault job-slow). Efficiency: search keeps recently decoded documents (24M characters, keyed by content hash) and counting hits no longer opens documents, so a quiz is about 3 times faster (22 s to 8 s); Orin no longer queues a backup, probe or eviction already due (the backup ran twice back to back); embedding training reads its vocabulary every 15 min instead of every slice; Orin's reading-rate signal and the LEARNING lines no longer scan or sort the whole documents table; the watchdog notifier no longer keeps every message it sent."""
+
 [[update]]
 version = "0.8.1"
 date = "2026-10-15"
@@ -693,6 +700,33 @@ since = "0.8.1"
 updated = "0.8.1"
 
 [[fault]]
+id = "job-slow"
+title = "One step of a job ran for minutes"
+area = "jobs"
+codes = ["jobs/slow:*"]
+patterns = ["without a sign of life", "busy for .* min in one step", "one long step"]
+symptoms = [
+    "an inbox line: '<kind> went 95 s without a sign of life' or '<kind> kept the agent busy for 6 min in one step'",
+    "the feed's NOW line: '(one long step: 4 min so far — busy, not stuck)'",
+    "before v0.8.2: 'agent offline' for a few minutes after learning, and restarts by the watchdog",
+]
+causes = [
+    { cause = "a big brain on a slow disk (the SD card): one SQL query or decompression takes minutes", prior = 0.6 },
+    { cause = "a job that does all its work in one step (backup, quiz, training)", prior = 0.3 },
+    { cause = "the Pi is throttled (heat or power)", prior = 0.1 },
+]
+checks = ["polymath caretaker", "polymath status", "vcgencmd get_throttled"]
+self_healing = [
+    "the vigil vouches for the agent while it makes progress, so it is neither shown offline nor restarted (v0.8.2)",
+    "after 15 min without any progress the vigil stops, and systemd restarts a truly stuck agent",
+]
+steps = [
+    { needs = "you", do = "nothing while it is rare; if one kind is slow every day, send the slow_steps", command = "polymath status | grep -A12 slow_steps" },
+]
+since = "0.8.2"
+updated = "0.8.2"
+
+[[fault]]
 id = "agent-restarts"
 title = "The agent keeps restarting"
 area = "agent"
@@ -705,10 +739,13 @@ causes = [
     { cause = "out of memory (sudden restarts with no traceback)", prior = 0.2 },
 ]
 checks = ["journalctl -u polymath -n 80 --no-pager", "systemctl status polymath --no-pager"]
-self_healing = ["systemd restarts it forever, waiting longer between attempts"]
+self_healing = [
+    "systemd restarts it forever, waiting longer between attempts",
+    "a long step no longer gets it restarted: the vigil vouches for it while it makes progress (v0.8.2, job-slow)",
+]
 steps = [{ needs = "sudo", do = "send the log", command = "journalctl -u polymath -n 120 --no-pager" }]
 since = "0.5.2"
-updated = "0.5.2"
+updated = "0.8.2"
 
 [[fault]]
 id = "agent-unclean-stop"
@@ -940,4 +977,13 @@ what = "sd-card-mode.sh on: the brain was started from the SD card's old copy (3
 cause = "an earlier package install was interrupted (seen 2026-10-12 too) and never finished"
 fault = "install-interrupted"
 fixed_in = "0.7.0"
+open = true
+
+[[history]]
+date = "2026-10-22"
+version = "0.8.1"
+what = "Christian: it's going good, but the agent constantly goes offline for a few minutes after learning something."
+cause = "single job steps ran for minutes without a sign of life on the SD card (measured on a copy of a real brain: backup 250 s, quiz 82 s on a fast PC); the feed shows offline after 60 s and the watchdog restarts after 120 s; a quiz spent 77 % of its time decompressing the same documents; Orin queued a second backup next to the nightly one"
+fault = "job-slow"
+fixed_in = "0.8.2"
 open = true

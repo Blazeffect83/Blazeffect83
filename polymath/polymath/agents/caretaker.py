@@ -309,6 +309,29 @@ def best_check(post: dict[str, float], checks: dict[str, Check], done: set[str])
 
 
 # ---------------------------------------------------------------------------------------------- Orin
+
+
+def docs_since(db: Any, since: float) -> int:
+    """Documents fetched since ``since``. Ids grow with time, so a binary search over ids finds the first one in a
+    handful of point lookups: no scan of the whole table (``fetched`` has no index, and on a brain of several GB a
+    scan every 2 minutes reads hundreds of MB from the SD card)."""
+    top = db.one("SELECT id, fetched FROM documents ORDER BY id DESC LIMIT 1")
+    if top is None or float(top["fetched"]) < since:
+        return 0
+    best = int(top["id"])  # the first id whose document was fetched at or after `since` (ids may have gaps)
+    lo, hi = int(db.scalar("SELECT MIN(id) FROM documents", default=0) or 0), best
+    while lo <= hi:  # each step raises lo or lowers hi: it ends
+        mid = (lo + hi) // 2
+        r = db.one("SELECT id, fetched FROM documents WHERE id >= ? ORDER BY id LIMIT 1", (mid,))
+        if r is None:  # pragma: no cover - the newest id is >= mid
+            break
+        if float(r["fetched"]) >= since:  # no ids between mid and r.id: the first is r.id or below mid
+            best, hi = min(best, int(r["id"])), mid - 1
+        else:
+            lo = int(r["id"]) + 1
+    return int(db.scalar("SELECT COUNT(*) FROM documents WHERE id >= ?", (best,), default=0) or 0)
+
+
 class Orin:
     def __init__(self, config: Any, db: Any, scheduler: Any = None, *, env: Env | None = None,
                  clock: Callable[[], float] = time.time) -> None:  # fmt: skip
@@ -365,7 +388,7 @@ class Orin:
 
         st = netstate.get(db)
         out["offline_min"] = 0.0 if st.online else max(0.0, (now - float(st.since or now)) / 60)
-        out["docs_per_h"] = float(db.scalar("SELECT COUNT(*) FROM documents WHERE fetched >= ?", (now - 3600,), 0) or 0)
+        out["docs_per_h"] = float(docs_since(db, now - 3600))
         q = db.one("SELECT accuracy, created FROM quizzes ORDER BY id DESC LIMIT 1")
         if q is not None:
             out["quiz_acc"] = float(q["accuracy"])
@@ -736,6 +759,13 @@ class Orin:
         if name in {"evict", "backup", "probe", "blocklists", "replan"}:
             kind = {"evict": "body.evict", "backup": "body.backup", "probe": "net.probe",
                     "blocklists": "web.blocklists", "replan": "sources.plan"}[name]  # fmt: skip
+            if self.db.scalar("SELECT 1 FROM jobs WHERE kind = ? AND (state = 'running' OR (state = 'queued' AND "
+                              "not_before <= ?)) LIMIT 1", (kind, now + 3600)):  # fmt: skip
+                # already due within the hour (the nightly backup, say): a second copy would run the same work twice
+                return {"evict": "eviction is already on its way", "backup": "a backup is already on its way",
+                        "probe": "an internet check is already on its way",
+                        "blocklists": "fresh safety lists are already on their way",
+                        "replan": "the source planner is already on its way"}[name]  # fmt: skip
             s.enqueue(kind, {"by": "caretaker"}, key=f"{kind}:caretaker:{int(now)}", priority=3.0)
             if name == "evict":
                 s.enqueue("body.housekeeping", {}, key=f"body.housekeeping:caretaker:{int(now)}", priority=3.0)

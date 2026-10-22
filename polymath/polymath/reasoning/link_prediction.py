@@ -218,7 +218,7 @@ class LinkPredictor:
                         words = {stem(w) for w in body.split()}
                         together += 1.0 + (1.0 if rel & words else 0.0)
             if together:
-                freq = len(self.text.search(o_label, limit=50, mode="and"))
+                freq = self.text.count(o_label, limit=50, mode="and")  # how common the answer is: no snippets
                 raw[o] = together / math.sqrt(1.0 + freq)
             else:
                 raw[o] = 0.0

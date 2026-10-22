@@ -209,6 +209,7 @@ def status_dict(db: Database) -> dict[str, Any]:
         "ready_by_kind": st.ready_by_kind,
         "knowledge": _knowledge_summary(db),
         "storage": _storage_summary(db),
+        "slow_steps": db.kv_get("slow_steps") or {},  # the slowest step per job kind (core.loop, fault job-slow)
     }
 
 
@@ -265,9 +266,13 @@ def agent_running(config: Config) -> bool:
         hb = db.kv_get("heartbeat") or {}
     finally:
         db.close()
-    return (
-        bool(hb) and hb.get("state") != "stopped" and time.time() - float(hb.get("ts", 0)) < config.loop.heartbeat_stale
-    )
+    if not hb or hb.get("state") == "stopped":
+        return False
+    if time.time() - float(hb.get("ts", 0)) < config.loop.heartbeat_stale:
+        return True
+    from polymath.core import vigil  # one long step holds the heartbeat back: the vigil vouches for the agent
+
+    return vigil.read(config.paths.run_dir, stale=config.loop.heartbeat_stale) is not None
 
 
 def submit_job(
@@ -940,7 +945,7 @@ def cmd_feed(config: Config, args: argparse.Namespace) -> int:
     from polymath.interface import feed
 
     if args.direct:
-        source = feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config))
+        source = feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config), run_dir=config.paths.run_dir)
         where = str(config.paths.db_path)
     else:
         from polymath.interface import snapshot
@@ -950,7 +955,8 @@ def cmd_feed(config: Config, args: argparse.Namespace) -> int:
             feed.http_source(where),
             [
                 ("the database directly",
-                 feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config), heavy_counts=False)),
+                 feed.direct_source(config.paths.db_path, pulse=heartbeat_path(config), heavy_counts=False,
+                                    run_dir=config.paths.run_dir)),
                 ("the agent's own snapshot", snapshot.source(snapshot.path_for(config))),
             ],
             hint="sudo systemctl restart polymath-dashboard (polymath doctor explains)",

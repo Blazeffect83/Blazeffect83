@@ -7,8 +7,11 @@ body on demand, so the text is stored exactly once.
 from __future__ import annotations
 
 import re
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
+from typing import Any
 
 from polymath.core.db import Database
 from polymath.memory.documents import DocumentStore
@@ -20,6 +23,48 @@ VAGUE_DF_SHARE = 0.25  # a query whose rarest word is in a quarter of all passag
 MAX_DF_SHARE = 0.03  # terms in more than 3% of passages carry little evidence and are slow to rank
 _TERM = re.compile(r"[^\W_]+(?:['’][^\W_]+)?", re.U)
 _PARA = re.compile(r"\n\s*\n")
+TEXT_CACHE_CHARS = 24_000_000  # decoded documents kept for search snippets (about 25-50 MB of memory)
+CACHED_CODECS = frozenset({"lzma", "zlib", "none"})  # bodies in the database (not spilled to a drive or evicted)
+
+
+class _TextCache:
+    """Recently decoded document texts, for search snippets. Search shows a passage of each hit, and getting a
+    passage means decompressing the whole document. A quiz or a question asks about the same few hundred
+    documents again and again: on a Raspberry Pi that decompression was most of a quiz's time. Keyed by the
+    document's content hash and codec, so an updated, evicted or spilled document is never served stale.
+    Shared by every TextIndex in the process (the dashboard's request threads too), bounded in characters."""
+
+    def __init__(self, budget: int = TEXT_CACHE_CHARS) -> None:
+        self.budget = budget
+        self.size = 0
+        self.hits = self.misses = 0
+        self._d: OrderedDict[tuple[str, int, str, str], str] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[str, int, str, str]) -> str | None:
+        with self._lock:
+            text = self._d.get(key)
+            if text is None:
+                self.misses += 1
+                return None
+            self._d.move_to_end(key)
+            self.hits += 1
+            return text
+
+    def put(self, key: tuple[str, int, str, str], text: str) -> None:
+        if len(text) > self.budget // 8:  # one huge book would push everything else out
+            return
+        with self._lock:
+            old = self._d.pop(key, None)
+            self.size -= len(old) if old is not None else 0
+            self._d[key] = text
+            self.size += len(text)
+            while self.size > self.budget and self._d:
+                _k, gone = self._d.popitem(last=False)
+                self.size -= len(gone)
+
+
+TEXTS = _TextCache()
 
 
 def chunk_spans(text: str, target: int = CHUNK_TARGET, hard_max: int = CHUNK_MAX) -> list[tuple[int, int]]:
@@ -163,19 +208,21 @@ class TextIndex:
             )
         self.db.execute("DELETE FROM chunks WHERE doc_id=?", (doc_id,))
 
-    def search(self, query: str, *, limit: int = 10, mode: str = "or", sources: list[str] | None = None) -> list[Hit]:
+    def _matches(self, query: str, *, limit: int, mode: str, sources: list[str] | None) -> list[Any]:
+        """The best-ranked matching passages (rows), without loading any document."""
         terms, common = self.plan(query)
         if common and mode == "or":
-            hits = self.search(" ".join(terms), limit=limit, mode="and", sources=sources)
-            if len(hits) >= limit or len(terms) < 2:
-                return hits
+            rows = self._matches(" ".join(terms), limit=limit, mode="and", sources=sources)
+            if len(rows) >= limit or len(terms) < 2:
+                return rows
             terms = terms[:2]
         expr = fts_query(" ".join(terms), mode=mode)
         if not expr:
             return []
         sql = (
             "SELECT c.id, c.doc_id, c.start, c.end, bm25(chunk_fts, 2.0, 1.0) AS score, d.title, d.url, d.source, "
-            "d.license FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid JOIN documents d ON d.id = c.doc_id "
+            "d.license, d.content_hash, d.codec FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid "
+            "JOIN documents d ON d.id = c.doc_id "
             "WHERE chunk_fts MATCH ?"
         )
         params: list[object] = [expr]
@@ -184,14 +231,28 @@ class TextIndex:
             params += sources
         sql += " ORDER BY score LIMIT ?"
         params.append(limit)
-        rows = self.db.query(sql, params)
+        return self.db.query(sql, params)
+
+    def count(self, query: str, *, limit: int = 50, mode: str = "or") -> int:
+        """How many passages match (at most ``limit``), the same ones ``search`` would return, without opening
+        a single document (search decompresses each hit's document for its snippet)."""
+        return len(self._matches(query, limit=limit, mode=mode, sources=None))
+
+    def search(self, query: str, *, limit: int = 10, mode: str = "or", sources: list[str] | None = None) -> list[Hit]:
+        rows = self._matches(query, limit=limit, mode=mode, sources=sources)
         texts: dict[int, str] = {}
         hits = []
         for r in rows:
             doc_id = int(r["doc_id"])
             if doc_id not in texts:
-                doc = self.store.get(doc_id)
-                texts[doc_id] = doc.text if doc else ""
+                key = (str(self.db.path), doc_id, str(r["content_hash"]), str(r["codec"]))
+                cached = TEXTS.get(key)
+                if cached is None:
+                    doc = self.store.get(doc_id)
+                    cached = doc.text if doc else ""
+                    if doc is not None and str(r["codec"]) in CACHED_CODECS:  # spilled: follows its drive
+                        TEXTS.put(key, cached)
+                texts[doc_id] = cached
             hits.append(
                 Hit(
                     int(r["id"]),

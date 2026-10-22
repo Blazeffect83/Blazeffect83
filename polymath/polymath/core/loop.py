@@ -22,7 +22,7 @@ from typing import Any, Protocol
 
 from polymath.body.sensors import Vitals, read_vitals
 from polymath.body.systemd_notify import Notifier
-from polymath.core import inbox, issues, netstate
+from polymath.core import inbox, issues, netstate, vigil
 from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
@@ -34,6 +34,8 @@ log = get_logger("loop")
 MAX_SLICE = 60.0  # seconds; a slice must end well within the systemd watchdog (WatchdogSec=120)
 PULSE_EVERY = 15.0  # seconds between touches of the pulse file (each is a small disk write)
 QUIET_HEARTBEAT_EVERY = 30.0  # idle cycles write the database heartbeat this often, not every 2 s
+SILENT_REPORT_S = 60.0  # a step this long without a sign of life is reported (the vigil vouched for it meanwhile)
+SLOW_REPORT_S = 300.0  # a slice this long is reported: nothing else ran meanwhile
 RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
 RESTART_WINDOW_S = 600.0
 RESTARTS_TOO_MANY = 4  # starts within RESTART_WINDOW_S that mean it keeps stopping
@@ -171,6 +173,8 @@ class Agent:
         self._hb_state = ""
         self.build = read_build()  # the code this process runs; the feed compares it with what is installed
         self.network_kinds = registry.network_kinds()
+        # proof of life during one long step (core.vigil): the feed never says offline while it works
+        self.vigil = vigil.Vigil(ping=self.notifier.watchdog, pulse=self._pulse, run_dir=config.paths.run_dir)
         self.storage_lost = False  # set when the brain's drive stopped answering mid-run (see storage_lost)
 
     # --------------------------------------------------------------- lifecycle
@@ -194,6 +198,7 @@ class Agent:
                               f"(power cut, crash or kill): {recovered['requeued']} job(s) resumed")  # fmt: skip
             self._heartbeat("starting")
         self.started = True
+        self.vigil.start()
         self.notifier.ready(f"started at cycle {self.cycle_no}")
         log.info("agent started", extra={"cycle": self.cycle_no, "recovered": recovered})
         return recovered
@@ -230,6 +235,7 @@ class Agent:
         return ran
 
     def shutdown(self) -> None:
+        self.vigil.stop()
         self.notifier.stopping()
         if self.db.is_open:
             try:
@@ -249,6 +255,7 @@ class Agent:
 
     # ------------------------------------------------------------------- cycle
     def _tick(self) -> None:
+        self.vigil.progress()
         self.notifier.watchdog()
         self._pulse()
 
@@ -290,10 +297,13 @@ class Agent:
         for i, (interval, planner) in enumerate(self.planners):
             if now >= self._planner_due[i]:
                 self._planner_due[i] = now + interval
+                name = f"{getattr(planner, '__module__', '?')}.{getattr(planner, '__name__', '?')}"
+                self.vigil.enter(f"planner {name.removeprefix('polymath.')}")
                 try:
                     planner(self)
                 except Exception:
                     log.exception("planner failed", extra={"planner": getattr(planner, "__name__", "?")})
+        self.vigil.enter("")
         kinds = self.registry.kinds()
         if self.network_kinds and not netstate.get(self.db).online:
             kinds = [k for k in kinds if k not in self.network_kinds]  # the policy chooses among offline work only
@@ -313,12 +323,15 @@ class Agent:
             decision = self.policy.decide(obs, self.registry)  # DECIDE
             decision = self._offline_filter(decision)
         decision = self._quarantine_filter(decision)
+        self.vigil.enter("checkpoint")
         self._checkpoint_if_asked()
+        self.vigil.enter("")
         responses, failed_mark = self._responses(), self._failed_mark()
         job = self.scheduler.claim(decision.kinds)
         if job is None:
             return self._quiet_cycle("idle", obs, decision.reason)
         spec = self.registry.get(job.kind)
+        self.vigil.enter(job.kind, job.id)
         self.cycle_no += 1
         self.services["cycle"] = self.cycle_no
         rec = CycleRecord(cycle=self.cycle_no, status="failed", action=decision.action, job_id=job.id, kind=job.kind)
@@ -488,6 +501,28 @@ class Agent:
             ),
         )
 
+    def _slow_step(self, kind: str, how: dict[str, float]) -> None:
+        """A slice that went long without a sign of life, or kept the agent busy for minutes, is recorded
+        (kv ``slow_steps``: the slowest per kind) and reported once a day (the caretaker's inbox: job-slow)."""
+        took, silent = float(how["took"]), float(how["silent"])
+        if not kind or (silent < SILENT_REPORT_S and took < SLOW_REPORT_S) or self.storage_lost:
+            return
+        try:
+            with self.db.transaction():
+                slow = dict(self.db.kv_get("slow_steps") or {})
+                old: dict[str, Any] = slow[kind] if isinstance(slow.get(kind), dict) else {}
+                slow[kind] = {"took": round(max(took, float(old.get("took") or 0)), 1),
+                              "silent": round(max(silent, float(old.get("silent") or 0)), 1),
+                              "n": int(old.get("n") or 0) + 1, "at": time.time()}  # fmt: skip
+                self.db.kv_set("slow_steps", dict(sorted(slow.items(), key=lambda kv: -kv[1]["silent"])[:30]))
+                why = (f"{kind} went {silent:.0f} s without a sign of life" if silent >= SILENT_REPORT_S
+                       else f"{kind} kept the agent busy for {took / 60:.1f} min in one step")  # fmt: skip
+                issues.report(self.db, "jobs", f"slow:{kind}", f"{why} (the vigil kept it from being restarted)",
+                              severity="info", every=86400.0)  # fmt: skip
+        except Exception:  # never let the record of a slow step stop the loop
+            log.exception("could not record a slow step", extra={"kind": kind})
+        log.warning("slow step", extra={"kind": kind, "took_s": round(took, 1), "silent_s": round(silent, 1)})
+
     def _quiet_cycle(self, status: str, obs: Observation, reason: str) -> CycleRecord:
         # Each commit writes at least a page; an idle agent cycling every 2 s would write ~350 MB a day just
         # for this. The pulse file already proves it is alive, so the row is refreshed only when something
@@ -502,6 +537,7 @@ class Agent:
                     self.db.kv_set("paused_reason", reason)
         else:
             self._pulse()
+        self.vigil.enter("")
         self.notifier.watchdog()
         rec = CycleRecord(cycle=self.cycle_no, status=status, action=reason)
         self.last = rec
@@ -511,6 +547,8 @@ class Agent:
         rec.wall = time.monotonic() - t0
         rec.cpu = rec.cpu or (time.process_time() - c0)
         self.last = rec
+        self._slow_step(rec.kind or "", self.vigil.section())
+        self.vigil.enter("")
         self.notifier.watchdog()
         if self.notifier.active:
             self.notifier.status(f"cycle {rec.cycle}: {rec.kind} {rec.status}")

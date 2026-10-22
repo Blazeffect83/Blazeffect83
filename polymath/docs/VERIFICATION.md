@@ -946,6 +946,60 @@ and `mypy --strict` are clean. No shell scripts changed.
 
 **Not yet run on the Pi.**
 
+## 12r. Busy, not offline: the vigil, and what measuring found (v0.8.2)
+
+**Why:** Christian, 2026-10-22, about v0.8.1 on the Pi in SD-card mode: "the agent constantly goes offline for a
+few minutes after learning something … is this an efficiency issue or an optimization problem".
+
+**Measured** (development container, x86_64): the real agent (`build_agent`, every planner) ran on a copy of a real
+480 MB brain (7,374 documents, 98k facts). The internet was cut, 600 documents were marked unread, every
+watchdog ping was timed, and every slice was profiled:
+- **One-step jobs:**
+  - `body.backup`: 250 s in one step. Its `PRAGMA quick_check` never ticks. It ran **twice**: Orin queued one next
+    to the nightly one.
+  - `eval.quiz`: 82 s in one step. 77 % of that was lzma-decompressing the same documents for search snippets.
+  - `embed.train`: 24 s slices with up to 14 s of silence (saving the model).
+- **On the Pi:** its CPU is several times slower and its SD card far slower than this machine. One silent
+  stretch over 60 s turns the feed's header to `agent offline`, and over 120 s systemd's watchdog restarts the
+  agent, with pauses growing to 5 min (`RestartSteps`).
+- **Static audit:** a subagent read every handler and planner. Big single SQL statements without ticks are common
+  (reasoning, PageRank, topics, reports, training). The vigil covers them all.
+
+**End to end:** a real agent process with a fake systemd notify socket (`WATCHDOG_USEC` = 120 s, as on the Pi) and
+a job silent for 130 s. The feed was polled every 5 s:
+- **v0.8.1 status** (no vigil pulse): offline in **15 of 35** samples, from second 65 to 130. No watchdog ping
+  for 130 s, so systemd would have restarted it at 120 s.
+- **v0.8.2:** online throughout, with `NOW  T.silent  (one long step: 2 min so far — busy, not stuck)`, and a
+  watchdog ping every 30 s (the longest gap was 30 s). The only sample offline came after the agent was stopped
+  on purpose at 170 s.
+
+**Efficiency:** `eval.quiz` on the same brain went from 22.4 s to 7.9 s (first run) and from 20.0 s to 6.8 s
+(cache warm), with unchanged answers (`count` matches `len(search)`).
+
+**Tests:** `tests/test_vigil.py` (15):
+- the vigil: vouches while progressing, goes quiet at the hard limit and recovers; sections and their worst
+  silence; `pulse.json` is fresh, stale, malformed, or absent without a run directory; the thread starts, beats,
+  survives a failing pulse and cleans up; the notifier's log is bounded;
+- the loop: a silent slow slice is vouched for, recorded in `slow_steps` and reported once a day (fault `job-slow`);
+  a ticking slice is not reported; a busy one is reported as busy; planners are sections;
+- the feed, dashboard and CLI: busy is not offline; the long-step NOW text; the checkpoint and planner labels;
+  `stopped` stays stopped; `/health`; `agent_running`; `status` lists `slow_steps`;
+- efficiency:
+  - Orin's id-based reading rate matches a full count, ids with gaps included. The test caught an endless loop
+    in the first version.
+  - Orin skips a backup or probe already due, but still queues one due tomorrow.
+  - The search cache: hits, stale-proofing, the budget, and `count` opens nothing.
+  - The vocabulary cache.
+  - The LEARNING lines look only at the newest documents.
+
+`tests/conftest.py` now gives every test its own `run_dir`. The new tests had written a pulse into the real
+`/run/polymath`, which leaked into other tests. `test_core` reads the notifier log as a list.
+
+**Result:** 734 tests pass and 1 is skipped, at 93 % coverage (`core/vigil.py` 99 %). `ruff`, `ruff format`,
+`mypy --strict` and mypy over the tests are clean.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

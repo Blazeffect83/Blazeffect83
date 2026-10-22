@@ -34,6 +34,18 @@ Each cycle:
 3. **ACT.** One bounded *slice* of the chosen job runs, with a budget of 15 s × intensity.
    - Every slice must make progress.
    - Long handlers call `ctx.tick()`, which feeds the systemd watchdog and touches the heartbeat pulse file.
+   - **The vigil** (`core/vigil.py`, v0.8.2) is a daemon thread that does both every 10 s while the main thread
+     makes progress, and writes `/run/polymath/pulse.json` (`what`, `job`, `since`; memory, not the SD card).
+     - **Progress** is a section change (`vigil.enter`: a slice, each planner, the WAL checkpoint, "" between
+       them) or a tick (`vigil.progress`).
+     - **A hang:** after 15 min without progress it stops vouching, and systemd's watchdog restarts the agent.
+     - **Readers:** the feed and dashboard (`Feed(run_dir=…)`, `/health`) and `cli.agent_running`. The feed's
+       `activity` comes from `what`, the step running now (the cycles table only holds finished slices), plus
+       `long_step` after 30 s.
+     - **Slow steps:** `Agent._slow_step` records the slowest per kind in kv `slow_steps` when a slice went 60 s
+       without progress or ran 5 min. It reports `jobs/slow:<kind>` (fault `job-slow`) at most daily.
+     - The thread never touches the database. `Notifier.watchdog` takes a lock, and its `sent` log is a 64-entry
+       deque.
 4. **INTEGRATE, EVALUATE, LEARN.** These happen **in the same transaction** as the slice:
    - the handler's writes;
    - the job's checkpoint or completion;
@@ -42,6 +54,21 @@ Each cycle:
    - the bandit's reward update (value per CPU second).
 
    A power cut therefore loses at most the uncommitted slice, and the job resumes from its last checkpoint.
+
+**Efficiency found by measuring (v0.8.2).** The real agent ran on a copy of a real 480 MB brain, with every
+silence between watchdog pings recorded and slices profiled.
+- **Text search** (`memory/text_index.py`): a snippet means decompressing the hit's whole document. A quiz spent
+  77 % of its time doing that, decompressing 803 times for 255 distinct documents.
+  - `TEXTS` keeps decoded texts, bounded at 24M characters, LRU, and shared by threads. Its key includes
+    `content_hash` and `codec`, so it is never stale. Spilled bodies are not kept.
+  - `TextIndex.count` ranks without opening documents. Link prediction used `len(search(…))` just to count.
+  - A quiz went from 22 s to 8 s.
+- **Small fixes:**
+  - `embed.train` reads its vocabulary every 15 min, not on every slice.
+  - Orin's reading rate (`caretaker.docs_since`) is a binary search over ids, not a scan of `documents`.
+  - The LEARNING lines look at the newest 200 documents, not a sort of all documents of one source.
+  - Orin no longer queues a backup, probe or eviction that is already due within the hour. The backup used to
+    run twice in a row.
 
 ## The job queue (`core/scheduler.py`)
 

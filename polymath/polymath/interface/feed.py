@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+from polymath.core import vigil
 from polymath.core.db import Database
 from polymath.interface import focus
 from polymath.interface.answer import render_value
@@ -79,6 +80,7 @@ CAPS = {"read": 4, "fact": 5, "inferred": 3, "disputed": 2, "quiz": 4, "agent": 
 FACT_SAMPLE = 400  # newest facts examined per poll to find readable ones
 EXACT_COUNT_SPAN = 200_000  # id spans larger than this are estimated instead of counted
 COUNTS_TTL = 60.0  # full-table counts (documents, entities, facts) are refreshed this often
+LONG_STEP_S = 30.0  # a step this long is shown as one long step on the NOW line (it is busy, not offline)
 STUB_LABEL = re.compile(r"[QP]\d+")
 
 # What each job kind means, for the "now:" line. tests/test_feed.py keeps this in step with the registry.
@@ -207,6 +209,7 @@ class Feed:
         stale: float = 60.0,
         heavy_counts: bool = True,
         counts_source: Callable[[], dict[str, Any] | None] | None = None,
+        run_dir: Path | None = None,
     ) -> None:
         """``heavy_counts=False`` leaves out the full-table counts (the agent's own snapshot); ``counts_source``
         supplies them from elsewhere (the dashboard counts in a background thread, so no request waits)."""
@@ -215,6 +218,7 @@ class Feed:
         self.stale = stale
         self.heavy_counts = heavy_counts
         self.counts_source = counts_source
+        self.run_dir = run_dir  # the agent's pulse.json (core.vigil): busy with one long step, not offline
         self._counts: dict[str, Any] = {}
         self._counts_at = -1e18
 
@@ -679,6 +683,9 @@ class Feed:
             except OSError:
                 pass
         state = str(hb.get("state") or "not started")
+        busy = vigil.read(self.run_dir, now=now, stale=self.stale) if self.run_dir is not None else None
+        if busy is not None and hb and state not in {"stopped", "not started"}:  # the vigil vouches: alive
+            age = min(age if age is not None else 1e18, now - float(busy["at"]))
         online = age is not None and age < self.stale and state != "stopped"
         activity = action = ""
         cycles = self.db.query("SELECT action, status, job_id, ended FROM cycles ORDER BY id DESC LIMIT 30")
@@ -690,6 +697,16 @@ class Feed:
             if r["status"] == "idle":
                 activity = "waiting for work"
                 break
+        long_step: dict[str, Any] = {}
+        what = str((busy or {}).get("what") or "")
+        if online and what:  # what it is doing right now (the cycles table only has finished slices)
+            action = what if not what.startswith("planner ") else action
+            activity = ACTIVITY.get(what, "planning its next work" if what.startswith("planner ") else what)
+            if what == "checkpoint":
+                activity = "tidying its database (write-ahead log)"
+            took = now - float(busy["since"])  # type: ignore[index]
+            if took >= LONG_STEP_S:
+                long_step = {"what": what, "seconds": round(took)}
         vit = self.db.one("SELECT temp_c, mode FROM vitals ORDER BY at DESC LIMIT 1")
         curious = [
             str(r["name"])
@@ -705,6 +722,7 @@ class Feed:
             "heartbeat_age_s": None if age is None else round(age, 1),
             "activity": activity,
             "action": action,
+            **({"long_step": long_step} if long_step else {}),
             "version": hb.get("version"),
             "build": hb.get("build"),
             "temp_c": None if vit is None or vit["temp_c"] is None else round(float(vit["temp_c"]), 1),
@@ -771,7 +789,7 @@ def http_source(base_url: str, *, timeout: float = 5.0) -> Callable[[str | None]
 
 
 def direct_source(
-    db_path: Path, *, pulse: Path | None = None, heavy_counts: bool = True
+    db_path: Path, *, pulse: Path | None = None, heavy_counts: bool = True, run_dir: Path | None = None
 ) -> Callable[[str | None], dict[str, Any]]:
     """Read the database directly (read-only); for users who can read the data directory."""
     feed: Feed | None = None
@@ -782,7 +800,8 @@ def direct_source(
             if feed is None:
                 if not db_path.exists():
                     raise FeedUnavailable("the database is not initialised yet")
-                feed = Feed(Database(db_path, readonly=True), pulse=pulse, heavy_counts=heavy_counts)
+                feed = Feed(Database(db_path, readonly=True), pulse=pulse, heavy_counts=heavy_counts,
+                            run_dir=run_dir)  # fmt: skip
             return feed.poll(cursor)
         except FeedUnavailable:
             raise
@@ -1218,6 +1237,9 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         ]
     activity = str(st.get("activity") or "starting up")
     segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
+    long_step = st.get("long_step") or {}
+    if long_step.get("seconds"):
+        segs.append((f"  (one long step: {_duration(float(long_step['seconds']))} so far — busy, not stuck)", "dim"))
     sb = st.get("standby") or {}
     if sb:
         since = f" since {clock(float(sb['since']))}" if sb.get("since") else ""
@@ -1290,6 +1312,10 @@ def focus_lines(st: dict[str, Any], *, width: int = 0) -> list[list[Seg]]:
             second += [(bar(frac, cells), "cyan"), (" ", "")]
         second.append((text + (" ✓" if f.get("finished") else ""), ""))
     return [first, second or [("", "")]]
+
+
+def _duration(seconds: float) -> str:
+    return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
 
 
 def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0) -> list[list[Seg]]:

@@ -30,6 +30,9 @@ implemented here and learns only from data the agent downloads itself.
 - **Knowledge map:** an interactive star map of what it has read about on the dashboard, with a time-lapse of
   its brain growing. Click a topic and it tells you what it knows.
 - **Watch from your phone:** `http://<pi>:8765/live` shows the face and the live feed.
+- **Busy, never falsely offline** (v0.8.2): while one long step works (a backup, a quiz, a big query on the SD
+  card), a small watchdog thread vouches for it, and the feed says `one long step: 4 min so far — busy, not stuck`
+  instead of `agent offline`. A really stuck agent is still restarted. Quizzes and search are about 3× faster.
 - **See what it is learning, and how far along** (v0.8.1): the feed, the dashboard and `/live` name the topic it
   is on and who chose it (curiosity, you, a mistake, an agent), the article it just read, a bar for how well it
   knows the topic (and what this round added), and a bar for the round itself (`2 of 4 articles`).

@@ -209,6 +209,11 @@ class DashboardData:
                 age = min(age or 1e18, time.time() - heartbeat_path(self.config).stat().st_mtime)
             except OSError:
                 pass
+            from polymath.core import vigil
+
+            busy = vigil.read(self.config.paths.run_dir, stale=self.config.loop.heartbeat_stale)
+            if busy is not None:  # one long step: the vigil vouches for it (core.vigil)
+                age = min(age or 1e18, time.time() - float(busy["at"]))
         ok = age is not None and age < self.config.loop.heartbeat_stale and hb.get("state") != "stopped"
         return ok, {
             "ok": ok,
@@ -340,7 +345,7 @@ class DashboardData:
             result = self._snapshot_feed(cursor)
         else:
             feed = Feed(db, pulse=heartbeat_path(self.config), stale=self.config.loop.heartbeat_stale,
-                        counts_source=self.counts)  # fmt: skip
+                        counts_source=self.counts, run_dir=self.config.paths.run_dir)  # fmt: skip
             result = feed.poll(cursor)
         from polymath.interface.face import state
         from polymath.interface.feed import badge, transitions

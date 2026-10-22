@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
+from collections import deque
 from collections.abc import Mapping
 
 
@@ -37,7 +39,8 @@ class Notifier:
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
         self.env = dict(os.environ if env is None else env)
         self._last_ping = 0.0
-        self.sent: list[str] = []
+        self._lock = threading.Lock()  # the main thread and the vigil (core.vigil) both ping
+        self.sent: deque[str] = deque(maxlen=64)  # the latest notifications (a list grew by one every 30 s)
         usec = self.env.get("WATCHDOG_USEC")
         pid = self.env.get("WATCHDOG_PID")
         enabled = bool(usec) and (not pid or pid == str(os.getpid()))
@@ -60,10 +63,11 @@ class Notifier:
         return self._send(msg)
 
     def watchdog(self, force: bool = False) -> bool:
-        now = time.monotonic()
-        if not force and now - self._last_ping < self.ping_every:
-            return False
-        self._last_ping = now
+        with self._lock:
+            now = time.monotonic()
+            if not force and now - self._last_ping < self.ping_every:
+                return False
+            self._last_ping = now
         return self._send("WATCHDOG=1")
 
     def status(self, text: str) -> bool:

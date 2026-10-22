@@ -19,6 +19,7 @@ def make_config(tmp_path: Path) -> Config:
         f"""
 [paths]
 data_dir = "{tmp_path / "data"}"
+run_dir = "{tmp_path / "run"}"
 require_separate_mount = false
 
 [loop]

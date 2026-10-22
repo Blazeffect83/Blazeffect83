@@ -46,11 +46,28 @@ def load_model(ctx: JobContext) -> tuple[SGNS, dict[str, Any]] | None:
     return loaded
 
 
+VOCAB_TTL = 900.0  # the vocabulary is read again after this long (it changes slowly; reading it scans all words)
+
+
+def _vocab(ctx: JobContext) -> Vocab:
+    """The training vocabulary, read from the database at most every ``VOCAB_TTL`` seconds. Every slice used to
+    read it: a scan and sort of every word count, before the slice's first sign of life."""
+    cfg = ctx.config.learning
+    key = (cfg.embedding_min_count, cfg.embedding_vocab_max)
+    cached = ctx.services.get("embed_vocab")
+    if cached is not None and cached[0] == key and time.monotonic() - cached[1] < VOCAB_TTL:
+        vocab: Vocab = cached[2]
+        return vocab
+    vocab = Vocab.from_db(ctx.db, min_count=cfg.embedding_min_count, max_size=cfg.embedding_vocab_max)
+    ctx.services["embed_vocab"] = (key, time.monotonic(), vocab)
+    return vocab
+
+
 def train_job(ctx: JobContext) -> JobOutcome:
     """Job ``embed.train``: one slice of skip-gram training over documents (cursor resumes across slices)."""
     cfg = ctx.config.learning
     loaded = load_model(ctx)
-    vocab = Vocab.from_db(ctx.db, min_count=cfg.embedding_min_count, max_size=cfg.embedding_vocab_max)
+    vocab = _vocab(ctx)
     if len(vocab) < 50:
         return JobOutcome(done=True, result={"skipped": "vocabulary too small", "vocab": len(vocab)})
     if loaded is None:

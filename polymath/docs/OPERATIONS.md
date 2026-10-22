@@ -222,6 +222,19 @@ directly, as a user who can). To stop the window opening at login, delete
 | free disk < half of that | pause | only eviction runs |
 | data > `disk_budget_gb` | — | eviction requested |
 
+**Busy is not offline** (v0.8.2). The agent shows it is alive in three ways:
+- a heartbeat when a step commits;
+- a pulse whenever a job reports progress;
+- a ping to systemd's watchdog, which restarts it after 2 minutes without one.
+
+A single long step (the nightly backup, a quiz, a big query on the SD card) used to leave all three silent. The
+feed then said `agent offline`, and after 2 minutes systemd restarted it. The **vigil** is a small thread that
+vouches for the agent every 10 s while the agent makes progress, and the feed shows the step as
+`(one long step: 4 min so far — busy, not stuck)`. After 15 minutes without any progress the vigil stops, so a
+really stuck agent is still restarted. Steps that went a minute without a sign of life, or kept the agent busy for
+5 minutes, are reported once a day: `polymath caretaker` shows `jobs/slow:<kind>`, and `polymath status` shows
+`slow_steps`.
+
 These limits always apply, whatever the mode:
 - `CPUQuota=200%` (2 of 4 cores), `MemoryMax=3G`, `Nice=10`, idle-ish IO priority;
 - numpy is limited to 2 threads;
@@ -624,6 +637,8 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | an update "did nothing" (the same problem after `git pull` and `install.sh`) | check what is installed: `cat /opt/polymath/build.json`, and which branch the clone is on: `git -C ~/Blazeffect83 branch -vv`. Update Polymath's own clone, never another project's checkout: `git -C ~/polymath-src pull --ff-only origin claude/polymath-agent` (if it is missing: `git clone -b claude/polymath-agent https://github.com/Blazeffect83/Blazeffect83.git ~/polymath-src`), then `cd ~/polymath-src/polymath && sudo ./install.sh --allow-sd-card` |
 | doctor: `/dev/sda runs at USB 2 speed (480 Mbit/s)` | the SSD is in a black USB 2 port, or on a USB 2 cable or hub. Move it to a blue USB 3 port with a USB 3 cable; `lsusb -t` should then show it under the `5000M` bus |
 | the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
+| the header said `agent offline` for a few minutes after it learned something (before v0.8.2) | one long step (a backup, a quiz, training, a big query on the SD card) went over a minute without a sign of life. The feed called that offline, and after 2 minutes systemd restarted the agent. Since v0.8.2 the vigil vouches for it: the NOW line says `(one long step: 4 min so far — busy, not stuck)`. Which steps were slow: `polymath caretaker` (`jobs/slow:…` lines) and `polymath status` (`slow_steps`). Whether it was restarted before: `journalctl -u polymath --since -2d \| grep -ciE 'watchdog\|SIGABRT'` |
+| `agent offline` even with v0.8.2 | it really stopped or hung. After 15 min with no progress the vigil stops vouching and systemd restarts it. `polymath doctor`; `journalctl -u polymath -n 80` |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |
 | the agent waits: "the brain lives on the drive …" | plug that drive in; `journalctl -u 'polymath-volume@*'` shows it being mounted |

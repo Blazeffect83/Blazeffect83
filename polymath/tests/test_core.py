@@ -281,7 +281,7 @@ def test_sd_notify_real_socket(tmp_path):
     assert len(listener.recv(1024)) == len("STATUS=") + 200
     assert n.stopping()
     assert listener.recv(1024) == b"STOPPING=1"
-    assert n.sent == ["READY", "WATCHDOG", "STATUS", "STOPPING"]
+    assert list(n.sent) == ["READY", "WATCHDOG", "STATUS", "STOPPING"]
     listener.close()
 
 

@@ -37,6 +37,7 @@ RECENT_S = 900.0  # a learning job that ran this recently is still the focus, ev
 ITEM_S = 900.0  # the newest document is "what it read last" for a job only if it is this fresh
 REMEMBER = 64  # jobs and topics remembered per process
 MAX_TITLES = 200  # wikipedia.titles reads at most this many
+NEWEST = 200  # newest documents looked at for "what it read last"
 
 SOURCES = {
     "wikipedia": "Wikipedia",
@@ -260,10 +261,14 @@ def _newest_item(db: Database, source: str, since: float, now: float) -> str:
             if r["kind"] != "stub" and not _QID.fullmatch(str(r["label"])):
                 return str(r["label"])
         return ""
-    doc = db.one("SELECT title, fetched FROM documents WHERE source=? ORDER BY id DESC LIMIT 1", (source,))
-    if doc is None or float(doc["fetched"]) < max(since, now - ITEM_S):
-        return ""
-    return str(doc["title"] or "")[:160]
+    # the newest few documents by id, not "WHERE source=? ORDER BY id DESC": that sorts every document of the
+    # source on each poll of the feed (the index is on (source, external_id), not id)
+    for doc in db.query("SELECT source, title, fetched FROM documents ORDER BY id DESC LIMIT ?", (NEWEST,)):
+        if float(doc["fetched"]) < max(since, now - ITEM_S):
+            break
+        if doc["source"] == source:
+            return str(doc["title"] or "")[:160]
+    return ""
 
 
 def _topic_named(db: Database, name: str) -> int | None:
