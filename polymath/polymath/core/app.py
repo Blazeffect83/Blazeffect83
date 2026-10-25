@@ -124,8 +124,8 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     from polymath.evaluation import recap, surprise
     from polymath.interface import knowledge_map, snapshot
     from polymath.interface.snapshot import SNAPSHOT_EVERY
+    from polymath.memory import inventory, merge
     from polymath.memory import jobs as memjobs
-    from polymath.memory import merge
     from polymath.memory.documents import DocumentStore
     from polymath.perception import embed_jobs as ejobs
     from polymath.perception import howto, phrasing, semantic
@@ -265,6 +265,9 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
     reg("body.spill", maintenance.spill_job, "Move document bodies to plugged-in drives", action="maintain")
     reg("body.recall", maintenance.recall_job, "Bring a drive's documents back (retire it)", action="maintain")
+    reg("storage.inventory", inventory.inventory_job, "What each drive holds", action="maintain")
+    reg("storage.recover", inventory.recover_job, "Relearn what a lost drive held, the most important first",
+        action="maintain")  # fmt: skip
     reg("drive.learn", dlearn.learn_job, "Learn what the user asked for", action="plan")
     netreg(
         "web.blocklists",
@@ -310,6 +313,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, djobs.planner),
             (300.0, vjobs.planner),
             (600.0, maintenance.planner),
+            (600.0, inventory.planner),
             (300.0, openweb.planner),
             (600.0, predictions.planner),
             (600.0, surprise.planner),

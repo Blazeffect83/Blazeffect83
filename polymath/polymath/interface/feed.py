@@ -1191,6 +1191,15 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             ]
         if ev == "hint":
             return [*head, _tag("storage", "yellow"), (str(d.get("hint", "")), "yellow")]
+        if ev == "lost":
+            n, facts = int(d.get("documents", 0)), int(d.get("facts", 0))
+            what = f"{n:,} documents ({facts:,} facts rest on them)" if facts else f"{n:,} documents"
+            text = (f"drive {e['name']} is still gone: it held {what}; relearning {int(d.get('relearn', 0)):,} of "
+                    "them onto the other drives, the most important first")  # fmt: skip
+            return [*head, _tag("storage", "byellow"), (text, "")]
+        if ev == "back":
+            text = f"drive {e['name']} is back: its {int(d.get('documents', 0)):,} documents are readable again"
+            return [*head, _tag("storage", "bgreen"), (text, "")]
         if ev == "retired":
             text = f"drive {e['name']} retired: {d.get('recalled', 0):,} documents brought back; safe to unplug"
             return [*head, _tag("storage", "bmagenta"), (text, "")]

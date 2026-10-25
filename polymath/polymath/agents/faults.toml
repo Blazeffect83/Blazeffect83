@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.10.0"
+updated_for = "0.11.0"
 updated = "2026-10-25"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -34,6 +34,8 @@ waiting_on = [
     "2026-10-25: Christian is hooking the SSD up again: plugged in, it is not picked up and the feed still says low on disk space; he wants it detected automatically, especially when he is not there. SD-card mode ignores every drive by design (the brain stays on the SD card until sd-card-mode.sh off), so plugging in did nothing; whether the Pi saw the drive at all (lsblk, lsusb -t) is not known yet",
     "install v0.10.0 (the SSD watch: moves back onto the SSD by itself once it is plugged in at USB 3 and healthy for 10 min, and back to the SD card by itself if it fails again): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh",
     "then: the feed's SD-card line and polymath doctor ('sd card') say what the SSD watch sees: not plugged in / needs more power / USB 2 / checking / back on the SSD",
+    "2026-10-25: Christian will add more drives (the Pi 4 has two USB 3 and two USB 2 ports) and wants Polymath to pick by itself which holds the brain, which keeps the backups and which are extra, and to know what each drive holds so that a drive lost by accident is relearned onto the others, the most important first",
+    "install v0.11.0 (drive roles + inventory and relearning): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (then: polymath storage roles)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
@@ -44,6 +46,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.11.0"
+date = "2026-10-25"
+changes = """Drive roles (body/roles.py, every minute with storage heal, as root, not in SD-card mode) and what each drive holds (memory/inventory.py, in the agent). ROLES: every adopted drive is scored: the connection (NVMe 6, USB 3 at 10 Gbit/s 5, at 5 Gbit/s 4), +2 for an SSD (queue/rotational), up to +2 for its measured read speed (16 MiB at start/middle/end past the cache, once a day), up to +1 for room, −1 per drop-out this week. The brain may only go on a Linux-formatted drive of Polymath's own, on USB 3/NVMe (USB 2 only with brain_allow_usb2), with room for 3× the brain, plugged in 10 min (brain_settle_min) and fewer than 3 drop-outs this week. Off the SD card it moves onto the best such drive once it has settled (Helper.move_home; attach no longer moves the brain itself when auto_roles is on). Between drives (Helper.move_brain: copy, quick_check, umount, the old drive's copy renamed home-previous-<time>, manifests and the SD card's MOVED-TO-DRIVE.json updated, bind mount) when a drive scores 2 more, at night (backup_hour+1 to +4), at most once a day; at once when the brain's drive dropped out 3 times this week. A failed move waits 6 h. The old copy is deleted after a steady week. Backups go to the steadiest other physical drive with room (memory.pool.backup_dir reads /run/polymath/drive-roles.json); spills fill extra drives before the backup drive. Warnings: drives asking for more than the Pi 4's 1200 mA of USB power; backups on the brain's own drive; the brain's drive on USB 2. polymath storage roles, storage list (role column), doctor (drives line), the dashboard, inbox codes storage/roles:<event>. INVENTORY: hourly, per drive: documents spilled there, text, sources, topics, facts resting on them, downloads, backups, old brain copies (kv inventory and polymath-brain/inventory.json on the drive). RELEARNING: a drive gone relearn_after_h (2 h) counts as lost: its documents are marked lost (meta.lost, pointer kept), queued in table relearn by priority (10 per fact resting on it, 50 for a topic Christian asked about, a little for size), and sent 300 a run / 3000 a day: Wikipedia via wikipedia.titles (byte ranges, no download), web/feed pages via the crawler, other dumps 'later'. A relearned copy replaces the lost body (DocumentStore.add) and spills to the drives that are there. A backup is taken if the drive held backups; downloads are planned again. If the drive comes back, the documents read again and the queue entries go ('back'). Feed lines 'drive X is still gone … relearning N' and 'drive X is back', doctor 'relearning', inbox codes storage/relearn:lost|back. Not in SD-card mode or on standby."""
+
 [[update]]
 version = "0.10.0"
 date = "2026-10-25"
@@ -508,6 +515,68 @@ steps = [
 ]
 since = "0.10.0"
 updated = "0.10.0"
+
+[[fault]]
+id = "drive-roles"
+title = "Drive roles: which drive holds the brain, which keeps the backups (decided by Polymath)"
+area = "storage"
+codes = ["storage/roles:*"]
+patterns = ["drive roles", "moving the brain", "moved the brain", "backups go to", "not the brain:", "mA, more than"]
+symptoms = [
+    "the feed: 'moved the brain from … onto …, the better drive'",
+    "doctor: drives ✓ 'brain: … · backups: … · extra room: …' and warnings ('the drives ask for … mA', 'the backups are on the brain's own drive')",
+    "polymath storage roles: each drive's role, score and why it is not the brain",
+]
+causes = [
+    { cause = "a better drive was plugged in (an SSD instead of a hard disk, USB 3 instead of USB 2): the brain moved onto it on purpose", prior = 0.5 },
+    { cause = "the brain's drive kept dropping out and a healthy drive was there: it moved at once", prior = 0.3 },
+    { cause = "a move failed (the copy differed, the database check failed, the mount was busy): it stays where it was and tries again in 6 h", prior = 0.2 },
+]
+checks = ["polymath storage roles", "polymath storage list", "cat /run/polymath/drive-roles.json", "lsblk -o NAME,SIZE,TRAN,ROTA,MODEL; lsusb -t"]
+self_healing = [
+    "scores every drive every minute and keeps the brain on the best eligible one (moves between drives at night, at most once a day)",
+    "moves the brain off a drive that dropped out 3 times this week, whatever the hour",
+    "keeps the backups on another physical drive than the brain's, and fills extra drives first",
+    "keeps the old brain drive's copy for a week, then removes it if the new drive has been steady",
+]
+steps = [
+    { needs = "auto", do = "nothing to do: Polymath picks the brain, backup and extra drives by itself" },
+    { needs = "you", do = "for the brain: an SSD formatted for Polymath (a fresh shop drive is formatted once by itself) on a blue USB 3 port; USB 2 ports are for backups and extra room" },
+    { needs = "you", do = "if doctor warns about power: a powered USB 3 hub, or drives with their own power supply" },
+    { needs = "approval", do = "to stop the automatic choices: [storage] auto_roles = false in /etc/polymath/polymath.toml, then restart", command = "sudo systemctl restart polymath polymath-dashboard" },
+]
+since = "0.11.0"
+updated = "0.11.0"
+
+[[fault]]
+id = "drive-lost-relearn"
+title = "A drive was lost: what it held is being relearned onto the other drives"
+area = "storage"
+codes = ["storage/relearn:*"]
+patterns = ["is still gone", "relearning", "readable again"]
+symptoms = [
+    "the feed: 'drive … is still gone: it held N documents (M facts rest on them); relearning K of them onto the other drives'",
+    "doctor: relearning ! 'a drive was lost: N of its documents read again, M to go'",
+    "the feed later: 'drive … is back: its N documents are readable again'",
+]
+causes = [
+    { cause = "the drive was unplugged or its connection dropped (power, a loose cable) and it has been gone over 2 hours", prior = 0.7 },
+    { cause = "the drive died", prior = 0.3 },
+]
+checks = ["polymath storage list   (which drive is away)", "polymath storage roles", "lsblk -o NAME,SIZE,TRAN,MODEL", "journalctl -u 'polymath-volume@*' -n 30 --no-pager"]
+self_healing = [
+    "facts stay in the brain; only the documents' texts were on the drive",
+    "relearns them by priority (facts resting on them, your interests): Wikipedia from its dump by byte range, web pages through the crawler; other dumps when they are read again",
+    "takes a new backup if the drive held backups, and plans its downloads again",
+    "stops relearning and reads them again the moment the drive is back",
+]
+steps = [
+    { needs = "auto", do = "relearn what was lost, the most important first, onto the drives that are there" },
+    { needs = "you", do = "if the drive was unplugged by accident: plug it back in (a blue USB 3 port); everything on it is readable again at once" },
+    { needs = "you", do = "if it died: retire it so it is not waited for", command = "polymath storage retire <id>" },
+]
+since = "0.11.0"
+updated = "0.11.0"
 
 [[fault]]
 id = "agent-memory-high"

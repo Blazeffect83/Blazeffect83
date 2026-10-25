@@ -239,11 +239,27 @@ def run_checks(
     for name in unresponsive_usb_disks():
         checks.append(Check("drives", BAD, f"/dev/{name} is connected by USB but reports 0 bytes: the drive behind "
                             "it is not responding", DEAD_DRIVE_FIX))  # fmt: skip
+    from polymath.body.roles import read_public as read_roles
+
+    roles = {} if config.storage.sd_only else (read_roles(config) or {})
+    rows = roles.get("drives") or []
+    extra_disks = {str(r.get("disk")) for r in rows if r.get("role") != "brain" and r.get("disk")}
     for name, mbps in slow_usb_disks():
+        if name in extra_disks:
+            continue  # a USB 2 drive used for backups or extra room: fine there (never for the brain)
         checks.append(Check("drives", WARN, f"/dev/{name} runs at USB 2 speed ({mbps} Mbit/s), not USB 3",
                             SLOW_DRIVE_FIX))  # fmt: skip
     if config.storage.sd_only:
         pass
+    elif rows:
+        names = {k: [str(r.get("name")) + (f" ({r.get('kind')})" if r.get("kind") else "") for r in rows
+                     if r.get("role") == k] for k in ("brain", "backup", "extra")}  # fmt: skip
+        parts = [f"brain: {', '.join(names['brain'])}" if names["brain"] else "brain: the main disk",
+                 f"backups: {', '.join(names['backup'])}" if names["backup"] else "backups: next to the brain",
+                 *([f"extra room: {', '.join(names['extra'])}"] if names["extra"] else [])]  # fmt: skip
+        checks.append(Check("drives", OK, " · ".join(parts) + f". {roles.get('decision') or ''}".rstrip(". ")))
+        for w in roles.get("warnings") or []:
+            checks.append(Check("drives", WARN, w, "polymath storage roles   (what each drive is for, and why)"))
     elif mounted:
         checks.append(Check("drives", OK, f"{len(mounted)} mounted: {', '.join(m[:12] for m in mounted)}"))
     else:
@@ -261,6 +277,13 @@ def run_checks(
         detail = f"brought the brain's drive back {len(healed)} time(s) in the last 24 h; last at {when}: "
         fix = "it works, but the drive keeps dropping out: give it a powered USB hub or its own power"
         checks.append(Check("drive helper", WARN, detail + str(last.get("detail")), fix))
+
+    relearn = (st or {}).get("relearn") or {}
+    if relearn.get("waiting") or relearn.get("queued"):
+        back, todo = int(relearn.get("done", 0)), int(relearn.get("waiting", 0)) + int(relearn.get("queued", 0))
+        checks.append(Check("relearning", WARN, f"a drive was lost: {back:,} of its documents read again, {todo:,} "
+                            "to go (the most important first)", "nothing to do; plug the drive back in and it stops "
+                            "(its documents are readable again)"))  # fmt: skip
 
     # your other devices' access (interface.access)
     from polymath.interface.access import access_check

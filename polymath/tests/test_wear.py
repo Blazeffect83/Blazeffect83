@@ -258,6 +258,7 @@ def home_helper(config, db, tmp_path):
     config.storage.mount_root = tmp_path / "mnt"
     config.storage.reserve_fraction = 0.05
     config.storage.home_min_gb = 0.000001
+    config.storage.auto_roles = False  # the helper's own moves here; body.roles decides them (test_roles.py)
     fake = FakeSystem(tmp_path)
     blank = {"/dev/sdb": (b"\0" * 64, b"\0" * 64)}
     h = vols.Helper(config, fake, edges=lambda dev: blank.get(dev, (b"data", b"")), owner=(os.getuid(), os.getgid()),

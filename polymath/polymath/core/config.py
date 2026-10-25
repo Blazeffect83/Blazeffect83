@@ -217,6 +217,16 @@ class StorageConfig:
     sd_return_stable_min: float = 10.0
     sd_return_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is what made the SSD freeze: not trusted by default
     sd_auto_fallback: bool = True
+    # Drive roles (body.roles, v0.11.0): Polymath scores every plugged-in drive and decides on its own which one
+    # holds the brain (the fastest, steadiest Linux-formatted drive of its own on USB 3), which one keeps the backups
+    # (another physical drive), and which ones are extra room; it moves the brain when a clearly better drive arrives
+    # (at night) or when the brain's drive keeps dropping out. Nothing is formatted or deleted outside polymath-brain/.
+    auto_roles: bool = True
+    brain_settle_min: float = 10.0  # a drive must stay plugged in this long before the brain moves onto it
+    brain_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is too slow and froze before: never the brain unless allowed
+    # What each drive holds (memory.inventory): a drive gone this long counts as lost, and what it held is relearned
+    # onto the other drives, the most important first (it is all still there if the drive comes back)
+    relearn_after_h: float = 2.0
 
 
 @dataclass
@@ -300,6 +310,10 @@ class Config:
             raise ConfigError("storage.sd_budget_gb must be >= 0 (0: sized to the SD card)")
         if not 0.5 <= self.storage.sd_keep_free_gb <= 50:
             raise ConfigError("storage.sd_keep_free_gb must be between 0.5 and 50")
+        if not 0.1 <= self.storage.relearn_after_h <= 720:
+            raise ConfigError("storage.relearn_after_h must be between 0.1 and 720 hours")
+        if not 1 <= self.storage.brain_settle_min <= 1440:
+            raise ConfigError("storage.brain_settle_min must be between 1 and 1440 minutes")
         if not 1 <= self.storage.sd_return_stable_min <= 1440:
             raise ConfigError("storage.sd_return_stable_min must be between 1 and 1440 minutes")
         if self.body.sd_target_years <= 0:

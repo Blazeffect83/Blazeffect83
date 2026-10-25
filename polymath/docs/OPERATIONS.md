@@ -555,7 +555,7 @@ Plug a drive in and it becomes part of the brain. No commands are needed:
 - once the main disk passes 75 % of its budget (`storage.spill_at`), the least valuable bodies move to the
   roomiest drive;
 - eviction only starts when every drive is full;
-- downloads and the nightly backups also go to drives.
+- downloads and the nightly backups also go to drives (the backups to the drive chosen for them, [below](#roles)).
 
 The database, indexes and reports stay on the main disk.
 
@@ -568,6 +568,62 @@ sudo polymath storage eject <id>      # unmount cleanly, then unplug (for a shor
 polymath storage retire <id>          # bring its documents back (what no longer fits is evicted), then
                                       # unplug for good; it is never adopted again
 ```
+
+### <a id="roles"></a>Which drive does what: Polymath decides (v0.11.0)
+
+Plug in as many drives as you like (the Pi 4 has two blue USB 3 ports and two black USB 2 ports). Every minute
+Polymath looks at each drive and decides by itself:
+
+| role | which drive | why |
+|---|---|---|
+| **brain** | the best Linux-formatted drive of Polymath's own on USB 3 (or NVMe), with room for three times the brain, plugged in 10 minutes, steady this week | the database and indexes need speed and a connection that does not drop |
+| **backups** | the steadiest *other* drive with room (a hard disk or a USB 2 drive is fine) | a dead brain drive must not take the backups with it |
+| **extra room** | every other drive | document texts and downloads spill there when the brain's disk fills |
+
+How it ranks drives for the brain: the connection (NVMe, USB 3 at 10 or 5 Gbit/s; USB 2 never), an SSD over a
+spinning disk, its measured read speed (checked once a day), its room, and how often it dropped out this week.
+A drive that holds your files, or is formatted for Windows/macOS, is never the brain (a fresh shop drive is
+formatted for Linux once by itself; a drive with files never is).
+
+**When the brain moves**, by itself:
+- **off the SD card**, once the best drive has been plugged in for 10 minutes (so with several drives plugged in
+  at once it picks the best, not the first);
+- **onto a clearly better drive** (a class better: a hard disk → an SSD, USB 3 → NVMe) at night, after the
+  backup (04:00–07:00), at most once a day. The agent stops while the brain is copied and checked;
+- **off a failing drive** at once, when the brain's drive dropped out three times this week and a healthy one is
+  there.
+
+The old drive keeps its copy of the brain for a week (`polymath-brain/home-previous-…`) and becomes extra room;
+the copy is removed after a steady week. A move that fails leaves the brain where it was and is tried again in 6
+hours. Nothing outside `polymath-brain/` is ever touched.
+
+```bash
+polymath storage roles     # each drive's role, kind, speed, score, and why it is not the brain; the last moves
+polymath storage list      # the same drives with brain space, use and documents (a role column)
+```
+
+`polymath doctor` shows `drives  brain: … · backups: … · extra room: …`, and warns when the drives ask for more power
+than the Pi 4 gives its USB ports (1.2 A together: use a powered USB 3 hub), when the backups have no other drive,
+and when the brain's drive is on a USB 2 port.
+
+### <a id="relearn"></a>What each drive holds, and a drive lost by accident (v0.11.0)
+
+Every hour Polymath writes down what each drive holds: the documents whose texts are there (how many, from which
+sources, about which topics, how many facts rest on them), downloads, backups and old brain copies. It keeps this in
+the brain and on the drive itself (`polymath-brain/inventory.json`).
+
+When a drive goes away (unplugged, or its connection drops), the agent keeps running: its documents read as
+unavailable and every fact stays. If it is still gone after **2 hours** (`relearn_after_h`):
+- its documents are marked lost and **relearned onto the other drives, the most important first**: the ones most
+  facts rest on, and topics you asked about, before the rest. Wikipedia articles are read again from Wikipedia
+  (only the needed bytes), web pages and feed articles are fetched again; documents from other dumps come back
+  when that dump is read again;
+- a new backup is taken if the drive held backups, and its downloads are planned again;
+- the feed says `drive … is still gone: it held N documents (M facts rest on them); relearning K of them`, doctor
+  shows `relearning  N read again, M to go`.
+
+Plug it back in and its documents are readable again at once; relearning them stops (`drive … is back`). For a
+drive that died: `polymath storage retire <id>` so it is no longer waited for.
 
 ### <a id="home"></a>Moving the brain onto a drive (your SSD)
 
@@ -753,6 +809,9 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | the pairing page says the code expired or is cancelled | a code works once, for 15 minutes, and five wrong guesses cancel it: `polymath access pair` for a new one |
 | a paired browser is sent back to pairing | its key was removed (`polymath access log` says when), cookies were cleared, or 400 days passed: pair again |
 | a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
+| `polymath storage roles` says a drive is `not the brain: …` | the reason it gives: on USB 2 (move it to a blue port), holds your files or is formatted for Windows/macOS (only a Polymath drive holds the brain), too small, still settling (10 min), or dropped out this week. It is used for backups or extra room meanwhile |
+| doctor: `the drives ask for … mA, more than the 1200 mA a Pi 4 gives` | too many bus-powered drives for the Pi's ports: a powered USB 3 hub, or drives with their own power supply; otherwise they drop out |
+| the feed: `drive … is still gone … relearning` | a drive has been away over 2 hours: plug it back in if it was an accident (everything on it is readable again at once); if it died, `polymath storage retire <id>` |
 | `polymath storage usage` forecast says a few days left | the card fills up: the oldest document texts go first (the facts stay). Plug in a drive, or lower what it reads (`[senses]`); the forecast updates hourly |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |

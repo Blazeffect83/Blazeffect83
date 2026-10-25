@@ -523,6 +523,66 @@ A full review of every privileged path and every input that comes from outside:
 - **Orin** reads `days_to_full` as a signal (`disk_low`, hard limit under 3 days), and its backup-age limit is
   1.5 × the backup interval.
 
+## Drive roles (v0.11.0, `body/roles.py`)
+
+Run by `polymath storage heal` (root, every minute) after the drive helper and the SSD watch; not in SD-card mode.
+
+- **Facts per drive** (`Drive`): the pool's mounted volumes and their manifests; `disk_facts` asks `lsblk -d` for the
+  partition's disk, transport and `ROTA`, and sysfs for the USB link speed and `bMaxPower`; `shutil.disk_usage` for
+  size and free space; `pool.room` for what Polymath may still put there. The record keeps, per drive, since when it
+  has been plugged in, its drop-outs this week (it vanished between two runs; for the brain's drive also the drive
+  helper's `dead_mount`/`usb_reset`/`usb_power`), and its measured read speed (`ssdwatch.read_check`, one drive per
+  run, each once a day; a failed read counts as a drop-out).
+- **Score** (`brain_score`): link (NVMe 6, 10 Gbit/s 5, 5 Gbit/s 4, SATA 4, unknown 2, USB 2 1) + 2 for an SSD +
+  min(MB/s ÷ 150, 2) + min(log2(free ÷ 32 GB + 1) ÷ 4, 1) − drop-outs. **Eligibility** (`eligible`): POSIX
+  filesystem, dedicated, not USB 2 (unless `brain_allow_usb2`), fewer than `FLAKY_DROPS`, and for a new home free
+  space ≥ max(`home_min_gb`, 3 × the brain) and `brain_settle_min` minutes plugged in.
+- **Where the brain is** (`_where`): bind-mounted from a drive (`drive`), on the SD card (`sd`: the data directory on
+  the system disk, no marker), away (`missing`: the SD card's `MOVED-TO-DRIVE.json` without a mount), or on its own
+  disk (`own`: never moved).
+- **Moves**: from `sd` onto the best eligible drive (`Helper.move_home`); from `drive` onto a candidate scoring
+  `MOVE_MARGIN` more, inside the night window and `MOVE_EVERY_S` after the last move, or at once when the home has
+  `FLAKY_DROPS` (`Helper.move_brain`). Under the helper's lock. A failure sets `next_move` 6 h ahead.
+  `Helper.should_move` (the immediate move on attach) is off while `auto_roles` is on.
+- **`Helper.move_brain`**: stop the services; copy the data directory (the bind mount of the old home) onto the new
+  drive's `polymath-brain/home`, compare files and bytes, `quick_check` the database and add a `home` event to it;
+  write `home-drive.json`; unmount the bind (a busy mount aborts and removes the copy); rename the old `home` to
+  `home-previous-<time>`, flip both manifests (`home`, `budget_bytes`, `previous_home`), point the SD card's
+  `MOVED-TO-DRIVE.json` at the new drive, bind-mount the new home and start the services.
+- **Backups and extra room** (`_assign`): the backup drive is the one, on another physical disk than the brain's,
+  with the fewest drop-outs and the most room ≥ 1.5 × the database. `memory.pool` reads the decision from
+  `/run/polymath/drive-roles.json`: `backup_dir` uses that drive while it has room, and `choose` (spills, downloads)
+  ranks it last.
+- **Warnings**: the largest `bMaxPower` per USB device summed over the drives > 1200 mA; no other drive for backups;
+  the brain's drive on USB 2.
+- **Cleanup**: a `home-previous-*` copy goes after `PREVIOUS_KEEP_S` if the brain's drive has not dropped out since
+  the move; the manifest's budget grows by what it freed.
+- **Record**: `/var/lib/polymath/drive-roles.json` only when the decision or a drive's presence, drop-outs or
+  measurement changed (`_stable`); `/run/polymath/drive-roles.json` every run.
+
+## What each drive holds, and relearning (v0.11.0, `memory/inventory.py`)
+
+In the agent (`storage.inventory` hourly, `storage.recover` every 10 minutes; neither in SD-card mode nor on standby).
+
+- **Inventory** (`volume_inventory`, `files_on`): per known drive, the spilled documents (`codec = 'spilled'`,
+  `meta.spill.vol`): count, characters, by source, top topics (`doc_topics`), facts resting on them (distinct
+  `provenance.triple_id`), and how many are lost; for a mounted drive also its bodies, downloads, backups and old
+  brain copies. Into `kv inventory` and `polymath-brain/inventory.json` on the drive.
+- **Lost** (`mark_lost`): a drive offline (`volumes.online = 0`, not retired) for `relearn_after_h` gets
+  `meta.lost = {vol, at}` on its documents (the spill pointer stays) and one row each in `relearn` (migration 0019)
+  with priority 10 × provenance rows + 50 if a document topic is in `user_interests` + min(chars, 200 000) ÷ 100 000,
+  and `how`: `wikipedia`, `web` (`web`/`feed` sources with a URL) or `later`.
+- **Sending** (`_queue`): up to `PER_RUN` a run and `PER_DAY` a day, by priority: Wikipedia titles in batches of 100
+  per language as `wikipedia.titles` jobs (byte ranges from the dump), URLs into the crawler's frontier with a
+  `crawl.step`. Queued rows still lost after `QUEUED_STALE_S` become `later`.
+- **Replacing** (`DocumentStore.add`): a stored document with `meta.lost` takes the new copy's body and meta whatever
+  the content hash (same text: the index entries stay valid; changed text: its chunks are dropped and it is read
+  again, `state = 'new'`). `storage.recover` then marks the row `done`.
+- **Back** (`came_back`): an online drive's documents lose `meta.lost`, its rows become `back`.
+- **Around it**: a `volume_events` row `lost`/`back` (the feed), an issue `storage/relearn:lost|back:<id>`, a
+  `body.backup` when the drive held backups, a `sources.plan` for its downloads, and `relearn_status` in the snapshot
+  (doctor's `relearning` line) and on the dashboard.
+
 ## The SSD watch (v0.10.0, `body/ssdwatch.py`)
 
 Run by `polymath storage heal` (root, `polymath-heal.timer`, every minute) right after the drive helper. It builds two

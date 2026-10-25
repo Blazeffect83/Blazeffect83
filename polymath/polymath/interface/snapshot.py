@@ -73,6 +73,12 @@ def planner(agent: Any) -> None:
         on_sd = sdcard.status(agent.config, agent.db)
         if on_sd:  # SD-card mode: the whole brain on the SD card (room, free space, what it read there)
             data["status"]["sd_card"] = on_sd
+        from polymath.memory.inventory import relearn_status
+
+        with contextlib.suppress(Exception):  # a lost drive: how much of what it held is read again
+            relearn = relearn_status(agent.db)
+            if relearn["waiting"] or relearn["queued"]:
+                data["status"]["relearn"] = relearn
         w.cursor = str(data.get("cursor") or "") or None
         for ev in data.get("events") or []:
             w.seq += 1

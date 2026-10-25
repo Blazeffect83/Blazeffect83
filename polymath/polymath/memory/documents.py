@@ -128,6 +128,20 @@ class DocumentStore:
         meta = json.dumps(doc.meta, ensure_ascii=False, separators=(",", ":"))
         now = time.time()
         if row is not None:
+            lost = row["codec"] == "spilled" and "lost" in (json.loads(row["meta"] or "{}") or {})
+            if lost:  # its drive was lost (memory.inventory): this copy replaces the body that went with it
+                if row["content_hash"] != h:  # the old passages went with the drive: forget their rows
+                    self.db.execute("DELETE FROM chunks WHERE doc_id=?", (row["id"],))
+                    from polymath.memory.dedup import NearDupIndex
+
+                    NearDupIndex(self.db).remove(int(row["id"]))
+                self.db.execute(
+                    "UPDATE documents SET fetched=?, content_hash=?, nchars=?, codec=?, body=?, meta=?"
+                    + (", state='new'" if row["content_hash"] != h else "")
+                    + " WHERE id=?",
+                    (now, h, len(doc.text), self.codec, body, meta, row["id"]),
+                )
+                return int(row["id"]), "updated"
             if row["content_hash"] == h:
                 return int(row["id"]), "unchanged"
             if row["codec"] == "spilled" and not load_body(row)[1]:

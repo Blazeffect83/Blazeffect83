@@ -156,6 +156,7 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
     agent = build_agent(config)
     report_heal_actions(agent.db, config)
     report_ssd_watch(agent.db, config)
+    report_drive_roles(agent.db, config)
     if config.storage.sd_only:  # the whole brain on the SD card (core.sdcard): marked, shown, and in the inbox
         from polymath.core import sdcard
 
@@ -639,6 +640,10 @@ def storage_rows(config: Config) -> list[dict[str, Any]]:
         finally:
             db.close()
     online = {v.id: v for v in pool.volumes(fresh=True)}
+    from polymath.body.roles import read_public
+
+    roles = {str(d.get("id")): str(d.get("role") or "") for d in (read_public(config) or {}).get("drives") or []}
+    rows[0]["role"] = "brain" if not any(r == "brain" for r in roles.values()) else ""
     for vid in sorted(set(online) | set(known)):
         v = online.get(vid)
         k = known.get(vid, {})
@@ -650,9 +655,50 @@ def storage_rows(config: Config) -> list[dict[str, Any]]:
                 "budget_gb": round((v.budget_bytes if v else int(k.get("budget_bytes", 0))) / 1e9, 1),
                 "used_gb": round((pool.used(v) if v else int(k.get("used_bytes", 0))) / 1e9, 2),
                 "documents_here": spilled.get(vid, 0),
+                "role": roles.get(vid, "away" if v is None else ""),
             }
         )
     return rows
+
+
+def roles_lines(rec: dict[str, Any] | None) -> list[str]:
+    """``polymath storage roles``: which drive holds the brain, which keeps the backups, and why (``body.roles``)."""
+    if not rec:
+        return ["no decision yet: the drive helper decides every minute (sudo systemctl status polymath-heal.timer)"]
+    out = [f"decision: {rec.get('decision') or '?'}"]
+    for d in rec.get("drives") or []:
+        speed = f", reads {d['mbps']:.0f} MB/s" if d.get("mbps") else ""
+        why = f" — not the brain: {d['why_not']}" if d.get("why_not") and d.get("role") != "brain" else ""
+        out.append(f"  {d.get('role', '?'):<7} {d.get('name', '?')[:28]:<28} {d.get('kind', '')}, "
+                   f"{d.get('size_gb', 0):.0f} GB ({d.get('free_gb', 0):.0f} free){speed}; score "
+                   f"{d.get('score', 0):g}{why}")  # fmt: skip
+    if not rec.get("drives"):
+        out.append("  no drive plugged in (the brain and its backups are on the main disk)")
+    out += [f"! {w}" for w in rec.get("warnings") or []]
+    for e in (rec.get("events") or [])[-5:]:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(e.get("at") or 0)))
+        out.append(f"  {when}  {e.get('event')}: {e.get('detail')}")
+    return out
+
+
+def report_drive_roles(db: Database, config: Config) -> int:
+    """What the drive roles decided (the brain moved, backups moved, a read check failed) goes to the caretaker's
+    inbox, once each. Returns how many were reported."""
+    from polymath.body.roles import read_public
+    from polymath.core import issues
+
+    record = read_public(config) or {}
+    seen = float(db.kv_get("drive_roles_seen_at") or 0.0)
+    new = [e for e in record.get("events") or [] if float(e.get("at") or 0) > seen]
+    with db.transaction():
+        for e in new:
+            bad = e.get("event") in {"move_failed", "read_failed"}
+            issues.report(db, "storage", f"roles:{e.get('event')}:{e.get('at')}",
+                          f"drive roles: {e.get('detail')}", severity="warn" if bad else "info",
+                          now=float(e["at"]))  # fmt: skip
+        if new:
+            db.kv_set("drive_roles_seen_at", max(float(e["at"]) for e in new))
+    return len(new)
 
 
 def ssd_watch(config: Config, args: argparse.Namespace, helper: Any, healer: Any) -> Any:
@@ -700,14 +746,18 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
             print(json.dumps(rows, indent=2))
             return 0
         total = sum(r["budget_gb"] for r in rows if r["online"])
-        print(f"{'id':<38} {'name':<34} {'state':<8} {'brain GB':>9} {'used GB':>8} {'docs':>8}")
+        print(f"{'id':<38} {'name':<28} {'role':<7} {'state':<7} {'brain GB':>9} {'used GB':>8} {'docs':>8}")
         for r in rows:
             docs = "" if r["documents_here"] is None else f"{r['documents_here']:,}"
             state = "online" if r["online"] else "away"
-            print(
-                f"{r['id']:<38} {r['name'][:34]:<34} {state:<8} {r['budget_gb']:>9.1f} {r['used_gb']:>8.2f} {docs:>8}"
-            )
+            print(f"{r['id']:<38} {r['name'][:28]:<28} {r.get('role', ''):<7} {state:<7} {r['budget_gb']:>9.1f} "
+                  f"{r['used_gb']:>8.2f} {docs:>8}")  # fmt: skip
         print(f"total brain space now: {total:.1f} GB")
+        return 0
+    if op == "roles":
+        from polymath.body.roles import read_public
+
+        print("\n".join(roles_lines(read_public(config))))
         return 0
     if op == "retire":
         payload = {"volume": args.volume, "retire": True}
@@ -741,6 +791,10 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         healer = Healer(config, helper.run, services=SERVICES, mounts_at=helper.mounts_at)
         result = healer.heal()
         result |= ssd_watch(config, args, helper, healer).tick()  # SD-card mode: back onto the SSD by itself
+        from polymath.body.roles import DriveRoles
+
+        # which drive holds the brain, which keeps the backups, which are extra room (not in SD-card mode)
+        result |= DriveRoles(config, helper, heal_actions=lambda: list(healer.load().actions)).tick()
         print(json.dumps(result))
         return 0
     if op == "format":
@@ -1504,6 +1558,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
     stsub.add_parser("heal", help="bring the brain's drive back if it is missing or dead (sudo; a timer runs this)")
+    stsub.add_parser("roles", help="which drive holds the brain, which keeps the backups, and why")
     stf = stsub.add_parser("format", help="reformat an EMPTY drive for Linux so the brain can move onto it (sudo)")
     stf.add_argument("volume", help="drive id from `polymath storage list`")
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")

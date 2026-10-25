@@ -1123,6 +1123,63 @@ supplies it).
 
 **Not yet run on the Pi.**
 
+## 12u. Drive roles, what each drive holds, and relearning a lost drive (v0.11.0)
+
+**Why:** Christian, 2026-10-25: he will add more drives (two USB 3 and two USB 2 ports) and wants Polymath "to auto
+detect and auto choose which one it wants to be the brain and which ones should be extra storage", decide "on its own
+backups", "the more autonomous, the better"; and "to know what's being stored on each storage device", so that a
+drive lost by accident is relearned "on the other storage devices to make up for the loss of data".
+
+**End to end** (development container, root): two real ext4 filesystems on loop devices (400 MB and 250 MB),
+mounted with `polymath-brain` manifests; the brain on the "SD card" (the container's disk) with a real database and a
+2 MB download. Real `lsblk` and sysfs facts, real `O_DIRECT` read checks, real copies and mounts; only `systemctl` was
+played (no services in the container). Settling set to one minute.
+- minute 0: `the brain is on the SD card; BIG becomes its home once it has settled`;
+- minute 1: the brain moved onto BIG: the data directory is bind-mounted from `/dev/loop0`, the download is intact,
+  and the database on the drive holds the old event and `moved the brain onto BIG`;
+- the roles: BIG `brain` (read 780 MB/s), SMALL `backup` (202 MB/s); `StoragePool.backup_dir()` points at SMALL;
+- `Helper.move_brain(BIG → SMALL)`: mounted from `/dev/loop1` now, `quick_check` ok, the last event `moved the brain
+  from BIG onto SMALL`, BIG keeps `home-previous-…`, and the SD card's marker names `small`.
+- The loop devices report `ROTA=1` in this container, so both showed as hard disks; on the Pi, SSDs report 0.
+
+**Tests:** `tests/test_roles.py` (20):
+- scores: NVMe > USB 3 SSD > USB 3 hard disk > USB 2; the measured speed and the drop-outs move them; the words for
+  each kind;
+- never the brain: Windows/macOS formatted, shared with your files, USB 2 (allowed by the setting); it stays on
+  the SD card when `move_home` is off;
+- three drives plugged in at once: nothing moves while they settle, then the SSD becomes the brain, the hard disk
+  keeps the backups and the stick is extra room; no drive fit for the brain says what to plug in;
+- a better drive takes the brain only at night and only once a day; a drive with three drop-outs this week loses it
+  at once; a failed move waits six hours; nothing moves while the brain is away, on its own disk, in SD-card mode or
+  with roles off;
+- drop-outs counted and forgotten after a week, a replugged drive settles again; read speed measured once a day per
+  drive, a failed read counted; the power warning and the backups-on-the-brain warning; the old brain copy removed
+  after a steady week; the record on the SD card written only on change;
+- the agent follows it: backups to the chosen drive, spills to extra drives first; attach leaves the choice to the
+  roles; `brain_settle_min` validated;
+- `Helper.move_brain` for real files: copied, checked, switched, the old copy kept, the marker updated, the event in
+  the moved database; a copy that differs or a busy mount leaves the brain where it was;
+- `disk_facts` from `lsblk` and sysfs; `polymath storage roles`, the role column in `storage list`, doctor's
+  `drives` summary (a USB 2 extra drive raises no USB 2 warning), the dashboard and the inbox.
+
+`tests/test_inventory.py` (8):
+- what a drive holds: documents, sources, topics, facts resting on them; the inventory job writes the database and
+  `inventory.json` on the drive, with downloads, backups and old brain copies;
+- a drive gone one hour is left alone; after two hours its six documents are marked lost and queued by priority (the
+  topic Christian asked about, then the document four facts rest on): Wikipedia titles as one `wikipedia.titles` job,
+  web and feed pages to the crawler, the book `later`; a backup and `sources.plan` queued; the feed event and the
+  inbox; once only;
+- a relearned copy replaces the lost body (same text: readable again; changed text: read again, old passages
+  dropped) and counts as done; a drive that comes back is readable again and its queue entries go;
+- stale queue entries become `later`, the daily cap holds; never in SD-card mode; the planner;
+- the feed lines (`still gone … relearning`, `back`), doctor's `relearning` line from the snapshot, the dashboard.
+
+`tests/test_wear.py`: the helper's own move tests switch the roles off (the roles decide moves now).
+
+**Result:** RESULT_LINE
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -1139,6 +1196,8 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
+0. v0.11.0 on the Pi: several drives plugged in; `polymath storage roles` shows the brain on the best USB 3 SSD and
+   the backups on another drive; unplugging an extra drive for over two hours relearns what it held.
 0. v0.10.0 on the Pi: the feed's SD-card line names what the SSD watch sees; with the SSD on a powered USB 3 port
    it checks for 10 minutes and moves back by itself; `polymath doctor` shows it on the SSD afterwards.
 0. v0.9.0 on the Pi: `install.sh` prints a pairing code; Chrome on the PC pairs over `https://<pi>:8443/`; the PC

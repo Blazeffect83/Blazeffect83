@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
 import sqlite3
@@ -429,6 +430,25 @@ class DashboardData:
                          "before it starts dropping old document texts (facts stay).")  # fmt: skip
         elif fc is not None:
             lines.append("Free space is steady.")
+        from polymath.body.roles import read_public as read_roles
+
+        roles = {} if f["sd_card"] else (read_roles(self.config) or {})
+        for d in roles.get("drives") or []:
+            what = {"brain": "holds the brain", "backup": "keeps the backups", "extra": "extra room"}.get(
+                str(d.get("role")), str(d.get("role"))
+            )
+            why = f" (not the brain: {d['why_not']})" if d.get("why_not") and d.get("role") != "brain" else ""
+            lines.append(f"{d.get('name')}: {d.get('kind') or 'drive'}, {what}{why}.")
+        if roles.get("decision"):
+            lines.append(str(roles["decision"])[:1].upper() + str(roles["decision"])[1:] + ".")
+        lines += [f"Warning: {w}." for w in roles.get("warnings") or []]
+        from polymath.memory.inventory import relearn_status
+
+        with contextlib.suppress(Exception):
+            rel = relearn_status(db)
+            if rel["waiting"] or rel["queued"]:
+                lines.append(f"A drive was lost: {rel['done']:,} of its documents read again, "
+                             f"{rel['waiting'] + rel['queued']:,} to go, the most important first.")  # fmt: skip
         watch: dict[str, Any] = {}
         if f["sd_card"]:  # what the SSD watch sees: it moves the brain back onto the SSD by itself
             from polymath.body.ssdwatch import read_public

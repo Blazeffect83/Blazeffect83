@@ -12,7 +12,8 @@ What goes on the drives:
   compressed body; the database keeps a pointer (``documents.codec = 'spilled'``, ``meta.spill``). A record
   is written and fsynced before the pointer commits, so a crash or an unplugged drive never loses a body:
   at worst a pack holds an orphan record.
-* **downloads** (``raw/``) and **backups** (on a different drive from the database: safer).
+* **downloads** (``raw/``) and **backups** (on the drive the drive roles chose for them, ``body.roles``: another
+  physical drive than the brain's).
 
 The database itself, the indexes and the reports stay on the main disk, so unplugging a drive never stops
 the agent. While a drive is away, its bodies read as unavailable (facts, metadata and the index stay) and
@@ -46,6 +47,7 @@ PACK_HEADER = struct.Struct(">4sQII")  # magic, doc id, length, crc32
 PACK_LIMIT = 256 * 1024 * 1024
 SCAN_TTL = 15.0
 USED_TTL = 300.0
+ROLES_FILE = "drive-roles.json"  # in the runtime directory: body.roles' decision (which drive keeps the backups)
 
 
 def directory_bytes(path: Path) -> int:
@@ -107,6 +109,8 @@ class StoragePool:
         self._scan: list[Volume] = []
         self._scan_at = -1e18
         self._used: dict[str, tuple[float, int]] = {}
+        self._roles: dict[str, Any] = {}
+        self._roles_at = -1e18
 
     # ---------------------------------------------------------------- discovery
     def volumes(self, *, fresh: bool = False) -> list[Volume]:
@@ -171,10 +175,21 @@ class StoragePool:
         reserve = int(usage.total * self.config.storage.reserve_fraction)
         return max(0, min(v.budget_bytes - self.used(v), usage.free - reserve))
 
+    def roles(self) -> dict[str, Any]:
+        """What the drive roles decided (``body.roles``; the drive helper writes it every minute), cached briefly."""
+        now = self.clock()
+        if now - self._roles_at >= SCAN_TTL:
+            self._roles_at, self._roles = now, {}
+            with contextlib.suppress(OSError, ValueError):
+                raw = json.loads((Path(self.config.paths.run_dir) / ROLES_FILE).read_text(encoding="utf-8"))
+                self._roles = raw if isinstance(raw, dict) else {}
+        return self._roles
+
     def choose(self, need: int = 0) -> Volume | None:
-        """The online drive with the most room that can take ``need`` bytes."""
+        """The online drive with the most room that can take ``need`` bytes; extra drives before the backup drive."""
+        backup = str(self.roles().get("backup") or "")
         fits = [(r, v.id, v) for v in self.volumes() if (r := self.room(v)) > 0 and r >= need]
-        return max(fits, key=lambda t: (t[0], t[1]))[2] if fits else None
+        return max(fits, key=lambda t: (t[1] != backup, t[0], t[1]))[2] if fits else None
 
     def totals(self) -> dict[str, Any]:
         vols = self.volumes()
@@ -247,8 +262,13 @@ class StoragePool:
         return [self.config.paths.raw_dir] + [v.path / "raw" for v in self.volumes()]
 
     def backup_dir(self, need: int = 0) -> Path:
-        """Backups go to a drive other than the database's when one has room (a dead disk then loses less)."""
-        v = self.choose(need)
+        """Backups go to the drive the drive roles chose for them (another physical drive than the brain's), else to
+        the roomiest drive other than the database's, else next to the database (a dead disk then loses less)."""
+        chosen = self.find(str(self.roles().get("backup") or ""))
+        if chosen is not None and self.room(chosen) >= need:
+            return chosen.path / "backups"
+        fits = [(r, v.id, v) for v in self.volumes() if (r := self.room(v)) > 0 and r >= need]
+        v = max(fits, key=lambda t: (t[0], t[1]))[2] if fits else None
         return v.path / "backups" if v is not None else self.config.paths.backup_dir
 
     def backup_dirs(self) -> list[Path]:

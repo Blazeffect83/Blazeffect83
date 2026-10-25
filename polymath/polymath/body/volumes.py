@@ -535,6 +535,8 @@ class Helper:
         st, data = self.config.storage, self.config.paths.data_dir
         if not st.move_home or not manifest.get("dedicated") or manifest.get("fstype") not in POSIX_FS:
             return False
+        if st.auto_roles:
+            return False  # drive roles (body.roles) choose the best drive once every plugged-in drive has settled
         if _there(data / MOVED_FILE) is not False or _there(data / HOME_FILE) is not False:
             return False  # the brain already lives on a drive (this one or another), or its storage does not answer
         if not self.data_on_system_disk():
@@ -622,6 +624,80 @@ class Helper:
             f"card only boots the Pi now. Its old copy is kept at {aside}",
             out.volume,
         )
+
+    def move_brain(self, src: Path, src_manifest: dict[str, Any], dst: Path, dst_manifest: dict[str, Any]) -> Outcome:
+        """Move the brain from one drive to a better one (``body.roles``): copy and check it with the agent stopped,
+        switch the mount, and keep the old copy as ``home-previous-<time>`` on the old drive, which becomes extra
+        room. Anything that fails before the switch leaves the brain where it was."""
+        import sqlite3
+
+        data, new_home = self.config.paths.data_dir, dst / HOME
+        old_name = src_manifest.get("label") or src_manifest.get("model") or str(src_manifest.get("id", ""))[:8]
+        new_name = dst_manifest.get("label") or dst_manifest.get("model") or str(dst_manifest.get("id", ""))[:8]
+        vol = str(dst_manifest.get("id", ""))
+        self._services("stop")
+        try:
+            if new_home.exists():
+                shutil.rmtree(new_home)  # a copy left over from an interrupted attempt (only ever ours)
+            shutil.copytree(data, new_home, symlinks=True)
+            src_stats, dst_stats = tree_stats(data), tree_stats(new_home)
+            if src_stats != dst_stats:
+                raise OSError(f"copy differs: {src_stats} files/bytes on {old_name}, {dst_stats} on {new_name}")
+            db = new_home / self.config.paths.db_path.relative_to(data)
+            if db.exists():
+                conn = sqlite3.connect(str(db))
+                try:
+                    check = conn.execute("PRAGMA quick_check").fetchone()[0]
+                    if check != "ok":
+                        raise OSError(f"database check failed on the copy: {check}")
+                    with contextlib.suppress(sqlite3.Error):
+                        conn.execute(
+                            "INSERT INTO events(at, kind, text, detail) VALUES(?, 'home', ?, ?)",
+                            (self.clock(), f"moved the brain from {old_name} onto {new_name}, the better drive: "
+                             f"{src_stats[1] / 1e9:.1f} GB copied and checked", json.dumps({"status": "moved"})),
+                        )  # fmt: skip
+                        conn.commit()
+                finally:
+                    conn.close()
+            usage = shutil.disk_usage(dst)
+            budget_gb = round(usage.total * (1 - self.config.storage.reserve_fraction) / 1e9, 1)
+            (new_home / HOME_FILE).write_text(
+                json.dumps({"id": vol, "name": new_name, "budget_gb": budget_gb, "moved_at": self.clock(),
+                            "from": str(src_manifest.get("id", ""))}, indent=2), encoding="utf-8")  # fmt: skip
+            self._chown_tree(new_home)
+        except (OSError, shutil.Error, sqlite3.Error) as exc:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(new_home)
+            self._services("start")
+            log.warning("moving the brain between drives failed", extra={"error": str(exc)})
+            return Outcome("skipped", f"moving the brain onto {new_name} failed ({exc}): it stays on {old_name}", vol)
+        # switch over: the old drive's copy is renamed (kept for a while), the new one mounted in its place
+        r = self.run(["umount", str(data)])
+        if r.returncode != 0 and self.mounts_at(data):
+            with contextlib.suppress(OSError):
+                shutil.rmtree(new_home)
+            self._services("start")
+            return Outcome("skipped", f"the brain's mount is busy ({r.stderr.strip()}): it stays on {old_name}", vol)
+        previous = f"{HOME}-previous-{int(self.clock())}"
+        (src / HOME).rename(src / previous)
+        reserve = shutil.disk_usage(src).total * self.config.storage.reserve_fraction
+        src_manifest |= {"home": False, "previous_home": {"dir": previous, "at": self.clock()},
+                         "budget_bytes": max(0, int(shutil.disk_usage(src).free - reserve))}  # fmt: skip
+        self._write_manifest(src, src_manifest)
+        dst_manifest |= {"home": True, "budget_bytes": 0}
+        self._write_manifest(dst, dst_manifest)
+        moved = data / MOVED_FILE  # the SD card's own directory, under the mount: it names the brain's drive
+        with contextlib.suppress(OSError, ValueError):
+            marker = json.loads(moved.read_text(encoding="utf-8"))
+            marker |= {"id": vol, "name": new_name, "moved_at": self.clock()}
+            moved.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+        r = self.run(["mount", "--bind", str(new_home), str(data)])
+        self._services("start")
+        if r.returncode != 0:
+            return Outcome("moved", f"the brain was copied onto {new_name}, but mounting it failed "
+                           f"({r.stderr.strip()}); replug the drive", vol)  # fmt: skip
+        return Outcome("moved", f"the brain moved from {old_name} onto {new_name} ({tree_stats(new_home)[1] / 1e9:.1f} "
+                       f"GB); {old_name} is extra room now and keeps the old copy for a week", vol)  # fmt: skip
 
     def mount_home(self, brain: Path, manifest: dict[str, Any], out: Outcome) -> Outcome:
         """The home drive is back (boot or replug): mount it over the data directory and start the agent."""

@@ -88,6 +88,13 @@ implemented here and learns only from data the agent downloads itself.
     that it runs. Everything runs as usual, dumps included, inside what the card can give (all but 2 GB). The feed
     shows `learning on the SD card`. Once the SSD works again, `sudo ./scripts/sd-card-mode.sh off` switches back,
     and what it learned on the SD card moves onto the SSD by itself.
+  - **Decides which drive does what** (v0.11.0): with several drives plugged in, it picks the brain (the fastest,
+    steadiest Linux drive of its own on USB 3), a different drive for the backups, and uses the rest as extra room.
+    It moves the brain onto a clearly better drive at night, or at once off one that keeps dropping out
+    (`polymath storage roles` says what and why).
+  - **Knows what each drive holds, and relearns a lost one** (v0.11.0): if a drive is gone over two hours, what it
+    held is read again onto the other drives, the documents most facts rest on first; plugged back in, it is all
+    readable again.
   - **Back onto the SSD by itself, with nobody at the Pi** (v0.10.0, the SSD watch): in SD-card mode it watches for
     the SSD every minute and says what it sees (`SSD not plugged in`, `needs more power`, `SSD on USB 2`). Plugged in
     at USB 3, the SSD is checked every minute (reads from its start, middle and end, no I/O errors); after ten

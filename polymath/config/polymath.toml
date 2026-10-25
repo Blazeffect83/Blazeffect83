@@ -117,3 +117,10 @@ sd_auto_return = true
 sd_return_stable_min = 10.0
 sd_return_allow_usb2 = false        # USB 2 is what made the SSD freeze: not trusted unless you say so
 sd_auto_fallback = true
+# Drive roles (v0.11.0): Polymath decides which drive holds the brain (the fastest, steadiest Linux drive of its own
+# on USB 3), which keeps the backups (another drive), and which are extra room; it moves the brain onto a clearly
+# better drive at night, or at once off a drive that keeps dropping out.
+auto_roles = true
+brain_settle_min = 10.0             # a drive must stay plugged in this long before the brain moves onto it
+brain_allow_usb2 = false            # USB 2 drives are used for backups and extra room, never the brain
+relearn_after_h = 2.0               # a drive gone this long counts as lost: what it held is relearned, most important first
