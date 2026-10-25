@@ -1176,7 +1176,7 @@ played (no services in the container). Settling set to one minute.
 
 `tests/test_wear.py`: the helper's own move tests switch the roles off (the roles decide moves now).
 
-**Result:** RESULT_LINE
+**Result:** 827 tests pass and 1 is skipped, at 94 % coverage (`body/roles.py` 96 %, `memory/inventory.py` 97 %). The first full run caught one missing feed label for the new jobs (fixed). `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck are clean.
 
 **Not yet run on the Pi.**
 
