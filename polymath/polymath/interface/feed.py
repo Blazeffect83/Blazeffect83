@@ -150,6 +150,8 @@ ACTIVITY: dict[str, str] = {
     "reason.sanity": "checking for facts that cannot be true",
     "net.probe": "checking whether the internet is back",
     "storage.fold_standby": "moving what it read on the standby brain onto its drive",
+    "storage.inventory": "writing down what each drive holds",
+    "storage.recover": "relearning what a lost drive held, the most important first",
     "caretaker.step": "Orin the caretaker checks on everything",
     "body.recall": "bringing documents back from a drive",
     "eval.holdout": "hiding facts to test itself on",
