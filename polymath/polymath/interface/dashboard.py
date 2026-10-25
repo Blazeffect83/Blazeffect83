@@ -429,7 +429,15 @@ class DashboardData:
                          "before it starts dropping old document texts (facts stay).")  # fmt: skip
         elif fc is not None:
             lines.append("Free space is steady.")
-        return {"files": f, "forecast": fc, "lines": lines}
+        watch: dict[str, Any] = {}
+        if f["sd_card"]:  # what the SSD watch sees: it moves the brain back onto the SSD by itself
+            from polymath.body.ssdwatch import read_public
+
+            watch = read_public(self.config) or {}
+            if watch.get("detail"):
+                fix = f" To do: {watch['fix']}." if watch.get("fix") else ""
+                lines.append(f"SSD: {watch['detail']}.{fix}")
+        return {"files": f, "forecast": fc, "lines": lines, "ssd": watch.get("state")}
 
     def insights(self) -> dict[str, Any]:
         """The weekly recap, predictions, surprises, and the disks (one call for the dashboard's new panels)."""

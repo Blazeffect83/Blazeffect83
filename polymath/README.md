@@ -88,6 +88,11 @@ implemented here and learns only from data the agent downloads itself.
     that it runs. Everything runs as usual, dumps included, inside what the card can give (all but 2 GB). The feed
     shows `learning on the SD card`. Once the SSD works again, `sudo ./scripts/sd-card-mode.sh off` switches back,
     and what it learned on the SD card moves onto the SSD by itself.
+  - **Back onto the SSD by itself, with nobody at the Pi** (v0.10.0, the SSD watch): in SD-card mode it watches for
+    the SSD every minute and says what it sees (`SSD not plugged in`, `needs more power`, `SSD on USB 2`). Plugged in
+    at USB 3, the SSD is checked every minute (reads from its start, middle and end, no I/O errors); after ten
+    healthy minutes the brain moves back onto it by itself. If it drops out twice within a day of coming back, the
+    brain goes back to the SD card by itself and the SSD is tested again a day later. Nothing is formatted or deleted.
   - **Every problem is recorded** and shown as a `problem` line in the feed, ready for the coming caretaker agent.
     Each one is matched against the caretaker's knowledge of known problems and their fixes
     (`polymath caretaker`), which every update keeps current (v0.6.1).

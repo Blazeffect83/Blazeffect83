@@ -13,6 +13,9 @@
 #      (renamed, not copied: it costs no room), or empty; install this checkout; check it runs on the SD card.
 # off: switch the SSD's USB device back on and the mode off. Once the SSD is mounted, the agent starts on it and moves
 #      what it learned on the SD card onto it by itself. If the SSD does not come back, SD-card mode stays on.
+# Since v0.10.0 the SSD watch (polymath/body/ssdwatch.py, every minute) does `off` by itself once the SSD is plugged
+# in at USB 3 and has stayed healthy for 10 minutes (not in the first hour after `on`), and goes back to SD-card mode
+# by itself if the SSD drops out again within a day. `status` shows what it sees.
 #
 # Every step has a time limit and prints ✓ (done), – (not needed) or ✗ (failed, with what to do); the run is logged
 # to /var/log/polymath-sd-card.log and to polymath-sd-card.txt in your home directory. It never formats and never
@@ -139,6 +142,9 @@ if [ "$MODE" = status ]; then
         echo "  SSD: switched off ($(json_field "$STATE" id), $(json_field "$STATE" usb))"
     else
         echo "  SSD: not mounted"
+    fi
+    if [ -f "$RUN/ssd-watch.json" ]; then
+        echo "  SSD watch: $(json_field "$RUN/ssd-watch.json" detail)"
     fi
     echo "  agent: $(systemctl is-active polymath.service 2>/dev/null || echo unknown)"
     exit 0

@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.9.0"
+updated_for = "0.10.0"
 updated = "2026-10-25"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -31,9 +31,11 @@ waiting_on = [
     "then on the PC (Chrome): open the https address install.sh printed, Advanced → Proceed, type the pairing code; optional: trust the Pi's certificate (the pairing page shows how) and Install Polymath as an app window",
     "after v0.8.2 has run a day, see which steps were slow: polymath caretaker (lines 'jobs/slow:…'), and whether the watchdog restarted it before: journalctl -u polymath --since -2d | grep -ciE 'watchdog|SIGABRT'",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
-    "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
+    "2026-10-25: Christian is hooking the SSD up again: plugged in, it is not picked up and the feed still says low on disk space; he wants it detected automatically, especially when he is not there. SD-card mode ignores every drive by design (the brain stays on the SD card until sd-card-mode.sh off), so plugging in did nothing; whether the Pi saw the drive at all (lsblk, lsusb -t) is not known yet",
+    "install v0.10.0 (the SSD watch: moves back onto the SSD by itself once it is plugged in at USB 3 and healthy for 10 min, and back to the SD card by itself if it fails again): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh",
+    "then: the feed's SD-card line and polymath doctor ('sd card') say what the SSD watch sees: not plugged in / needs more power / USB 2 / checking / back on the SSD",
 ]
-on_hold = ["sd-card-mode"]  # Christian, 2026-10-15: leave the SSD alone for now (Orin notes these, never escalates)
+on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
 recommended = [
     "sd-card-mode",
@@ -42,6 +44,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.10.0"
+date = "2026-10-25"
+changes = """The SSD watch (body/ssdwatch.py, run every minute with storage heal, as root). In SD-card mode it looks for the brain's SSD (the filesystem the SD card's MOVED-TO-DRIVE.json names) and says what it sees in the feed, doctor and the dashboard: not plugged in; the enclosure on USB but no drive or a drive reporting 0 bytes (needs more power; one soft USB reset per 10 min); USB 2 (refused: what made it freeze); switched off by sd-card-mode.sh on (switched on to test it after 1 h, 3 h, 6 h, 12 h, then daily, and off again if no drive shows up); or checking. A check reads 16 MiB at the start, middle and end of the partition past the page cache in a child process with a 30 s limit (a frozen drive never blocks it) and the drive's I/O error count must not grow; a replug starts over at once. After 10 healthy minutes (sd_return_stable_min) it does what sd-card-mode.sh off does: stop the agent and dashboard, set the drop-in aside, restart polymath-volume@<partition> (which mounts the SSD and starts everything); the agent folds the SD-card brain in. Not mounted within 3 min: the drop-in comes back, everything starts on the SD card, backoff 30 min → 1 h → … → a day. After an automatic return the SSD is on probation for a day: 2 drive-helper rescues (dead mount, USB reset, power cycle) in that day and it goes back to SD-card mode by itself (drop-in, lazy unmounts, the SSD's USB device switched off) and tests the SSD again a day later. A move cut short (power cut, time limit) is finished or undone on the next run, and everything started again. Nothing in the first hour after sd-card-mode.sh on. It never formats or deletes. Settings: [storage] sd_auto_return, sd_return_stable_min, sd_return_allow_usb2, sd_auto_fallback. Events go to the caretaker's inbox as storage/ssd_watch:<event>. polymath-heal.service may now run 10 min (moving the brain)."""
+
 [[update]]
 version = "0.9.0"
 date = "2026-10-25"
@@ -420,14 +427,16 @@ self_healing = [
     "no drive is touched: no storage pool, no moving or mounting the brain's drive, no storage heal, no standby brain",
     "the SD card wear guard watches its writes (saver mode when it writes too much); two nightly backups are kept",
     "after sd-card-mode.sh off, what it learned on the SD card moves onto the SSD by itself (the fold job), with the agents Christian set up there; then the SD-card brain is removed",
+    "the SSD watch (v0.10.0) does that off by itself: once the SSD is plugged in at USB 3 and has read cleanly for 10 minutes, the brain moves back onto it; if it drops out twice within a day of coming back, SD-card mode comes back by itself",
+    "the feed's SD-card line and doctor say what the watch sees (not plugged in, needs power, USB 2, checking)",
 ]
 steps = [
-    { needs = "auto", do = "keep learning on the SD card; nothing to do while the SSD is being fixed" },
-    { needs = "you", do = "fix the SSD at the Pi: a blue USB 3 port, a USB 3 cable, no USB 2 hub; a powered hub if it still drops out (see brain-drive-usb2, brain-drive-uas, brain-drive-power)" },
-    { needs = "approval", do = "back to the SSD once it works (if the SSD does not come back, SD-card mode simply stays on)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off" },
+    { needs = "auto", do = "keep learning on the SD card, and move back onto the SSD by itself once it is plugged in and healthy (the SSD watch)" },
+    { needs = "you", do = "plug the SSD into a blue USB 3 port with a USB 3 cable, no USB 2 hub; a powered hub or its own power if the watch says it needs power (see brain-drive-usb2, brain-drive-uas, brain-drive-power)" },
+    { needs = "approval", do = "back to the SSD now, by hand (if the SSD does not come back, SD-card mode simply stays on)", command = "cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off" },
 ]
 since = "0.7.0"
-updated = "0.7.0"
+updated = "0.10.0"
 
 [[fault]]
 id = "sd-card-mode-switch"
@@ -461,6 +470,44 @@ steps = [
 ]
 since = "0.7.0"
 updated = "0.7.0"
+
+[[fault]]
+id = "ssd-watch"
+title = "The SSD watch: moving back onto the SSD, or back to the SD card, by itself"
+area = "storage"
+codes = ["storage/ssd_watch:*"]
+patterns = ["SSD watch", "ssd_watch", "SSD back: checking it", "back on the SSD", "the SSD failed again", "needs more power", "SSD on USB 2"]
+symptoms = [
+    "the feed's SD-card line ends with what the watch sees: 'SSD not plugged in', 'SSD plugged in but not answering: it needs more power', 'SSD on USB 2: move it to a blue USB 3 port', 'SSD back: checking it', 'moving back onto the SSD'",
+    "doctor: sd card ! '… SSD watch: …' with the one thing to do",
+    "problem lines: 'the SSD watch: the brain is back on the SSD', '… failed a read check …', '… the brain runs on the SD card again'",
+]
+causes = [
+    { cause = "the SSD gets too little power from the Pi's USB port (bus-powered DockCase): it does not show up, reports 0 bytes, or fails reads", prior = 0.45 },
+    { cause = "it is on a USB 2 link (black port, USB 2 cable or hub): refused on purpose", prior = 0.25 },
+    { cause = "it is simply not plugged in, or still switched off by sd-card-mode.sh on (it is tested on a schedule)", prior = 0.2 },
+    { cause = "the SSD itself or its filesystem is failing", prior = 0.1 },
+]
+checks = [
+    "cd ~/polymath-src/polymath && ./scripts/sd-card-mode.sh status   (the 'SSD watch' line)",
+    "cat /run/polymath/ssd-watch.json",
+    "lsblk -o NAME,SIZE,TRAN,MODEL; lsusb -t",
+    "journalctl -u polymath-heal -n 40 --no-pager",
+]
+self_healing = [
+    "checks the SSD every minute while it is plugged in at USB 3, and moves the brain back after 10 healthy minutes",
+    "a drive reporting 0 bytes gets one soft USB reset every 10 minutes; a switched-off SSD is switched on to test it after 1 h, 3 h, 6 h, 12 h, then daily",
+    "a failed check or return waits 30 min, 1 h, 3 h … a day; a replug tries again at once",
+    "if the SSD drops out twice within a day of coming back, it goes back to SD-card mode by itself; the SSD's brain is never touched",
+]
+steps = [
+    { needs = "auto", do = "watch, check and move the brain back by itself; nothing to do when the feed says 'SSD back: checking it'" },
+    { needs = "you", do = "needs more power: a powered USB 3 hub, or the enclosure's own power supply; then plug it in again" },
+    { needs = "you", do = "USB 2: move it to a blue USB 3 port with a USB 3 cable and no USB 2 hub" },
+    { needs = "approval", do = "to stop the automatic switching: [storage] sd_auto_return = false and sd_auto_fallback = false in /etc/polymath/polymath.toml, then restart", command = "sudo systemctl restart polymath polymath-dashboard" },
+]
+since = "0.10.0"
+updated = "0.10.0"
 
 [[fault]]
 id = "agent-memory-high"
@@ -1067,4 +1114,13 @@ what = "Christian: it's going good, but the agent constantly goes offline for a 
 cause = "single job steps ran for minutes without a sign of life on the SD card (measured on a copy of a real brain: backup 250 s, quiz 82 s on a fast PC); the feed shows offline after 60 s and the watchdog restarts after 120 s; a quiz spent 77 % of its time decompressing the same documents; Orin queued a second backup next to the nightly one"
 fault = "job-slow"
 fixed_in = "0.8.2"
+open = true
+
+[[history]]
+date = "2026-10-25"
+version = "0.9.0"
+what = "Christian plugged the SSD in again: it was not picked up and the feed still said low on disk space."
+cause = "SD-card mode ignores every drive by design until sd-card-mode.sh off; whether the Pi saw the drive at all (power, USB 2) is not known yet"
+fault = "ssd-watch"
+fixed_in = "0.10.0"
 open = true

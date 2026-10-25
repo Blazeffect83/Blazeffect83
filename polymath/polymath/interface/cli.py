@@ -114,6 +114,26 @@ def report_heal_actions(db: Database, config: Config) -> int:
     return len(new)
 
 
+def report_ssd_watch(db: Database, config: Config) -> int:
+    """What the SSD watch did (``body.ssdwatch``: checks, moving back onto the SSD, back to the SD card) goes to the
+    caretaker's inbox, once each. Returns how many were reported."""
+    from polymath.body.ssdwatch import read_public
+    from polymath.core import issues
+
+    record = read_public(config) or {}
+    seen = float(db.kv_get("ssd_watch_seen_at") or 0.0)
+    new = [e for e in record.get("events") or [] if float(e.get("at") or 0) > seen]
+    with db.transaction():
+        for e in new:
+            bad = e.get("event") in {"fallback", "return_failed", "check_failed", "wake_failed", "usb_reset"}
+            issues.report(db, "storage", f"ssd_watch:{e.get('event')}:{e.get('at')}",
+                          f"the SSD watch: {e.get('detail')}", severity="warn" if bad else "info",
+                          now=float(e["at"]))  # fmt: skip
+        if new:
+            db.kv_set("ssd_watch_seen_at", max(float(e["at"]) for e in new))
+    return len(new)
+
+
 def cmd_run(config: Config, args: argparse.Namespace) -> int:
     import signal
 
@@ -135,6 +155,7 @@ def cmd_run(config: Config, args: argparse.Namespace) -> int:
             signal.signal(sig, handler)
     agent = build_agent(config)
     report_heal_actions(agent.db, config)
+    report_ssd_watch(agent.db, config)
     if config.storage.sd_only:  # the whole brain on the SD card (core.sdcard): marked, shown, and in the inbox
         from polymath.core import sdcard
 
@@ -634,6 +655,23 @@ def storage_rows(config: Config) -> list[dict[str, Any]]:
     return rows
 
 
+def ssd_watch(config: Config, args: argparse.Namespace, helper: Any, healer: Any) -> Any:
+    """The SSD watch (``body.ssdwatch``) for the configuration as it runs now and as it is without SD-card mode."""
+    from pathlib import Path
+
+    from polymath.body.ssdwatch import SSDWatch
+    from polymath.core import sdcard
+    from polymath.core.config import DEFAULT_CONFIG_PATH, dropin_dir
+
+    path = Path(getattr(args, "config", None) or os.environ.get("POLYMATH_CONFIG") or DEFAULT_CONFIG_PATH)
+    try:
+        home = load_config(path, skip_dropins=(sdcard.DROPIN,))
+    except ConfigError:
+        home = config
+    return SSDWatch(config, home, dropin=dropin_dir(path) / sdcard.DROPIN, mounts_at=helper.mounts_at,
+                    heal_actions=lambda: list(healer.load().actions))  # fmt: skip
+
+
 def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     """The storage pool: list it, retire a drive, and the root-only hooks udev and systemd call."""
     import os
@@ -700,7 +738,9 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         from polymath.body.heal import Healer
         from polymath.body.volumes import SERVICES
 
-        result = Healer(config, helper.run, services=SERVICES, mounts_at=helper.mounts_at).heal()
+        healer = Healer(config, helper.run, services=SERVICES, mounts_at=helper.mounts_at)
+        result = healer.heal()
+        result |= ssd_watch(config, args, helper, healer).tick()  # SD-card mode: back onto the SSD by itself
         print(json.dumps(result))
         return 0
     if op == "format":

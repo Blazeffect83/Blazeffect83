@@ -210,6 +210,13 @@ class StorageConfig:
     sd_dir: Path = Path("/var/lib/polymath/brain")
     sd_budget_gb: float = 0.0  # 0: everything the card can give (what the brain uses + what is free − sd_keep_free_gb)
     sd_keep_free_gb: float = 3.0  # the SD card keeps this much free (the system, and a card that is not full lasts)
+    # The SSD watch (body.ssdwatch, v0.10.0): in SD-card mode, notice the SSD coming back, check it, and move the
+    # brain back onto it by itself once it has stayed healthy this long; and if it drops out again within a day of
+    # coming back, go back to SD-card mode by itself. Nothing is ever formatted or deleted.
+    sd_auto_return: bool = True
+    sd_return_stable_min: float = 10.0
+    sd_return_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is what made the SSD freeze: not trusted by default
+    sd_auto_fallback: bool = True
 
 
 @dataclass
@@ -293,6 +300,8 @@ class Config:
             raise ConfigError("storage.sd_budget_gb must be >= 0 (0: sized to the SD card)")
         if not 0.5 <= self.storage.sd_keep_free_gb <= 50:
             raise ConfigError("storage.sd_keep_free_gb must be between 0.5 and 50")
+        if not 1 <= self.storage.sd_return_stable_min <= 1440:
+            raise ConfigError("storage.sd_return_stable_min must be between 1 and 1440 minutes")
         if self.body.sd_target_years <= 0:
             raise ConfigError("body.sd_target_years must be > 0")
         if not 100 <= self.body.wal_autocheckpoint <= 100_000:
@@ -365,10 +374,11 @@ def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def read_dropins(cfg_path: Path) -> tuple[dict[str, Any], list[Path]]:
-    """The drop-ins of ``cfg_path`` merged in name order, and which files they were."""
+def read_dropins(cfg_path: Path, skip: tuple[str, ...] = ()) -> tuple[dict[str, Any], list[Path]]:
+    """The drop-ins of ``cfg_path`` merged in name order (but those named in ``skip``), and which files they were."""
     merged: dict[str, Any] = {}
     files = sorted(dropin_dir(cfg_path).glob("*.toml")) if dropin_dir(cfg_path).is_dir() else []
+    files = [f for f in files if f.name not in skip]
     for f in files:
         try:
             merged = _merge(merged, tomllib.loads(f.read_text(encoding="utf-8")))
@@ -377,8 +387,11 @@ def read_dropins(cfg_path: Path) -> tuple[dict[str, Any], list[Path]]:
     return merged, files
 
 
-def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = None) -> Config:
-    """Load configuration. A missing default file yields built-in defaults."""
+def load_config(
+    path: Path | str | None = None, *, env: dict[str, str] | None = None, skip_dropins: tuple[str, ...] = ()
+) -> Config:
+    """Load configuration. A missing default file yields built-in defaults. ``skip_dropins``: drop-ins to leave
+    out (the SSD watch reads the configuration as it is without SD-card mode's)."""
     env = dict(os.environ) if env is None else env
     explicit = path is not None or "POLYMATH_CONFIG" in env
     cfg_path = Path(path) if path is not None else Path(env.get("POLYMATH_CONFIG", DEFAULT_CONFIG_PATH))
@@ -390,7 +403,7 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
             raise ConfigError(f"{cfg_path}: {exc}") from exc
     elif explicit:
         raise ConfigError(f"config file not found: {cfg_path}")
-    extra, _files = read_dropins(cfg_path)
+    extra, _files = read_dropins(cfg_path, skip_dropins)
     data = _merge(data, extra)
     cfg: Config = _build(Config, data, "")
     apply_sd_only(cfg)

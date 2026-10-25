@@ -686,8 +686,34 @@ same name and status; agents it evolved by itself stay behind, the SSD's society
 on the SD card`. If the SSD does not come back within two minutes, **SD-card mode simply stays on**: nothing else
 changes, and the agent keeps learning on the SD card.
 
+### <a id="ssd-watch"></a>Back onto the SSD by itself: the SSD watch (v0.10.0)
+
+You no longer need `off`. In SD-card mode, the drive helper (every minute, as root) looks for the brain's SSD and
+**moves the brain back onto it by itself** once it has been healthy for 10 minutes, whether you are at the Pi or not.
+
+**What it sees** is the end of the feed's SD-card line, the `sd card` line in `polymath doctor`, a line under
+*Storage* on the dashboard, and `./scripts/sd-card-mode.sh status`:
+
+| it says | meaning | what happens / what to do |
+|---|---|---|
+| `SSD not plugged in` | nothing on USB at all | plug it into a blue USB 3 port; if it never shows up, it gets no power: a powered USB 3 hub or its own supply |
+| `SSD plugged in but not answering: it needs more power` | the enclosure answers, the drive reports 0 bytes | one soft USB reset every 10 min; for good: a powered USB 3 hub or the enclosure's own power |
+| `SSD enclosure on USB but no drive` | the enclosure, no drive behind it | unplug it for 10 s, plug it back in; if it stays, more power |
+| `SSD on USB 2: move it to a blue USB 3 port` | linked at 480 Mbit/s, what made it freeze | not used until it is on USB 3 (a USB 3 cable, no USB 2 hub) |
+| `SSD switched off; tested again later` | `sd-card-mode.sh on` switched its USB device off | switched on to test it after 1 h, 3 h, 6 h, 12 h, then daily; off again if no drive shows up. Replug it to test it now |
+| `SSD back: checking it` | plugged in at USB 3 | checked every minute: 16 MiB read at its start, middle and end past the cache, within 30 s, and no new I/O errors. 10 healthy minutes, then it moves back |
+| `SSD failed a check; tried again later` | a check failed or took too long | waits 30 min, 1 h, 3 h … a day; a replug tries again at once |
+| `moving back onto the SSD` → `back on the SSD` | the move | what `off` does: stop, set the drop-in aside, mount the SSD, start; what it learned on the SD card moves over by itself |
+| `the SSD failed again: back on the SD card` | it dropped out twice within a day of coming back | SD-card mode by itself (the SSD's mounts let go, its USB device off); tested again a day later. The SSD's brain is untouched |
+
+A move cut short by a power cut is finished or undone the next minute, and everything is started again. It does
+nothing in the first hour after `sd-card-mode.sh on` (unless you replug the SSD), never formats, never
+deletes a brain, and never uses a drive that is not the brain's. Every step is in the caretaker's inbox
+(`storage/ssd_watch:…`, `polymath caretaker`) and in `/run/polymath/ssd-watch.json`.
+
 Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/lib/polymath/brain`),
-`sd_budget_gb` (0: what the card can give), `sd_keep_free_gb` (3.0).
+`sd_budget_gb` (0: what the card can give), `sd_keep_free_gb` (3.0), and for the SSD watch `sd_auto_return`
+(true), `sd_return_stable_min` (10), `sd_return_allow_usb2` (false), `sd_auto_fallback` (true).
 
 ## 9. Troubleshooting
 
@@ -710,6 +736,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | anything else, or you want the whole picture | `polymath caretaker` (no sudo) gives the situation now, the recent problems with what each one is, and the next steps. `polymath caretaker known` lists every known problem, `polymath caretaker show <id>` gives its symptoms, causes, checks and fix, and `polymath caretaker history` lists what happened on this Pi |
 | the SSD keeps freezing or dropping out, and you want Polymath working now | run everything on the SD card until the SSD is fixed: `cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/sd-card-mode.sh on` ([§8](#sd-card-mode)); the log is in `~/polymath-sd-card.txt` |
 | the feed says `learning on the SD card` (doctor: `sd card`) | SD-card mode is on: the brain runs on the SD card and the SSD is not used. Nothing to do. Once the SSD works again (blue USB 3 port, USB 3 cable, no USB 2 hub): `sudo ./scripts/sd-card-mode.sh off` |
+| the SSD is plugged in but Polymath stays on the SD card (and says low on disk) | since v0.10.0 the SSD watch says why at the end of the feed's SD-card line and in `polymath doctor` (`sd card`): not plugged in, needs more power, USB 2, or checking (10 minutes). Do what it says; it moves back by itself ([§8](#ssd-watch)). Before v0.10.0, SD-card mode ignored every drive until `sudo ./scripts/sd-card-mode.sh off` |
 | `sd-card-mode.sh off`: "the SSD did not come back … SD-card mode stays on" | the SSD is still not answering: plug it into a blue USB 3 port, check that `lsblk` lists it (sda), then run `off` again. Polymath keeps learning on the SD card meanwhile |
 | `sd-card-mode.sh on` shows ✗ | send `~/polymath-sd-card.txt`. Running `on` again is safe; if a process stays stuck on the old SSD, `sudo reboot` (SD-card mode stays on, the SSD is not mounted again) |
 | Polymath is stuck and an install does not take (the Pi in general, one command) | `cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./scripts/rescue.sh`: it stops the services, frees a frozen drive (lazy unmounts, USB reset), finishes `dpkg`, adds `uhubctl`, installs, and checks the result. Every step is time-limited and marked ✓/–/✗; the full log is in `~/polymath-rescue.txt` |

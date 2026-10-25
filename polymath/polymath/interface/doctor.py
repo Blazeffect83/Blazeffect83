@@ -96,10 +96,16 @@ def sd_card_check(config: Config, st: dict[str, Any] | None = None) -> Check:
     except OSError:
         free = ""
     new = f"; {int(sd['documents_new']):,} documents read here so far" if sd.get("documents_new") else ""
+    from polymath.body.ssdwatch import read_public
+
+    watch = sd.get("ssd") or read_public(config) or {}
+    seen = f". SSD watch: {watch['detail']}" if watch.get("detail") else ""
+    fix = watch.get("fix") or (
+        "nothing to do: once the SSD is plugged in and healthy, Polymath moves back onto it by "
+        "itself; by hand: cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off"
+    )
     return Check("sd card", WARN, f"SD-card mode since {since}: the whole brain runs on the SD card "
-                 f"({room:.1f} GB of room{free}{new}); the SSD is not used",
-                 "once the SSD works again: cd ~/polymath-src/polymath && sudo ./scripts/sd-card-mode.sh off   "
-                 "(what it learned here moves onto the SSD by itself)")  # fmt: skip
+                 f"({room:.1f} GB of room{free}{new}); the SSD is not used{seen}", fix)  # fmt: skip
 
 
 def http_health(url: str, timeout: float = 6.0) -> tuple[str, float, dict[str, Any] | None]:

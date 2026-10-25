@@ -1072,6 +1072,57 @@ ShellCheck (`-S warning`) are clean.
 
 **Not yet run on the Pi.**
 
+## 12t. The SSD watch: back onto the SSD by itself, and back to the SD card by itself (v0.10.0)
+
+**Why:** Christian, 2026-10-25: he plugged the SSD in again, "it's not picking up the ssd when I plug it in still
+reading as low on disk space", and "I need it to auto detect … especially if I'm not there". SD-card mode ignored
+every drive by design until `sd-card-mode.sh off`, so plugging in did nothing, and it never said why.
+
+**End to end** (development container, root): a real ext4 filesystem on a loop device standing in for the SSD,
+with `polymath-brain/home/home-drive.json` on it and a `MOVED-TO-DRIVE.json` naming it. Real `lsblk`, real
+`O_DIRECT` reads, real mounts and the real `/proc/self/mountinfo`. Only `systemctl` was played: its
+`restart polymath-volume@…` mounted the filesystem and bound the brain, as the drive helper does. The container
+has no udev, so `lsblk` could not see filesystem ids; the script added that one field from `blkid` (on the Pi, udev
+supplies it).
+- minutes 0–1: `checking`, the reads at 246 and 626 MB/s (stable time set to 1 minute for the run);
+- minute 2: `returned`: the drop-in renamed and then removed, the brain mounted, `home-drive.json` readable through
+  it; events `returning`, `returned`;
+- run again without SD-card mode: `probation`;
+- two drive-helper rescues within the day: `fallback`: the drop-in written again (`sd_only = true`), the brain's
+  mount released (lazily), events end with `fallback`.
+
+**Tests:** `tests/test_ssdwatch.py` (19):
+- what it sees, in words: not plugged in (and a steady state writes nothing to the SD card, only to `/run`); the
+  enclosure without a drive; 0 bytes with one soft USB reset per 10 minutes; another drive is not mistaken for
+  the brain's; USB 2 refused and never read (allowed with `sd_return_allow_usb2`);
+- switched off by `sd-card-mode.sh on`: switched on to test it, off again after 3 minutes without a drive,
+  tested again an hour later, checked when it shows up;
+- ten healthy minutes, then the move in the right order (stop, restart `polymath-volume@sda2`, start), the drop-in
+  and the SD-card-mode record removed; then probation, and `trusted` after a day;
+- a failed check backs off for half an hour; a replug (a new USB device number) checks at once and starts the ten
+  minutes over; new I/O errors count as a failure;
+- a new stretch of SD-card mode waits an hour; a return that does not mount puts the drop-in back, starts
+  everything on the SD card and backs off; a drop-in that cannot be renamed is safe; a move cut short (the helper
+  killed with the drop-in set aside) is undone the next minute, or finished if the SSD was mounted, and everything
+  is started again either way;
+- two drop-outs within a day of coming back: the fallback (drop-in, the SSD's USB device off, the record, lazy
+  unmounts, services started), then a day before it is tested again; no fallback when `sd_auto_fallback` is off;
+- it stands aside when switched off, when SD-card mode is set in `polymath.toml`, and when the brain never lived on
+  a drive; a broken record or a failing `lsblk`;
+- the read check on a real file: reads, a missing device, too little data, a check still stuck (no second one), a
+  frozen child (left behind; it returns after the 1 s limit), nonsense output, too slow;
+- the feed's SD-card line, doctor's `sd card` check, the dashboard's storage line and the caretaker's inbox (each
+  event once);
+- the CLI builds it from the configuration without SD-card mode's drop-in (other drop-ins still count);
+  `sd_return_stable_min` is validated; the drive helper's unit allows 10 minutes.
+
+`tests/test_sdcard.py`: the daily SD-card-mode problem line now says it moves back by itself, and still names
+`sd-card-mode.sh off`.
+
+**Result:** RESULT_LINE
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -1088,6 +1139,8 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
+0. v0.10.0 on the Pi: the feed's SD-card line names what the SSD watch sees; with the SSD on a powered USB 3 port
+   it checks for 10 minutes and moves back by itself; `polymath doctor` shows it on the SSD afterwards.
 0. v0.9.0 on the Pi: `install.sh` prints a pairing code; Chrome on the PC pairs over `https://<pi>:8443/`; the PC
    trusts the CA; *Install page as app*; `polymath access devices` lists it; a revoke locks it out; the weekly
    backup in SD-card mode and `polymath storage usage` after a day of vitals.

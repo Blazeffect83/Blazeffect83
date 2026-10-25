@@ -1250,7 +1250,8 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
     if sd:
         since = f" since {clock(float(sd['since']))}" if sd.get("since") else ""
         room = f", {float(sd['budget_gb']):.0f} GB of room" if sd.get("budget_gb") else ""
-        segs.append((f"  (SD-card mode{since}: the brain is on the SD card{room}; the SSD is off)", "yellow"))
+        ssd = (sd.get("ssd") or {}).get("short") or "the SSD is off"
+        segs.append((f"  (SD-card mode{since}: the brain is on the SD card{room}; {ssd})", "yellow"))
     net = st.get("net") or {}
     if net.get("online") is False:
         since = f" since {clock(float(net['since']))}" if net.get("since") else ""

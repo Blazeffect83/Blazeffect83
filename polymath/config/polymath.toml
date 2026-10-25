@@ -111,3 +111,9 @@ sd_only = false
 sd_dir = "/var/lib/polymath/brain"
 sd_budget_gb = 0.0                  # 0: everything the card can give, less sd_keep_free_gb
 sd_keep_free_gb = 3.0               # the SD card always keeps this much free (the system; a full card wears out)
+# The SSD watch (v0.10.0): in SD-card mode, move the brain back onto the SSD by itself once it is plugged in at USB 3
+# and has stayed healthy this long; and go back to SD-card mode by itself if it drops out again within a day.
+sd_auto_return = true
+sd_return_stable_min = 10.0
+sd_return_allow_usb2 = false        # USB 2 is what made the SSD freeze: not trusted unless you say so
+sd_auto_fallback = true

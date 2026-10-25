@@ -523,6 +523,46 @@ A full review of every privileged path and every input that comes from outside:
 - **Orin** reads `days_to_full` as a signal (`disk_low`, hard limit under 3 days), and its backup-age limit is
   1.5 × the backup interval.
 
+## The SSD watch (v0.10.0, `body/ssdwatch.py`)
+
+Run by `polymath storage heal` (root, `polymath-heal.timer`, every minute) right after the drive helper. It builds two
+configurations: the one running now and the one without SD-card mode's drop-in (`load_config(skip_dropins=…)`),
+which says where the brain lives on the SSD.
+
+- **Finding the SSD.** The target is the filesystem id in the SD card's own `/srv/polymath/MOVED-TO-DRIVE.json`
+  (written when the brain moved onto the drive). `lsblk -J` lists the block devices (the SD card, loop, zram and
+  the like are never candidates); the USB device behind a disk comes from sysfs (`usb_device_dir`), the enclosure
+  from the vendor:product `sd-card-mode.sh on` recorded in `/var/lib/polymath/sd-card-mode.json`.
+- **States** (`SHORT` maps each to the feed's words): `absent`, `no_power` (0 bytes: one soft reset of its USB device
+  per `RESET_EVERY`), `enclosure_only`, `other_drive`, `usb2` (refused unless `sd_return_allow_usb2`),
+  `switched_off` → `waking` (its `authorized` switch set to 1, `WAKE_WAIT_S` to show up, else back to 0;
+  `WAKE_AFTER` backoff), `waiting`, `checking`, `unhealthy`, `returning`, `returned`, `return_failed`, `probation`,
+  `fallback`, `home`, and `off`/`manual`/`no_ssd` when it stands aside.
+- **The check** (`read_check`): a child process opens the partition with `O_DIRECT` and reads 16 MiB at its start,
+  middle and end into a page-aligned buffer. Over 30 s, or slower than 2 MB/s, or an error: unhealthy. A child stuck
+  in the kernel is never waited for; its pid file stops a second one from starting while it is stuck. The disk's
+  SCSI `ioerr_cnt` must not grow during the streak, and the streak belongs to one USB connection (disk, bus and
+  device number): a replug starts it over and clears the backoff.
+- **The return** after `sd_return_stable_min` minutes and at least `MIN_PROBES` checks: stop the agent and the
+  dashboard (a clean stop, `KILL` after `STOP_WAIT_S`), rename the drop-in to `.off`, restart
+  `polymath-volume@<partition>` (its attach now runs without SD-card mode and `mount_home` binds the brain and
+  restarts the services), and wait up to `MOUNT_WAIT_S` for the brain's mount with `home-drive.json` readable. Then
+  the `.off` file and the SD-card-mode record go, and the agent folds the SD-card brain in
+  (`core.standby.fold_job`). Otherwise the drop-in comes back, the mounts are dropped lazily, everything starts on
+  the SD card, and `RETRY_AFTER` backoff applies. A move cut short (a power cut, the unit's time limit) leaves
+  the `.off` file without a drop-in: the next run finishes it if the brain is mounted, else puts the drop-in back,
+  and starts everything either way, so the agent is never left stopped.
+- **Probation and fallback.** For `PROBATION_S` after an automatic return, the drive helper's own record
+  (`dead_mount`, `usb_reset`, `usb_power`) is counted; at `PROBATION_FAILS` it writes the drop-in itself, drops the
+  mounts lazily, switches the SSD's USB device off, records it like `sd-card-mode.sh on` does, and starts everything
+  on the SD card; the next try is a day later. Its own drop-in write sets the episode, so that day is kept.
+- **Episodes.** The drop-in's modification time names a stretch of SD-card mode; a new one resets the backoff and
+  holds everything for `HOLD_S` (an hour), so a deliberate `sd-card-mode.sh on` is not undone at once.
+- **Record and wear.** `/var/lib/polymath/ssd-watch.json` is written only when something changed; the copy in
+  `/run/polymath` every minute. `core.sdcard.status` puts it in the snapshot (`sd_card.ssd`), so the feed, doctor
+  and the dashboard show it; the agent reports its events to the caretaker's inbox at start
+  (`report_ssd_watch`, code `storage/ssd_watch:<event>:<time>`).
+
 ## Process boundaries and safety
 
 - **Agent unit:**

@@ -13,8 +13,9 @@ sd-card.toml``: ``[storage] sd_only = true``) and nothing else changed in ``poly
 * no drive is touched: the storage pool, moving and mounting the brain's drive, healing it and the standby brain are
   all off (``config.apply_sd_only``), and the script switches the SSD's USB device off (like unplugging it).
 
-When the drive works again, ``scripts/sd-card-mode.sh off`` removes the drop-in and switches the SSD back on. The
-agent starts on its real brain and **folds** this one in (``core.standby.fold_job``): every document it read in
+When the drive works again, the SSD watch (``body.ssdwatch``, v0.10.0) notices, checks it for ten minutes, and does
+what ``scripts/sd-card-mode.sh off`` does: it sets the drop-in aside and has the SSD mounted. The agent starts on
+its real brain and **folds** this one in (``core.standby.fold_job``): every document it read in
 SD-card mode (after ``fold_after``, the last one it was started with), the Wikidata records, the crawler's progress
 and the problems it noted since ``started``. Then the SD-card brain is removed.
 
@@ -102,6 +103,11 @@ def status(config: Config, db: Any = None) -> dict[str, Any] | None:
     }
     with contextlib.suppress(OSError):
         out["free_gb"] = round(shutil.disk_usage(config.paths.data_dir).free / 1e9, 1)
+    from polymath.body.ssdwatch import read_public
+
+    watch = read_public(config)
+    if watch and watch.get("state"):  # what the SSD watch sees (it moves the brain back onto the SSD by itself)
+        out["ssd"] = {k: watch.get(k) for k in ("state", "short", "detail", "fix", "since", "streak_since", "next_try")}
     if db is not None:
         with contextlib.suppress(Exception):
             newest = int(db.scalar("SELECT COALESCE(MAX(id), 0) FROM documents") or 0)
@@ -116,7 +122,8 @@ def note(db: Any, config: Config) -> None:
     mark = read_marker(config) or {}
     since = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(mark.get("started") or time.time())))
     room = f"{config.body.disk_budget_gb:.1f} GB"
-    text = (f"SD-card mode since {since}: the whole brain runs on the SD card ({room} of room) and the SSD is not "
-            "used. Once the SSD works again: sudo ./scripts/sd-card-mode.sh off")  # fmt: skip
+    text = (f"SD-card mode since {since}: the brain runs on the SD card ({room} of room), the SSD is not used. It "
+            "moves back onto the SSD by itself once that is plugged in and healthy; by hand: sudo "
+            "./scripts/sd-card-mode.sh off")  # fmt: skip
     with contextlib.suppress(Exception):
         issues.report(db, "storage", "sd_card", text, severity="warn", every=86400.0)
