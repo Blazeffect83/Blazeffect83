@@ -1067,7 +1067,7 @@ can access it", in Chrome, without touching the Pi.
 - `tests/test_sdcard.py` expects one backup, a 3 GB reserve and the new budget. The access tests first failed
   because the test helper passed headers in the body's place; fixed in the helper, not the code.
 
-**Result:** RESULT_LINE `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and
+**Result:** 780 tests pass and 1 is skipped, at 93 % coverage (`interface/access.py` 86 %, `body/usage.py` 98 %, `core/safefs.py` 100 %). `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and
 ShellCheck (`-S warning`) are clean.
 
 **Not yet run on the Pi.**
