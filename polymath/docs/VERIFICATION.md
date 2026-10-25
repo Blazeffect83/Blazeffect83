@@ -1119,7 +1119,7 @@ supplies it).
 `tests/test_sdcard.py`: the daily SD-card-mode problem line now says it moves back by itself, and still names
 `sd-card-mode.sh off`.
 
-**Result:** RESULT_LINE
+**Result:** 798 tests pass and 1 is skipped, at 93 % coverage (`body/ssdwatch.py` 93 %). `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck (`-S warning`) are clean.
 
 **Not yet run on the Pi.**
 
