@@ -219,7 +219,8 @@ def test_a_healthy_ssd_is_checked_for_ten_minutes_then_the_brain_moves_back(pi):
     assert not pi.sd_state.exists()
     stop = pi.ran("systemctl", "stop", "--no-block")[0]
     assert stop[3:] == list(sw.SERVICES)
-    assert pi.ran("systemctl", "restart", "--no-block", "polymath-volume@sda2.service")
+    # every drive's unit: the extra drives plugged in during SD-card mode are adopted now too
+    assert pi.ran("systemctl", "restart", "--no-block", "polymath-volume@*.service")
     assert pi.ran("systemctl", "start", "--no-block")
     order = [c[1] for c in pi.calls if c[0] == "systemctl" and c[1] in {"stop", "restart", "start"}]
     assert order.index("stop") < order.index("restart") < order.index("start")

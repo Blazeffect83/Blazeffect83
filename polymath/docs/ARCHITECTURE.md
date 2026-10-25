@@ -604,9 +604,9 @@ which says where the brain lives on the SSD.
   SCSI `ioerr_cnt` must not grow during the streak, and the streak belongs to one USB connection (disk, bus and
   device number): a replug starts it over and clears the backoff.
 - **The return** after `sd_return_stable_min` minutes and at least `MIN_PROBES` checks: stop the agent and the
-  dashboard (a clean stop, `KILL` after `STOP_WAIT_S`), rename the drop-in to `.off`, restart
-  `polymath-volume@<partition>` (its attach now runs without SD-card mode and `mount_home` binds the brain and
-  restarts the services), and wait up to `MOUNT_WAIT_S` for the brain's mount with `home-drive.json` readable. Then
+  dashboard (a clean stop, `KILL` after `STOP_WAIT_S`), rename the drop-in to `.off`, restart every
+  `polymath-volume@` unit (their attach now runs without SD-card mode: the SSD's `mount_home` binds the brain and
+  restarts the services, and drives plugged in during SD-card mode, which were left alone, are adopted), and wait up to `MOUNT_WAIT_S` for the brain's mount with `home-drive.json` readable. Then
   the `.off` file and the SD-card-mode record go, and the agent folds the SD-card brain in
   (`core.standby.fold_job`). Otherwise the drop-in comes back, the mounts are dropped lazily, everything starts on
   the SD card, and `RETRY_AFTER` backoff applies. A move cut short (a power cut, the unit's time limit) leaves

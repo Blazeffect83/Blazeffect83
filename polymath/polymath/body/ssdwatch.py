@@ -633,9 +633,10 @@ class SSDWatch:
             self._start_services()
             self._backoff(st, f"could not switch SD-card mode off ({exc})", "return_failed")
             return self._set(st, "return_failed", f"could not switch SD-card mode off: {exc}")
-        unit = f"polymath-volume@{name}.service"
-        self.run(["systemctl", "reset-failed", unit])
-        self.run(["systemctl", "restart", "--no-block", unit])
+        # every drive's unit again, not only the SSD's: in SD-card mode each drive plugged in was left alone (its unit
+        # ran and stays "active"), so the extra drives plugged in meanwhile are adopted now too, not at the next replug
+        self.run(["systemctl", "reset-failed", "polymath-volume@*.service"])
+        self.run(["systemctl", "restart", "--no-block", "polymath-volume@*.service"])
         self.run(["udevadm", "trigger", "--action=add", "--subsystem-match=block"])
         waited = 0.0
         while not self._brain_mounted() and waited < MOUNT_WAIT_S:
