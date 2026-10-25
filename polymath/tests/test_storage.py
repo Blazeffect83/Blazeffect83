@@ -415,7 +415,11 @@ def test_helper_formats_only_completely_blank_disks(helper, config):
         ("/dev/loop3", None, "internal or virtual"),
         ("/dev/sde1", {"disk": "sde", "probe": {"TYPE": "swap", "UUID": "s"}}, "not one Polymath can use"),
         ("/dev/sde2", {"disk": "sde", "probe": {"TYPE": "crypto_LUKS", "UUID": "c"}}, "not one Polymath can use"),
-        ("/dev/sdf", {"probe": {"PTTYPE": "gpt"}}, "each one is handled on its own"),
+        (
+            "/dev/sdf",
+            {"probe": {"PTTYPE": "gpt"}, "children": [{"path": "/dev/sdf1"}]},
+            "each one is handled on its own",
+        ),
         ("/dev/sdg1", {"disk": "sdg", "probe": {"TYPE": "ext4"}}, "no filesystem UUID"),
         ("/dev/gone1", None, "went away"),
     ],
@@ -534,3 +538,17 @@ def test_a_drive_reporting_zero_bytes_is_never_formatted(helper):
     assert not fake.ran("mkfs.ext4") and not fake.ran("sfdisk")
     h.edges = lambda dev: (b"", b"")
     assert not h.is_blank("/dev/sdd")  # an empty read is no proof of blankness
+
+
+def test_an_empty_partition_table_counts_as_blank(helper, config):
+    """What deleting the volumes in Windows leaves: a partition table and no partition at all."""
+    h, fake = helper
+    fake.add("/dev/sdd", probe={"PTTYPE": "gpt"})
+    out = h.attach("/dev/sdd")
+    assert out.action == "attached", out
+    sf = fake.ran("sfdisk")[0]
+    assert sf[-1] == "/dev/sdd" and "--wipe" in sf and fake.ran("mkfs.ext4")[0][-1] == "/dev/sdd1"
+    config.storage.format_blank_disks = False
+    fake.add("/dev/sde", probe={"PTTYPE": "dos"})
+    out = h.attach("/dev/sde")
+    assert out.action == "skipped" and "format_blank_disks is off" in out.detail

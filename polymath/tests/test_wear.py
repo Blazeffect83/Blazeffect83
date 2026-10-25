@@ -444,7 +444,9 @@ def test_format_refuses_drives_with_files_the_home_and_busy_mounts(home_helper, 
     assert "busy" in h.format_empty("EX-3", erase_files=True).detail  # umount did not release it: nothing changed
     (mnt / "Holiday.mov").unlink()
     (mnt / storage_pool.BRAIN / "packs").mkdir()
+    (mnt / storage_pool.BRAIN / "packs" / "pack-000001.bin").write_bytes(b"p")  # its documents (empty folders are not)
     assert "retire the drive first" in h.format_empty("EX-3", erase_files=True).detail
+    (mnt / storage_pool.BRAIN / "packs" / "pack-000001.bin").unlink()
     (mnt / storage_pool.BRAIN / "packs").rmdir()
     manifest = storage_pool.read_manifest(mnt / storage_pool.BRAIN)
     assert manifest is not None

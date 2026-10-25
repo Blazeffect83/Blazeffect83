@@ -224,6 +224,10 @@ class StorageConfig:
     auto_roles: bool = True
     brain_settle_min: float = 10.0  # a drive must stay plugged in this long before the brain moves onto it
     brain_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is too slow and froze before: never the brain unless allowed
+    # Drive care (body.roles, v0.11.2): a plugged-in drive formatted for Windows/macOS (exFAT, NTFS, FAT32) that holds
+    # nothing at all is reformatted for Linux (ext4), so it can hold the brain, backups over 4 GB and full extra room.
+    # A drive with any file on it is never reformatted by itself.
+    care_format_empty: bool = True
     # What each drive holds (memory.inventory): a drive gone this long counts as lost, and what it held is relearned
     # onto the other drives, the most important first (it is all still there if the drive comes back)
     relearn_after_h: float = 2.0

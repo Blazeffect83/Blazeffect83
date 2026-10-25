@@ -46,6 +46,11 @@ class Pi:
         self.home.storage.mount_root.mkdir()
         self.config = make_config(tmp / "sd")
         self.config.storage.sd_only = True
+        self.config.storage.sd_dir = tmp / "sdbrain"  # the brain SD-card mode runs on
+        (tmp / "sdbrain" / "db").mkdir(parents=True)
+        (tmp / "sdbrain" / "db" / "polymath.sqlite3").write_bytes(b"the SD card's brain")
+        (tmp / "sdbrain" / sdcard.MARKER).write_text(json.dumps({"id": "sd1", "started": 1.0, "fold_after": 0}))
+        self.home.storage.standby_dir = tmp / "standby"
         self.config.paths.run_dir = tmp / "run"
         self.config.paths.run_dir.mkdir()
         self.dropin = tmp / "etc" / "polymath.d" / sdcard.DROPIN
@@ -74,7 +79,8 @@ class Pi:
         self.heal: list[dict[str, Any]] = []
 
     # the SSD as the kernel shows it
-    def plug(self, *, size: int = 1_000_204_886_016, speed: str = "5000", devnum: str = "3") -> None:
+    def plug(self, *, size: int = 1_000_204_886_016, speed: str = "5000", devnum: str = "3", uuid: str = UUID,
+             fstype: str = "ext4", model: str = "DockCase SSD", serial: str = "S1") -> None:  # fmt: skip
         (self.usb / "speed").write_text(speed + "\n")
         (self.usb / "devnum").write_text(devnum + "\n")
         (self.usb / "authorized").write_text("1\n")
@@ -86,10 +92,10 @@ class Pi:
             link.symlink_to(host / "block" / "sda")
         if not (host / "block" / "sda" / "device").exists():
             (host / "block" / "sda" / "device").symlink_to(host)
-        part = {"name": "sda2", "path": "/dev/sda2", "type": "part", "size": size // 2, "fstype": "ext4",
-                "uuid": UUID, "mountpoints": [None]}  # fmt: skip
-        self.disk = {"name": "sda", "path": "/dev/sda", "type": "disk", "size": size, "tran": "usb",
-                     "children": [part] if size else []}  # fmt: skip
+        part = {"name": "sda2", "path": "/dev/sda2", "type": "part", "size": size // 2, "fstype": fstype,
+                "uuid": uuid, "mountpoints": [None]}  # fmt: skip
+        self.disk = {"name": "sda", "path": "/dev/sda", "type": "disk", "size": size, "tran": "usb", "model": model,
+                     "serial": serial, "children": [part] if size else []}  # fmt: skip
 
     def io_errors(self, n: int) -> None:
         (self.usb / "2-1:1.0" / "host0" / "target0:0:0" / "0:0:0:0" / "ioerr_cnt").write_text(hex(n) + "\n")
@@ -447,3 +453,107 @@ def test_the_drive_helper_unit_gives_it_time_to_move_the_brain():
     from tests.test_deploy import unit
 
     assert unit("polymath-heal.service")["Service"]["TimeoutStartSec"] == "10min"
+
+
+# ------------------------------------------------------------------ the brain's SSD was wiped
+def test_a_reformatted_ssd_makes_the_sd_cards_brain_the_brain(pi):
+    """The Pi, 2026-10-25: Christian reformatted the SSD; the watch waited for a brain that no longer existed."""
+    pi.plug(uuid="NEW-EXFAT-1234", fstype="exfat")  # the same enclosure (USB 31db:9210), wiped
+    out = pi.tick()
+    assert out["ssd"] == "replaced" and "reformatted: the brain it held is gone" in pi.public()["detail"]
+    for _ in range(9):
+        assert pi.tick()["ssd"] == "replaced"
+    assert pi.tick()["ssd"] == "promoted"
+    data = pi.home.paths.data_dir
+    assert (data / "db" / "polymath.sqlite3").read_bytes() == b"the SD card's brain"  # renamed, not copied
+    assert not (data / MOVED_FILE).exists() and list(data.glob(f"{MOVED_FILE}.replaced-*"))
+    assert not (data / sdcard.MARKER).exists() and list(data.glob(f".{sdcard.MARKER}.was-sdbrain-*"))
+    assert not pi.dropin.exists() and not pi.sd_state.exists()  # SD-card mode is over
+    assert pi.ran("systemctl", "restart", "--no-block", "polymath-volume@*.service")  # the SSD is attached again
+    assert pi.ran("systemctl", "start", "--no-block")
+    assert [e["event"] for e in pi.public()["events"]][-2:] == ["promoting", "promoted"]
+
+
+def test_the_wiped_ssd_is_recognised_by_its_serial_or_its_model(pi):
+    pi.sd_state.unlink()  # SD-card mode never recorded its USB device (the Pi's case)
+    marker = pi.home.paths.data_dir / MOVED_FILE
+    pi.plug(uuid="OTHER", model="Some Stick", serial="X9")
+    (pi.usb / "idProduct").write_text("0001\n")
+    assert pi.tick()["ssd"] == "other_drive" and "keep-sd-brain" in pi.public()["fix"]
+    marker.write_text(json.dumps({"id": UUID, "serial": "X9"}))  # recorded when the brain moved onto it (v0.11.2)
+    assert pi.tick()["ssd"] == "replaced"
+    marker.write_text(json.dumps({"id": UUID, "name": "Some Stick"}))  # older markers: the drive's model
+    pi.tick()
+    assert pi.public()["state"] == "replaced"
+
+
+def test_keep_sd_brain_does_it_at_once_and_refuses_without_a_brain(pi):
+    st = pi.watch().load()
+    assert pi.watch().promote(st)["ssd"] == "promoted"
+    assert (pi.home.paths.data_dir / "db" / "polymath.sqlite3").exists()
+    st = pi.watch().load()
+    assert pi.watch().promote(st)["ssd"] == "no_ssd"  # nothing left on the SD card to keep
+    pi.mounted = True
+    (pi.config.storage.sd_dir / "db").mkdir(parents=True, exist_ok=True)
+    (pi.config.storage.sd_dir / "db" / "polymath.sqlite3").write_bytes(b"x")
+    assert pi.watch().promote(pi.watch().load())["ssd"] == "manual"  # the brain is on a drive: nothing to do
+
+
+def make_backup(path: Path, text: str) -> None:
+    import lzma
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = path.with_suffix(".tmp.sqlite3")
+    con = sqlite3.connect(str(db))
+    con.execute("CREATE TABLE events(text TEXT)")
+    con.execute("INSERT INTO events VALUES(?)", (text,))
+    con.commit()
+    con.close()
+    path.write_bytes(lzma.compress(db.read_bytes()))
+    db.unlink()
+
+
+def test_outside_sd_card_mode_a_wiped_brain_drive_is_rebuilt_from_the_newest_backup(pi):
+    import sqlite3
+
+    pi.config.storage.sd_only = False
+    pi.dropin.unlink()
+    backups = pi.home.storage.mount_root / "hdd" / "polymath-brain" / "backups"
+    make_backup(backups / "polymath-20261020-030000.sqlite3.xz", "older")
+    make_backup(backups / "polymath-20261024-030000.sqlite3.xz", "newest")
+    (backups / "polymath-20261025-030000.sqlite3.xz").write_bytes(b"damaged")
+    pi.plug(uuid="WIPED", fstype="exfat")
+    assert pi.tick()["ssd"] == "replaced" and "rebuilt from the newest backup" in pi.public()["detail"]
+    for _ in range(9):
+        pi.tick()
+    assert pi.tick()["ssd"] == "rebuilt"
+    con = sqlite3.connect(str(pi.home.paths.data_dir / "db" / "polymath.sqlite3"))
+    assert con.execute("SELECT text FROM events").fetchone()[0] == "newest"  # the damaged newer one was skipped
+    con.close()
+    events = [e["event"] for e in pi.public()["events"]]
+    assert "backup_damaged" in events and events[-1] == "rebuilt" and "from the backup" in pi.public()["detail"]
+    assert not (pi.home.paths.data_dir / MOVED_FILE).exists()
+
+
+def test_without_a_backup_the_standby_brain_takes_over_or_it_starts_afresh(pi, tmp_path):
+    pi.config.storage.sd_only = False
+    pi.mount_works = False  # no drive takes the brain here (that is the roles' part)
+    sb = pi.home.storage.standby_dir
+    (sb / "db").mkdir(parents=True)
+    (sb / "db" / "polymath.sqlite3").write_bytes(b"standby brain")
+    (sb / "standby.json").write_text("{}")
+    out = pi.watch().rebuild(pi.watch().load())
+    assert out["ssd"] == "rebuilt" and "from the standby brain" in out["detail"]
+    assert (pi.home.paths.data_dir / "db" / "polymath.sqlite3").read_bytes() == b"standby brain"
+    (pi.home.paths.data_dir / MOVED_FILE).write_text(json.dumps({"id": UUID}))
+    (pi.home.paths.data_dir / "db" / "polymath.sqlite3").unlink()
+    assert "afresh" in pi.watch().rebuild(pi.watch().load())["detail"]
+    pi.mounted = True
+    assert pi.watch().rebuild(pi.watch().load())["ssd"] == "home"
+
+
+def test_the_brains_drive_back_as_it_was_is_never_taken_for_wiped(pi):
+    pi.config.storage.sd_only = False
+    pi.plug()  # the same filesystem: the drive helper mounts it, nothing is rebuilt
+    assert pi.tick()["ssd"] == "home"

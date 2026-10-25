@@ -312,8 +312,21 @@ class Helper:
         if pr.get("UUID") and pr["UUID"] in ignored_ids(self.config):
             return Outcome("skipped", f"{dev} is on the ignore list", pr["UUID"])
         formatted = False
-        if inf.get("type") == "disk" and (pr.get("PTTYPE") or inf.get("children")):
+        if inf.get("type") == "disk" and inf.get("children"):
             return Outcome("skipped", "the disk has partitions; each one is handled on its own")
+        if inf.get("type") == "disk" and pr.get("PTTYPE") and not pr.get("TYPE"):
+            # a partition table and no partition at all (what deleting the volumes in Windows leaves): it holds
+            # nothing, so it counts as blank (formatted when storage.format_blank_disks allows)
+            if not st.format_blank_disks:
+                return Outcome("skipped", f"{dev} is empty (a partition table, no partitions), but "
+                               "storage.format_blank_disks is off")  # fmt: skip
+            dev = self._partition(dev, fresh_table=True)
+            r = self.run(["mkfs.ext4", "-q", "-F", "-L", "POLYMATH", "-m", "0", dev])
+            if r.returncode != 0:
+                return Outcome("skipped", f"formatting {dev} failed: {r.stderr.strip()}")
+            formatted = True
+            pr = self.probe(dev)
+            inf = self.info(dev)
         if not pr.get("TYPE"):
             if not self.is_blank(dev):
                 return Outcome("skipped", f"{dev} holds data Polymath does not recognise; not touching it")
@@ -405,9 +418,11 @@ class Helper:
             note += f"; the maker's files it held: {', '.join(files[:4])}{' …' if len(files) > 4 else ''}"
         return Outcome("formatted" if out.action == "attached" else out.action, f"{note}; {out.detail}", out.volume)
 
-    def _partition(self, disk: str) -> str:
-        """One GPT partition across a blank disk; returns the partition's device path."""
-        r = self.run(["sfdisk", "--quiet", "--label", "gpt", disk], input="type=linux,name=polymath\n")
+    def _partition(self, disk: str, *, fresh_table: bool = False) -> str:
+        """One GPT partition across a blank disk (``fresh_table``: replacing an empty partition table); returns the
+        partition's device path."""
+        args = ["sfdisk", "--quiet", *(["--wipe", "always"] if fresh_table else []), "--label", "gpt", disk]
+        r = self.run(args, input="type=linux,name=polymath\n")
         if r.returncode != 0:
             raise FileNotFoundError(f"partitioning {disk} failed: {r.stderr.strip()}")
         self.run(["udevadm", "settle"])
@@ -609,8 +624,8 @@ class Helper:
         for entry in list(data.iterdir()):
             entry.rename(aside / entry.name)
         (data / MOVED_FILE).write_text(
-            json.dumps({"id": manifest.get("id"), "name": name, "moved_at": self.clock(), "sd_copy": str(aside)},
-                       indent=2), encoding="utf-8")  # fmt: skip
+            json.dumps({"id": manifest.get("id"), "name": name, "moved_at": self.clock(), "sd_copy": str(aside),
+                        **self.drive_identity(manifest)}, indent=2), encoding="utf-8")  # fmt: skip
         manifest |= {"home": True, "budget_bytes": 0}  # the drive is the main disk now: nothing spills to it
         self._write_manifest(brain, manifest)
         r = self.run(["mount", "--bind", str(home), str(data)])
@@ -624,6 +639,21 @@ class Helper:
             f"card only boots the Pi now. Its old copy is kept at {aside}",
             out.volume,
         )
+
+    def drive_identity(self, manifest: dict[str, Any]) -> dict[str, str]:
+        """Who the brain's drive is, for the SD card's ``MOVED-TO-DRIVE.json``: its serial number, model and USB
+        vendor:product. A drive that comes back reformatted (its brain gone) is then recognised for certain
+        (``body.ssdwatch``)."""
+        out = {"serial": str(manifest.get("serial") or "").strip(), "model": str(manifest.get("model") or "").strip(),
+               "usb": ""}  # fmt: skip
+        dev = str(manifest.get("device") or "")
+        with contextlib.suppress(OSError, ValueError, FileNotFoundError):
+            from polymath.body.heal import usb_device_dir
+
+            usb = usb_device_dir(Path("/sys/block") / Path(self.disk_of(dev)).name) if dev else None
+            if usb is not None:
+                out["usb"] = f"{(usb / 'idVendor').read_text().strip()}:{(usb / 'idProduct').read_text().strip()}"
+        return out
 
     def move_brain(self, src: Path, src_manifest: dict[str, Any], dst: Path, dst_manifest: dict[str, Any]) -> Outcome:
         """Move the brain from one drive to a better one (``body.roles``): copy and check it with the agent stopped,
@@ -689,7 +719,7 @@ class Helper:
         moved = data / MOVED_FILE  # the SD card's own directory, under the mount: it names the brain's drive
         with contextlib.suppress(OSError, ValueError):
             marker = json.loads(moved.read_text(encoding="utf-8"))
-            marker |= {"id": vol, "name": new_name, "moved_at": self.clock()}
+            marker |= {"id": vol, "name": new_name, "moved_at": self.clock(), **self.drive_identity(dst_manifest)}
             moved.write_text(json.dumps(marker, indent=2), encoding="utf-8")
         r = self.run(["mount", "--bind", str(new_home), str(data)])
         self._services("start")
@@ -704,6 +734,23 @@ class Helper:
         data, home = self.config.paths.data_dir, brain / HOME
         if not (home / HOME_FILE).exists():
             return Outcome(out.action, f"{out.detail}; it should hold the brain, but {home} is missing", out.volume)
+        if not self.mounts_at(data):
+            marker: dict[str, Any] = {}
+            with contextlib.suppress(OSError, ValueError):
+                raw = json.loads((data / MOVED_FILE).read_text(encoding="utf-8"))
+                marker = raw if isinstance(raw, dict) else {}
+            if (data / "db" / "polymath.sqlite3").exists() or str(marker.get("id") or manifest.get("id")) != str(
+                manifest.get("id")
+            ):  # the brain lives on elsewhere now (it was rebuilt or moved): this drive's copy is an old one
+                previous = f"{HOME}-previous-{int(self.clock())}"
+                home.rename(brain / previous)
+                reserve = shutil.disk_usage(brain).total * self.config.storage.reserve_fraction
+                manifest |= {"home": False, "previous_home": {"dir": previous, "at": self.clock()},
+                             "budget_bytes": max(0, int(shutil.disk_usage(brain).free - reserve))}  # fmt: skip
+                self._write_manifest(brain, manifest)
+                return Outcome(out.action, f"{out.detail}; it held an older copy of the brain (the brain lives on "
+                               f"elsewhere now): kept for a week as {previous}, and the drive is extra room",
+                               out.volume)  # fmt: skip
         existing = [src for mp, src in self.mounts_at(data) if mp == str(data)]
         if existing:
             current = [src for _mp, src in self.mounts_at(brain.parent)]
@@ -733,9 +780,10 @@ class Helper:
         except PermissionError:  # not root (tests, a non-POSIX drive): the plain write, still never through a link
             safe_write(brain, MANIFEST, json.dumps(manifest, indent=2), mode=0o640)
 
-    def format_empty(self, vol: str, *, erase_files: bool = False) -> Outcome:
-        """Reformat an adopted drive (only on request): Linux ext4, so the brain can move there. A drive holding
-        files is refused unless ``erase_files`` (the user listed them and typed --erase-files)."""
+    def format_empty(self, vol: str, *, erase_files: bool = False, by: str = "polymath storage format") -> Outcome:
+        """Reformat an adopted drive: Linux ext4, so the brain can move there. On request, or by the drive roles for a
+        drive that holds nothing at all (``body.roles``). A drive holding files is refused unless ``erase_files``
+        (the user listed them and typed --erase-files); one holding Polymath's documents always is."""
         with self._locked():
             mp = str(self.config.storage.mount_root / vol)
             src = next((s for m, s in self.mounts_of() if m == mp), "")
@@ -746,15 +794,17 @@ class Helper:
             if manifest.get("home"):
                 return Outcome("skipped", "this drive holds the brain; it is never reformatted", vol)
             files = [e for e in os.listdir(mp) if e not in JUNK and e != BRAIN]
-            inside = [e for e in os.listdir(brain) if e not in {MANIFEST, MANIFEST + ".tmp"}] if brain.exists() else []
-            if inside:  # spilled documents live here: erasing them would lose what it learned
+            own = {MANIFEST, MANIFEST + ".tmp", "inventory.json", ".inventory.json.tmp"}
+            inside = [str(Path(b) / n) for b, _d, names in os.walk(brain) for n in names
+                      if not (Path(b) == brain and n in own)] if brain.exists() else []  # fmt: skip
+            if inside:  # spilled documents live here (or backups, downloads): erasing them would lose them
                 return Outcome("skipped", f"{BRAIN}/ holds Polymath's documents; retire the drive first", vol)
             if files and not erase_files:
                 shown = ", ".join(sorted(files)[:5]) + (" …" if len(files) > 5 else "")
                 return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted. To erase them "
                                f"too: sudo polymath storage format {vol} --yes --erase-files", vol)  # fmt: skip
             self.remember_formatted(self.identity(src), {"was": manifest.get("fstype", ""), "uuid_before": vol,
-                                                         "by": "polymath storage format", "device": src})  # fmt: skip
+                                                         "by": by, "device": src})  # fmt: skip
             self.run(["umount", mp])
             if any(m == mp for m, _s in self.mounts_of()):
                 return Outcome("skipped", f"{mp} is busy; nothing was changed", vol)

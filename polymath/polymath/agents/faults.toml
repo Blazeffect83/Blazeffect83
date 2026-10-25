@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.11.1"
+updated_for = "0.11.2"
 updated = "2026-10-25"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -36,7 +36,9 @@ waiting_on = [
     "then: the feed's SD-card line and polymath doctor ('sd card') say what the SSD watch sees: not plugged in / needs more power / USB 2 / checking / back on the SSD",
     "2026-10-25: Christian will add more drives (the Pi 4 has two USB 3 and two USB 2 ports) and wants Polymath to pick by itself which holds the brain, which keeps the backups and which are extra, and to know what each drive holds so that a drive lost by accident is relearned onto the others, the most important first",
     "2026-10-25: Christian installed v0.11.0 (9c16c4e) on the Pi; polymath doctor then crashed with PermissionError on /etc/polymath/tls/server.crt (fixed in 0.11.1)",
-    "install v0.11.1 (doctor no longer crashes as you): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (then: polymath doctor; polymath storage roles)",
+    "2026-10-25: the feed said 'SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain'; Christian had reformatted the SSD to fix it, so the old SSD brain is gone and the SD-card brain is the only brain",
+    "install v0.11.2, then make the SD card's brain the brain (the SD-card mode record predates the drive identity, so it may not recognise the wiped SSD by itself): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh && sudo polymath storage keep-sd-brain",
+    "then: the empty SSD is formatted for Linux by itself (exFAT/NTFS/blank) and the brain moves onto it after 10 minutes (polymath storage roles)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
@@ -47,6 +49,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.11.2"
+date = "2026-10-25"
+changes = """A wiped brain drive is handled by itself, everywhere. SD-CARD MODE: when the brain's SSD shows up reformatted (recognised by its serial number or USB device as recorded when the brain moved onto it, the USB device sd-card-mode.sh switched off, or the drive model the SD card's MOVED-TO-DRIVE.json names) for 10 minutes, the SD card's brain becomes the brain: it is renamed into /srv/polymath (not copied), the old marker kept as MOVED-TO-DRIVE.json.replaced-<time>, SD-card mode's drop-in and record removed, every polymath-volume@ unit restarted; drive roles then move it onto the best drive. By hand at once: sudo polymath storage keep-sd-brain (the feed's 'a drive is plugged in, but it does not hold Polymath's brain' line now says so). OUTSIDE SD-CARD MODE: a brain drive that comes back reformatted is rebuilt on the SD card from the newest backup on another drive (damaged ones skipped; the standby brain's reading folds in by itself), else from the standby brain, else afresh; then drive roles move it. The SD card's MOVED-TO-DRIVE.json now records the brain drive's serial, model and USB vendor:product (move_home, move_brain). An old brain drive that comes back after the brain moved on never covers it: its copy becomes home-previous-<time> and it is extra room. A disk with an empty partition table (what deleting volumes in Windows leaves) counts as blank and is formatted. DRIVE CARE (storage.care_format_empty): a plugged-in drive formatted for Windows/macOS (exFAT, NTFS, FAT32) that holds nothing at all (Polymath's own manifest and inventory aside) is reformatted to ext4 by the drive helper after it settles, once a day at most per drive; a drive with any file of Christian's or any document of Polymath's is never reformatted; FAT32 drives with files get a warning (no file over 4 GB fits). Also: the enclosure-without-a-drive message no longer shows while a drive is there."""
+
 [[update]]
 version = "0.11.1"
 date = "2026-10-25"
@@ -603,6 +610,34 @@ steps = [
 ]
 since = "0.11.1"
 updated = "0.11.1"
+
+[[fault]]
+id = "brain-drive-wiped"
+title = "The brain's drive was reformatted: its brain is gone"
+area = "storage"
+codes = []
+patterns = ["was reformatted", "does not hold Polymath's brain", "keep-sd-brain", "rebuilt", "promoted"]
+symptoms = [
+    "the feed: 'SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain' (before 0.11.2)",
+    "the feed: 'the SSD was reformatted: the SD card's brain takes over soon', then 'the SD card's brain is the brain now'",
+    "outside SD-card mode: 'the brain was rebuilt from its backup; it moves onto a drive by itself'",
+]
+causes = [
+    { cause = "Christian reformatted the drive (to fix it, or on another computer)", prior = 0.8 },
+    { cause = "the drive's filesystem was damaged beyond repair and recreated", prior = 0.2 },
+]
+checks = ["polymath storage roles", "cat /srv/polymath/MOVED-TO-DRIVE.json", "lsblk -o NAME,SIZE,FSTYPE,MODEL,SERIAL"]
+self_healing = [
+    "in SD-card mode: the SD card's brain becomes the brain after 10 minutes (when the drive is recognised), then moves onto the best drive",
+    "otherwise: rebuilt from the newest backup on another drive (or the standby brain), then moved onto the best drive",
+    "the empty drive is formatted for Linux by itself and can hold the brain again",
+]
+steps = [
+    { needs = "you", do = "if the watch does not recognise the wiped drive (its SD-card mode record is older than 0.11.2): make the SD card's brain the brain now", command = "sudo polymath storage keep-sd-brain" },
+    { needs = "auto", do = "format the empty drive for Linux, then move the brain onto it (drive roles)" },
+]
+since = "0.11.2"
+updated = "0.11.2"
 
 [[fault]]
 id = "agent-memory-high"
@@ -1227,4 +1262,13 @@ what = "After installing v0.11.0 (9c16c4e), polymath doctor stopped with a Trace
 cause = "doctor runs as Christian; the certificate folder is root's and the dashboard's (0750, group polymath), and Python 3.13's Path.is_file raises on EACCES instead of answering False; the tests ran as root and never saw it"
 fault = "doctor-crashed"
 fixed_in = "0.11.1"
+open = true
+
+[[history]]
+date = "2026-10-25"
+version = "0.11.1"
+what = "The feed said 'SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain. To do: plug in the SSD that holds the brain.' Christian had reformatted the SSD, so there is no brain on it."
+cause = "the SSD watch only knew how to wait for the brain's own filesystem to come back; nothing handled a wiped brain drive, and SD-card mode had never recorded the SSD's identity"
+fault = "brain-drive-wiped"
+fixed_in = "0.11.2"
 open = true

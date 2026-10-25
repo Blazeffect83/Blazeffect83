@@ -784,6 +784,17 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
         print(f"`polymath storage {op}` mounts and unmounts drives: run it with sudo", file=sys.stderr)
         return 2
     helper = Helper(config)
+    if op == "keep-sd-brain":  # the SSD was wiped: the SD card's brain becomes the brain (body.ssdwatch)
+        from polymath.body.heal import Healer
+        from polymath.body.volumes import SERVICES
+
+        watch = ssd_watch(config, args, helper, Healer(config, helper.run, services=SERVICES,
+                                                         mounts_at=helper.mounts_at))  # fmt: skip
+        st = watch.load()
+        out = watch.promote(st, "asked for (polymath storage keep-sd-brain)")
+        watch.save(st)
+        print(json.dumps(out))
+        return 0 if st.state == "promoted" else 1
     if op == "heal":
         from polymath.body.heal import Healer
         from polymath.body.volumes import SERVICES
@@ -1559,6 +1570,7 @@ def build_parser() -> argparse.ArgumentParser:
         stsub.add_parser(name, help=helptext).add_argument("target", help="drive id (eject) or /dev/… device")
     stsub.add_parser("heal", help="bring the brain's drive back if it is missing or dead (sudo; a timer runs this)")
     stsub.add_parser("roles", help="which drive holds the brain, which keeps the backups, and why")
+    stsub.add_parser("keep-sd-brain", help="the SSD was reformatted: make the SD card's brain the brain (sudo)")
     stf = stsub.add_parser("format", help="reformat an EMPTY drive for Linux so the brain can move onto it (sudo)")
     stf.add_argument("volume", help="drive id from `polymath storage list`")
     stf.add_argument("--yes", action="store_true", help="really reformat it (refused if it holds files)")

@@ -1,7 +1,7 @@
 #!/bin/sh
 # /usr/local/bin/polymath — the Polymath command for everyone on this machine.
 # The agent's data belongs to the `polymath` user, so commands run as that user (through sudo when needed).
-# `feed`, `doctor`, `caretaker`, `access` and `--help` run as you (they read the dashboard and /run/polymath); `storage attach|detach|eject`
+# `feed`, `doctor`, `caretaker`, `access` and `--help` run as you (they read the dashboard and /run/polymath); `storage attach|detach|eject|keep-sd-brain`
 # need root.
 POLYMATH="${POLYMATH_BIN:-/opt/polymath/venv/bin/polymath}"
 export POLYMATH_CONFIG="${POLYMATH_CONFIG:-/etc/polymath/polymath.toml}"
@@ -10,7 +10,7 @@ case "${1:-}" in
 esac
 if [ "$(id -u)" = 0 ]; then
     case "${1:-} ${2:-}" in
-        "storage attach"|"storage detach"|"storage eject") exec "$POLYMATH" "$@" ;;
+        "storage attach"|"storage detach"|"storage eject"|"storage keep-sd-brain") exec "$POLYMATH" "$@" ;;
     esac
     exec runuser -u polymath -- "$POLYMATH" "$@"
 fi
@@ -18,6 +18,6 @@ if [ "$(id -un)" = polymath ]; then
     exec "$POLYMATH" "$@"
 fi
 case "${1:-} ${2:-}" in
-    "storage attach"|"storage detach"|"storage eject") exec sudo "$POLYMATH" "$@" ;;
+    "storage attach"|"storage detach"|"storage eject"|"storage keep-sd-brain") exec sudo "$POLYMATH" "$@" ;;
 esac
 exec sudo -u polymath --preserve-env=POLYMATH_CONFIG "$POLYMATH" "$@"

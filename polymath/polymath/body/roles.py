@@ -44,6 +44,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 import re
 import shutil
 import time
@@ -64,6 +65,7 @@ log = get_logger("roles")
 STATE = Path("/var/lib/polymath/drive-roles.json")
 PUBLIC = "drive-roles.json"  # in the runtime directory (/run/polymath)
 POSIX = {"ext4", "ext3", "ext2", "btrfs", "xfs", "f2fs"}
+FOREIGN = {"vfat", "exfat", "ntfs"}  # Windows/macOS: never the brain; reformatted when empty (drive care)
 FLAKY_WINDOW_S = 7 * 86400.0
 FLAKY_DROPS = 3  # drop-outs in a week: not trusted with the brain
 MOVE_MARGIN = 2.0  # a better drive must score this much more (a class better) before the brain moves
@@ -359,6 +361,8 @@ class DriveRoles:
         drives = self.drives(st)
         self._measure(st, drives)
         out = self._decide(st, drives)
+        if not out.get("moved"):
+            self._care(st, drives)
         self._cleanup_previous(st, drives)
         # the public copy every run (in memory); the record on the SD card only when a decision or a drive changed
         self.save(st, persist=self._stable(st) != before)
@@ -466,6 +470,10 @@ class DriveRoles:
             )
         if home is not None and drives and not st.backup:
             out.append("the backups are on the brain's own drive: plug in a second drive to keep them safe")
+        for d in drives:
+            if d.fstype == "vfat" and not self._empty(d):
+                out.append(f"{d.name} is FAT32 and holds your files: no file over 4 GB fits on it, so backups and "
+                           "big downloads go elsewhere (it is never reformatted while it holds files)")  # fmt: skip
         if home is not None and home.why_not.startswith("on USB 2"):
             out.append(f"the brain's drive {home.name} is on USB 2: move it to a blue USB 3 port")
         return out
@@ -530,6 +538,45 @@ class DriveRoles:
             st.decision = f"moving the brain onto {best.name} failed; tried again later"
         st.drives = [self._row(d) for d in drives]
         return {"roles": st.brain, "moved": res.action == "moved", "detail": res.detail}
+
+    def _empty(self, d: Drive) -> bool:
+        """Nothing of yours and nothing of Polymath's on it (its own manifest and inventory aside)."""
+        own = {".polymath-volume.json", ".polymath-volume.json.tmp", "inventory.json", ".inventory.json.tmp"}
+        from polymath.body.volumes import JUNK as junk  # system clutter, never your files
+
+        try:
+            if any(e not in junk and e != d.brain.name for e in os.listdir(d.brain.parent)):
+                return False
+            for base, _dirs, names in os.walk(d.brain):
+                if any(not (Path(base) == d.brain and n in own) for n in names):
+                    return False
+        except OSError:
+            return False
+        return True
+
+    def _care(self, st: RolesState, drives: list[Drive]) -> None:
+        """Drive care: an empty drive formatted for Windows/macOS is reformatted for Linux (one a run, once a day at
+        most per drive), so it can hold the brain, backups over 4 GB and full extra room. Never one with a file on it,
+        never the brain's drive."""
+        now = self.clock()
+        if not self.config.storage.care_format_empty:
+            return
+        for d in drives:
+            seen = st.seen.get(d.id, {})
+            if d.home or d.fstype not in FOREIGN or d.plugged_s < self.config.storage.brain_settle_min * 60:
+                continue
+            if now - float(seen.get("care_tried") or 0) < 86400 or not self._empty(d):
+                continue
+            seen["care_tried"] = now
+            self._event(st, "formatting", f"{d.name} is empty and formatted for Windows/macOS ({d.fstype}): "
+                        "reformatting it for Linux (ext4) so Polymath can use all of it")  # fmt: skip
+            self.save(st, persist=True)
+            res = self.helper.format_empty(d.id, by="drive roles (empty drive)")
+            if res.action in {"attached", "formatted", "already", "moved", "home"}:
+                self._event(st, "formatted", f"{d.name} is formatted for Linux now: {res.detail}")
+            else:
+                self._event(st, "format_skipped", f"{d.name} was not reformatted: {res.detail}")
+            return
 
     def _cleanup_previous(self, st: RolesState, drives: list[Drive]) -> None:
         """The old brain drive's copy goes after a week, if the brain's drive has not dropped out since."""

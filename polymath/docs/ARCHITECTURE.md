@@ -560,6 +560,36 @@ Run by `polymath storage heal` (root, every minute) after the drive helper and t
 - **Record**: `/var/lib/polymath/drive-roles.json` only when the decision or a drive's presence, drop-outs or
   measurement changed (`_stable`); `/run/polymath/drive-roles.json` every run.
 
+## A wiped brain drive, and drive care (v0.11.2)
+
+- **Recognising the brain's drive** (`SSDWatch._reformatted`): `MOVED-TO-DRIVE.json` on the SD card now carries the
+  drive's `serial`, `model` and `usb` (vendor:product), written by `Helper.move_home`/`move_brain`
+  (`Helper.drive_identity`). A disk counts as the brain's drive, reformatted, when its serial or USB device matches,
+  or the USB device `sd-card-mode.sh on` recorded, or its model matches the marker's model or name, and no partition
+  carries the brain's filesystem id.
+- **In SD-card mode** (`_absent` → `promote`): after `sd_return_stable_min` minutes it stops the services, renames
+  the marker to `MOVED-TO-DRIVE.json.replaced-<time>`, moves the SD-card brain's entries into the data directory
+  (`_move_dir_in`: `os.replace`, `shutil.move` across filesystems, anything in the way renamed aside; the SD-card
+  marker and seed file renamed hidden so it is not folded as an away brain), removes the drop-in and the SD-card
+  mode record, and restarts every `polymath-volume@` unit and the services. `polymath storage keep-sd-brain` calls
+  `promote` at once.
+- **Outside SD-card mode** (`_on_ssd` → `rebuild`): with the marker present and nothing mounted, a recognised wiped
+  drive for `sd_return_stable_min` minutes leads to a rebuild: the newest `polymath-*.sqlite3.xz` under the drives'
+  `polymath-brain/backups` restored with `maintenance.restore` (integrity-checked; a damaged one is skipped), else
+  the standby brain moved in, else an empty start; ownership back to `polymath`; drives and services restarted. The
+  standby brain's marker stays in its own directory, so the rebuilt brain folds it in.
+- **An old home coming back** (`Helper.mount_home`): when the data directory holds a brain of its own, or the marker
+  names another drive, the returning drive's `home` is renamed `home-previous-<time>` and its manifest made extra
+  room, instead of being mounted over the brain.
+- **Empty partition table** (`Helper._attach`): a whole disk with `PTTYPE` and no filesystem or partition is
+  repartitioned (`sfdisk --wipe always`) and formatted when `format_blank_disks` allows.
+- **Drive care** (`DriveRoles._care`, `care_format_empty`): a mounted, settled, non-home drive with a Windows/macOS
+  filesystem that is empty (`_empty`: only system clutter at its top and only the manifest and inventory in its
+  `polymath-brain`) is reformatted with `Helper.format_empty(by="drive roles (empty drive)")`, which checks again,
+  refuses any file and any Polymath document, records the drive, runs `mkfs.ext4` and attaches it again. One drive a
+  run, a drive at most once a day. `format_empty` now looks for files at any depth in `polymath-brain` (empty folders
+  and Polymath's own notes do not count).
+
 ## What each drive holds, and relearning (v0.11.0, `memory/inventory.py`)
 
 In the agent (`storage.inventory` hourly, `storage.recover` every 10 minutes; neither in SD-card mode nor on standby).

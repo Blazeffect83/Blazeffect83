@@ -40,6 +40,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -192,6 +193,7 @@ class WatchState:
     woke_dev: str = ""
     returned_at: float = 0.0  # the last automatic return (the day of probation starts here)
     last_reset: float = 0.0
+    replaced_since: float = 0.0  # since when the SSD has been plugged in reformatted (its brain is gone)
     events: list[dict[str, Any]] = field(default_factory=list)  # newest last: {at, event, detail}
 
 
@@ -211,6 +213,9 @@ SHORT = {
     "return_failed": "moving back onto the SSD failed; tried again later",
     "probation": "back on the SSD (watched for a day)",
     "fallback": "the SSD failed again: back on the SD card",
+    "replaced": "the SSD was reformatted: the SD card's brain takes over soon",
+    "promoted": "the SD card's brain is the brain now; it moves onto a drive by itself",
+    "rebuilt": "the brain was rebuilt from its backup; it moves onto a drive by itself",
     "home": "on the SSD",
     "no_ssd": "the brain never lived on a drive",
     "manual": "SD-card mode set in polymath.toml",
@@ -312,7 +317,9 @@ class SSDWatch:
 
     def devices(self) -> list[dict[str, Any]]:
         """Every block device (disks and partitions, flattened); a partition carries its disk's transport."""
-        r = self.run(["lsblk", "-J", "-b", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,UUID,TRAN,PKNAME,MOUNTPOINTS"])
+        r = self.run(
+            ["lsblk", "-J", "-b", "-o", "NAME,PATH,TYPE,SIZE,FSTYPE,UUID,TRAN,PKNAME,MOUNTPOINTS,MODEL,SERIAL"]
+        )
         if getattr(r, "returncode", 1) != 0:
             return []
         try:
@@ -506,7 +513,7 @@ class SSDWatch:
                 "not answer: it reports 0 bytes",
                 "it needs more power: a powered USB 3 hub, or the enclosure's own power supply; then plug it in again",
             )
-        if [d for d in known if self._read(d / "authorized") == "1"]:
+        if not usb_disks and [d for d in known if self._read(d / "authorized") == "1"]:
             return self._set(
                 st,
                 "enclosure_only",
@@ -515,12 +522,28 @@ class SSDWatch:
                 "more power (a powered USB 3 hub)",
             )
         others = [d for d in usb_disks if int(d.get("size") or 0)]
+        wiped = self._reformatted(others)
+        if wiped is not None:  # the brain's SSD, reformatted: the brain it held is gone for good
+            st.replaced_since = st.replaced_since or now
+            wait = self.config.storage.sd_return_stable_min * 60
+            if now - st.replaced_since >= wait:
+                return self.promote(st, f"the SSD (/dev/{wiped}) was reformatted, so the brain it held is gone")
+            return self._set(
+                st,
+                "replaced",
+                f"the SSD is plugged in (/dev/{wiped}) but it was reformatted: the brain it held is gone. In "
+                f"{max(1, round((wait - (now - st.replaced_since)) / 60))} min the brain on the SD card becomes the "
+                "brain, and it moves onto a drive by itself",
+                "nothing to do (to do it now: sudo polymath storage keep-sd-brain)",
+            )
+        st.replaced_since = 0.0
         if others:
             return self._set(
                 st,
                 "other_drive",
                 f"a drive is plugged in (/dev/{others[0].get('name')}), but it does not hold Polymath's brain",
-                "plug in the SSD that holds the brain",
+                "plug in the SSD that holds the brain; if that SSD was reformatted (its brain is gone), make the SD "
+                "card's brain the brain: sudo polymath storage keep-sd-brain",
             )
         if was_present:
             self._event(st, "gone", "the SSD went away while it was being checked")
@@ -601,6 +624,151 @@ class SSDWatch:
                 "onto it by itself",
             )
         return self._return_home(st, part, healthy)
+
+    # ---------------------------------------------------------------- the SSD's brain is gone
+    def _marker(self) -> dict[str, Any]:
+        """The SD card's own ``MOVED-TO-DRIVE.json``: which drive holds the brain (id, name, serial, model, USB)."""
+        with contextlib.suppress(OSError, ValueError):
+            raw = json.loads((Path(self.home.paths.data_dir) / MOVED_FILE).read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else {}
+        return {}
+
+    def _reformatted(self, disks: list[dict[str, Any]]) -> str | None:
+        """The disk that is the brain's drive, reformatted (its brain's filesystem is gone), or None. Only on clear
+        evidence that it is the same drive: its serial number or USB device as recorded when the brain moved onto it
+        (``MOVED-TO-DRIVE.json``), the USB device SD-card mode switched off, or the drive model the marker names."""
+        marker = self._marker()
+        serial = str(marker.get("serial") or "").strip()
+        usb_ids = {str(x) for x in (marker.get("usb"), self._sd_record().get("id")) if x}
+        name = str(marker.get("model") or marker.get("name") or "").strip().lower()
+        for d in disks:
+            disk = str(d.get("name") or "")
+            if serial and str(d.get("serial") or "").strip() == serial:
+                return disk
+            usb = self._usb_of(disk)
+            ident = f"{self._read(usb / 'idVendor')}:{self._read(usb / 'idProduct')}" if usb is not None else ""
+            if ident and ident in usb_ids:
+                return disk
+            model = str(d.get("model") or "").strip().lower()
+            if name and model and (model == name or model in name):
+                return disk
+        return None
+
+    def _move_dir_in(self, src: Path, data: Path, stamp: int, *, skip: set[str]) -> None:
+        """Move a brain directory's contents into the brain's own directory (renamed on the same disk, never
+        copied unless it must be); whatever is in the way is renamed aside, never deleted."""
+        data.mkdir(parents=True, exist_ok=True)
+        for entry in sorted(src.iterdir()):
+            if entry.name in skip:
+                with contextlib.suppress(OSError):
+                    os.replace(entry, data / f".{entry.name}.was-{src.name}-{stamp}")
+                continue
+            target = data / entry.name
+            if target.exists():
+                os.replace(target, data / f"{entry.name}.old-{stamp}")
+            try:
+                os.replace(entry, target)
+            except OSError:  # another filesystem: moved the slow way
+                shutil.move(str(entry), str(target))
+
+    def _restart_all(self) -> None:
+        self.run(["systemctl", "reset-failed", "polymath-volume@*.service"])
+        self.run(["systemctl", "restart", "--no-block", "polymath-volume@*.service"])
+        self._start_services()
+
+    def promote(self, st: WatchState | None = None, why: str = "asked for") -> dict[str, Any]:
+        """Make the SD card's brain the brain (its SSD's brain is gone): it moves into the brain's own directory on the
+        SD card (renamed, not copied), SD-card mode ends, and every drive is attached again. Drive roles
+        (``body.roles``) then move it onto the best drive. The SD card's old marker is kept, renamed."""
+        st = st if st is not None else self.load()
+        sd = Path(self.config.storage.sd_dir)
+        data = Path(self.home.paths.data_dir)
+        if not (sd / "db" / "polymath.sqlite3").exists():
+            return self._set(st, "no_ssd", f"there is no brain on the SD card ({sd}) to keep")
+        if self.mounts_at(data):
+            return self._set(st, "manual", f"{data} is a mount already: the brain is not on the SD card")
+        self._event(st, "promoting", f"{why}: the brain on the SD card becomes the brain")
+        self._stop_services()
+        stamp = int(self.clock())
+        from polymath.core import sdcard
+
+        data.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.replace(data / MOVED_FILE, data / f"{MOVED_FILE}.replaced-{stamp}")
+        self._move_dir_in(sd, data, stamp, skip={sdcard.MARKER, sdcard.SEED})
+        for path in (self.dropin, self.sd_state):
+            with contextlib.suppress(OSError):
+                path.unlink()
+        self._restart_all()
+        st.episode, st.replaced_since, st.returned_at = "", 0.0, 0.0
+        self._reset_streak(st)
+        self._event(st, "promoted", f"the brain on the SD card is the brain now ({data}); it moves onto the best drive "
+                    "plugged in by itself (drive roles)")  # fmt: skip
+        return self._set(st, "promoted", "the brain on the SD card is the brain now; it moves onto the best drive "
+                         "plugged in by itself (polymath storage roles)")  # fmt: skip
+
+    def backups_on_drives(self) -> list[Path]:
+        """Verified backups on the drives that are plugged in, newest first (the brain's own drive is gone)."""
+        root = Path(self.home.storage.mount_root)
+        found: list[Path] = []
+        with contextlib.suppress(OSError):
+            for mnt in root.iterdir():
+                with contextlib.suppress(OSError):
+                    found += list((mnt / "polymath-brain" / "backups").glob("polymath-*.sqlite3.xz"))
+        return sorted(found, key=lambda p: p.name, reverse=True)
+
+    def rebuild(self, st: WatchState | None = None, why: str = "asked for") -> dict[str, Any]:
+        """The brain's drive is gone for good (outside SD-card mode): rebuild the brain on the SD card from the newest
+        backup on another drive (what the standby brain learned meanwhile is folded in by itself); without one, the
+        standby brain becomes the brain; without that, it starts afresh. Drive roles then move it onto a drive."""
+        import lzma
+        import sqlite3
+
+        from polymath.body.maintenance import restore
+        from polymath.core import standby
+
+        st = st if st is not None else self.load()
+        data = Path(self.home.paths.data_dir)
+        if self.mounts_at(data):
+            return self._set(st, "home", "the brain lives on its drive")
+        self._event(st, "rebuilding", f"{why}: rebuilding the brain")
+        self._stop_services()
+        stamp = int(self.clock())
+        data.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.replace(data / MOVED_FILE, data / f"{MOVED_FILE}.replaced-{stamp}")
+        how = ""
+        db = data / "db" / "polymath.sqlite3"
+        for backup in self.backups_on_drives():
+            try:
+                db.parent.mkdir(parents=True, exist_ok=True)
+                restore(backup, db)
+            except (OSError, RuntimeError, EOFError, sqlite3.Error, lzma.LZMAError) as exc:  # damaged: the next one
+                self._event(st, "backup_damaged", f"{backup.name} could not be restored ({exc})")
+                continue
+            how = f"from the backup {backup.name} (what the standby brain learned since is added by itself)"
+            break
+        sb = Path(self.home.storage.standby_dir)
+        if not how and (sb / "db" / "polymath.sqlite3").exists():
+            self._move_dir_in(sb, data, stamp, skip={standby.MARKER})
+            how = "from the standby brain (no backup was on the drives that are plugged in)"
+        if not how:
+            how = "afresh: there was no backup and no standby brain"
+        with contextlib.suppress(KeyError, OSError):
+            import pwd
+
+            pw = pwd.getpwnam("polymath")
+            for base, dirs, names in os.walk(data):
+                for name in [*dirs, *names]:
+                    with contextlib.suppress(OSError):
+                        os.lchown(os.path.join(base, name), pw.pw_uid, pw.pw_gid)
+            os.chown(data, pw.pw_uid, pw.pw_gid)
+        self._restart_all()
+        st.replaced_since, st.returned_at = 0.0, 0.0
+        self._event(st, "rebuilt", f"the brain's drive was wiped, so the brain was rebuilt on the SD card {how}; it "
+                    "moves onto the best drive by itself (drive roles)")  # fmt: skip
+        return self._set(st, "rebuilt", f"the brain was rebuilt on the SD card {how}; it moves onto the best drive "
+                         "by itself")  # fmt: skip
 
     # ---------------------------------------------------------------- moving
     def _stop_services(self) -> None:
@@ -696,6 +864,23 @@ class SSDWatch:
     # ---------------------------------------------------------------- after a return
     def _on_ssd(self, st: WatchState) -> dict[str, Any]:
         now = self.clock()
+        data = Path(self.home.paths.data_dir)
+        if self._marker() and not self.mounts_at(data):  # the brain's drive is away: is it back, wiped?
+            target = str(self._marker().get("id") or "")
+            devs = self.devices()
+            here = any(re.sub(r"[^A-Za-z0-9-]", "", str(d.get("uuid") or "")) == target for d in devs)
+            disks = [d for d in devs if d.get("type") == "disk" and int(d.get("size") or 0)]
+            wiped = None if here else self._reformatted(disks)
+            if wiped is not None and self.config.storage.sd_auto_fallback:
+                st.replaced_since = st.replaced_since or now
+                wait = self.config.storage.sd_return_stable_min * 60
+                if now - st.replaced_since >= wait:
+                    return self.rebuild(st, f"the brain's drive (/dev/{wiped}) was reformatted, so its brain is gone")
+                return self._set(st, "replaced", f"the brain's drive is plugged in (/dev/{wiped}) but it was "
+                                 "reformatted: its brain is gone. The brain is rebuilt from the newest backup in "
+                                 f"{max(1, round((wait - (now - st.replaced_since)) / 60))} min, then it moves onto a "
+                                 "drive by itself", "nothing to do")  # fmt: skip
+            st.replaced_since = 0.0
         if not st.returned_at or now - st.returned_at > PROBATION_S:
             if st.returned_at:
                 self._event(st, "trusted", "the SSD stayed fine for a day after coming back")

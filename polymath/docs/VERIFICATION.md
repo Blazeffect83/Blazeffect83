@@ -1204,6 +1204,33 @@ no certificate when there is none; `cert_info` raises only for a permission erro
 
 **Not yet run on the Pi.**
 
+## 12w. A wiped brain drive, drive care, and an empty partition table (v0.11.2)
+
+**Why:** Christian, 2026-10-25: the feed said "SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's
+brain"; he had reformatted the SSD to fix it, so the brain it held is gone and the SD card's brain is the only one.
+Then: "fix this for future issues as well", and "give caretaker abilities to change format etc on the USB drives".
+
+**Tests** (development container):
+- `tests/test_ssdwatch.py` (6 more): a reformatted SSD on the same USB device is "replaced" for ten minutes, then the
+  SD card's brain becomes the brain (renamed, not copied; the old marker and the SD-card marker kept, renamed;
+  SD-card mode's drop-in and record gone; every drive's unit restarted; services started); recognised by its
+  serial as recorded, or by its model in an older marker, and an unrelated drive is not (its message names
+  `keep-sd-brain`); `keep-sd-brain` at once, refused without a brain or with the brain on a drive; outside SD-card
+  mode, rebuilt from the newest backup on another drive with a damaged newer one skipped, else from the standby
+  brain, else afresh; the brain's drive back as it was is not taken for wiped.
+- `tests/test_roles.py` (5 more): an empty exFAT drive is reformatted once it settles, once a day at most
+  (Polymath's own inventory note and Windows' clutter do not count as files); a FAT32 drive with photos and an NTFS
+  drive with Polymath's documents are never reformatted, the FAT32 one gets a warning; the setting switches it
+  off; `format_empty` refuses Polymath's backups and records who formatted; an old brain drive coming back after
+  the brain moved on becomes extra room with its copy kept; the SD card's marker records the drive's serial and USB
+  device.
+- `tests/test_storage.py` (1 more): an empty partition table is repartitioned and formatted, or left with a reason
+  when `format_blank_disks` is off. Two older tests now expect that, and that empty folders are not documents.
+
+**Result:** RESULT_LINE
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

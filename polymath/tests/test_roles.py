@@ -72,6 +72,10 @@ class FakeHelper:
     def _write_manifest(self, brain: Path, manifest: dict[str, Any]) -> None:
         (brain / storage_pool.MANIFEST).write_text(json.dumps(manifest))
 
+    def format_empty(self, vol: str, *, erase_files: bool = False, by: str = "") -> vols.Outcome:
+        self.moves.append(("format", vol, by))
+        return vols.Outcome("attached", f"{vol} formatted ext4", vol)
+
 
 # what lsblk and sysfs would say about each drive
 SSD = {"disk": "sda", "tran": "usb", "rotational": False, "speed": 5000, "power_ma": 896, "usb": "/sys/u/2-1"}
@@ -484,3 +488,87 @@ def test_the_cli_doctor_dashboard_and_inbox_show_the_roles(w, db, capsys, monkey
     assert n == len(w.public()["events"]) and cli.report_drive_roles(db, w.config) == 0
     assert cli.cmd_storage(w.config, argparse.Namespace(op="roles")) == 0
     assert "decision:" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------ drive care: an empty Windows drive is made Linux
+def test_an_empty_windows_formatted_drive_is_reformatted_for_linux_once_it_settles(w):
+    w.helper.on_sd, w.helper.mounted = False, True
+    w.plug("ssd", SSD, home=True, budget=0)
+    stick = w.plug("stick", STICK, label="STICK", fstype="exfat", budget=1 * GB)
+    (stick / "inventory.json").write_text("{}")  # Polymath's own note does not count as a file
+    (stick.parent / "System Volume Information").mkdir()  # nor does Windows' clutter
+    w.tick()
+    assert not [m for m in w.helper.moves if m[0] == "format"]  # still settling
+    w.tick(11)
+    assert ("format", "stick", "drive roles (empty drive)") in w.helper.moves
+    events = [e["event"] for e in w.public()["events"]]
+    assert events[-2:] == ["formatting", "formatted"]
+    w.tick(60)
+    assert len([m for m in w.helper.moves if m[0] == "format"]) == 1  # not again the same day
+
+
+def test_a_drive_with_any_file_on_it_is_never_reformatted(w):
+    w.helper.on_sd, w.helper.mounted = False, True
+    w.plug("ssd", SSD, home=True, budget=0)
+    photos = w.plug("photos", HDD, label="PHOTOS", fstype="vfat", dedicated=False, budget=1 * GB)
+    (photos.parent / "DCIM").mkdir()
+    (photos.parent / "DCIM" / "img.jpg").write_bytes(b"jpg")
+    spilled = w.plug("ntfs", {**HDD, "disk": "sdd"}, fstype="ntfs", budget=1 * GB)
+    (spilled / "bodies").mkdir()
+    (spilled / "bodies" / "pack-000001.bin").write_bytes(b"p")  # Polymath's documents: never erased either
+    w.tick()
+    w.tick(11)
+    assert not [m for m in w.helper.moves if m[0] == "format"]
+    assert any("PHOTOS is FAT32 and holds your files" in x for x in w.public()["warnings"])
+    w.config.storage.care_format_empty = False
+    (photos.parent / "DCIM" / "img.jpg").unlink()
+    (photos.parent / "DCIM").rmdir()
+    w.tick(60 * 25)
+    assert not [m for m in w.helper.moves if m[0] == "format"]  # switched off
+
+
+def test_format_empty_ignores_polymaths_notes_but_never_erases_its_documents(two_drives, config):
+    h, fake, _old, new, _data = two_drives
+    (config.storage.mount_root / "new").mkdir(exist_ok=True)
+    fake.add("/dev/sdc")
+    fake.add("/dev/sdc1", disk="sdc", probe={"TYPE": "exfat", "UUID": "new"})
+    h.mountinfo.write_text(f"36 25 8:33 / {config.storage.mount_root / 'new'} rw - exfat /dev/sdc1 rw\n")
+    (new / "inventory.json").write_text("{}")
+    (new / "backups").mkdir()
+    (new / "backups" / "polymath-1.sqlite3.xz").write_bytes(b"b")
+    out = h.format_empty("new", by="drive roles (empty drive)")
+    assert out.action == "skipped" and "holds Polymath's documents" in out.detail
+    (new / "backups" / "polymath-1.sqlite3.xz").unlink()
+    real = h.run
+
+    def run(args: list[str], *, input: str | None = None) -> subprocess.CompletedProcess[str]:
+        if args[0] == "umount":
+            h.mountinfo.write_text("")  # released
+        out: subprocess.CompletedProcess[str] = real(args, input=input)
+        return out
+
+    h.run = run
+    h.format_empty("new", by="drive roles (empty drive)")
+    assert ["mkfs.ext4", "-q", "-F", "-L", "POLYMATH", "-m", "0", "/dev/sdc1"] in fake.calls
+    reg = json.loads(h.registry.read_text())
+    assert any(v.get("by") == "drive roles (empty drive)" for v in reg.values())
+
+
+def test_an_old_brain_drive_coming_back_never_covers_the_brain_that_lives_on(two_drives, config):
+    h, fake, old, _new, data = two_drives
+    (data / MOVED_FILE).write_text(json.dumps({"id": "somewhere-else"}))  # the brain moved on (or was rebuilt)
+    (old / vols.HOME / HOME_FILE).write_text("{}")
+    manifest = storage_pool.read_manifest(old) or {}
+    out = h.mount_home(old, manifest, vols.Outcome("attached", "/dev/sdb1 → x", "old"))
+    assert "older copy of the brain" in out.detail and not any(c[:2] == ["mount", "--bind"] for c in fake.calls)
+    m = storage_pool.read_manifest(old) or {}
+    assert m["home"] is False and (old / m["previous_home"]["dir"]).is_dir()
+
+
+def test_the_sd_card_remembers_which_drive_holds_the_brain(two_drives, config, monkeypatch):
+    h, _fake, old, new, data = two_drives
+    monkeypatch.setattr(h, "drive_identity", lambda m: {"serial": "S-NEW", "model": "T7", "usb": "04e8:4001"})
+    h.move_brain(old, storage_pool.read_manifest(old) or {}, new, storage_pool.read_manifest(new) or {})
+    marker = json.loads((data / MOVED_FILE).read_text())
+    assert marker["id"] == "new" and marker["serial"] == "S-NEW" and marker["usb"] == "04e8:4001"
+    assert vols.Helper.drive_identity(h, {"serial": " S1 ", "model": "M"})["serial"] == "S1"

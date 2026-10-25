@@ -606,6 +606,28 @@ polymath storage list      # the same drives with brain space, use and documents
 than the Pi 4 gives its USB ports (1.2 A together: use a powered USB 3 hub), when the backups have no other drive,
 and when the brain's drive is on a USB 2 port.
 
+### <a id="wiped"></a>A brain drive that was reformatted, and drive care (v0.11.2)
+
+**The brain's drive was reformatted** (to fix it, or on another computer): its brain is gone, and Polymath does not
+wait for it:
+- **in SD-card mode**, once it recognises the drive (its serial number or USB device as recorded when the brain moved
+  onto it, the USB device `sd-card-mode.sh on` switched off, or its model), the brain on the SD card becomes the
+  brain after 10 minutes: renamed into `/srv/polymath` (not copied), SD-card mode ends, and it moves onto the best
+  drive by itself ([drive roles](#roles)). Right away, or when it does not recognise the drive:
+  `sudo polymath storage keep-sd-brain`;
+- **outside SD-card mode**, the brain is rebuilt on the SD card from the newest backup on another drive (a damaged
+  one is skipped, and what the standby brain read meanwhile is added by itself), else from the standby brain, else
+  afresh; then it moves onto the best drive.
+
+An old brain drive that comes back after the brain moved on never covers it: its copy is kept for a week as
+`home-previous-…` and the drive becomes extra room.
+
+**Drive care.** Plug in a drive formatted for Windows or a Mac (exFAT, NTFS, FAT32) that holds **nothing**, and once
+it has been plugged in for 10 minutes it is reformatted for Linux (ext4), so it can hold the brain, backups over 4 GB
+and full extra room. A drive with your files on it is never reformatted by itself; a FAT32 one gets a warning (no file
+over 4 GB fits). A disk with only an empty partition table (what deleting its volumes in Windows leaves) counts as
+blank and is formatted too. Off: `[storage] care_format_empty = false`.
+
 ### <a id="relearn"></a>What each drive holds, and a drive lost by accident (v0.11.0)
 
 Every hour Polymath writes down what each drive holds: the documents whose texts are there (how many, from which
@@ -812,6 +834,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
 | `polymath storage roles` says a drive is `not the brain: …` | the reason it gives: on USB 2 (move it to a blue port), holds your files or is formatted for Windows/macOS (only a Polymath drive holds the brain), too small, still settling (10 min), or dropped out this week. It is used for backups or extra room meanwhile |
 | doctor: `the drives ask for … mA, more than the 1200 mA a Pi 4 gives` | too many bus-powered drives for the Pi's ports: a powered USB 3 hub, or drives with their own power supply; otherwise they drop out |
+| `SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain` | the brain's SSD was reformatted (its brain is gone) or another drive is plugged in. If you reformatted it: `sudo polymath storage keep-sd-brain` (the SD card's brain becomes the brain and moves onto the SSD by itself); v0.11.2 also does this by itself when it recognises the drive ([§8](#wiped)) |
 | the feed: `drive … is still gone … relearning` | a drive has been away over 2 hours: plug it back in if it was an accident (everything on it is readable again at once); if it died, `polymath storage retire <id>` |
 | `polymath storage usage` forecast says a few days left | the card fills up: the oldest document texts go first (the facts stay). Plug in a drive, or lower what it reads (`[senses]`); the forecast updates hourly |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |

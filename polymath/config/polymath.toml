@@ -124,3 +124,4 @@ auto_roles = true
 brain_settle_min = 10.0             # a drive must stay plugged in this long before the brain moves onto it
 brain_allow_usb2 = false            # USB 2 drives are used for backups and extra room, never the brain
 relearn_after_h = 2.0               # a drive gone this long counts as lost: what it held is relearned, most important first
+care_format_empty = true             # an EMPTY Windows/macOS-formatted drive is reformatted for Linux; never one with files
