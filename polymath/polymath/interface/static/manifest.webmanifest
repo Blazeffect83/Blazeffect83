@@ -1,0 +1,11 @@
+{
+  "name": "Polymath",
+  "short_name": "Polymath",
+  "description": "Your Raspberry Pi's learning agent: what it is learning, live.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f1419",
+  "theme_color": "#0f1419",
+  "icons": [{"src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

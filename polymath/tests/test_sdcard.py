@@ -90,8 +90,8 @@ def test_sd_card_mode_puts_the_whole_brain_on_the_sd_card(tmp_path, monkeypatch)
     assert not (st.adopt or st.move_home or st.heal or st.heal_power_cycle or st.standby)  # no drive is touched
     assert not (st.format_blank_disks or st.format_fresh_drives)
     assert st.mount_root == brain / "no-drives" and not st.mount_root.exists()  # the pool sees no drive
-    assert c.body.disk_min_free_gb == 2.0 and c.body.backup_keep == 2
-    assert c.body.disk_budget_gb == 11.0  # 1 MB used + 13 GB free − 2 GB kept for the system
+    assert c.body.disk_min_free_gb == 3.0 and c.body.backup_keep == 1  # v0.9.0: 3 GB reserve, one backup
+    assert c.body.disk_budget_gb == 10.0  # 1 MB used + 13 GB free − 3 GB kept free
     assert c.senses.openalex_files == 2  # never big-brain mode on an SD card
     fixed = sd_config(tmp_path, "sd_budget_gb = 5.0\nsd_keep_free_gb = 3.0\n")
     assert fixed.body.disk_budget_gb == 5.0 and fixed.body.disk_min_free_gb == 3.0
@@ -104,7 +104,7 @@ def test_sd_card_mode_puts_the_whole_brain_on_the_sd_card(tmp_path, monkeypatch)
 def test_sd_card_settings_and_their_limits(tmp_path):
     c = make_config(tmp_path)
     assert not c.storage.sd_only and c.storage.sd_dir == Path("/var/lib/polymath/brain")
-    assert c.storage.sd_keep_free_gb == 2.0 and c.storage.sd_budget_gb == 0.0
+    assert c.storage.sd_keep_free_gb == 3.0 and c.storage.sd_budget_gb == 0.0
     for extra, msg in (("sd_keep_free_gb = 0.1\n", "sd_keep_free_gb"), ("sd_budget_gb = -1.0\n", "sd_budget_gb")):
         with pytest.raises(ConfigError, match=msg):
             sd_config(tmp_path, extra)

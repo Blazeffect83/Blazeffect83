@@ -13,3 +13,14 @@ ExecStart=/opt/polymath/venv/bin/polymath storage attach /dev/%I
 ExecStop=/opt/polymath/venv/bin/polymath storage detach /dev/%I
 # formatting a large blank drive takes a minute or two; moving the brain off the SD card (copy + check) longer
 TimeoutStartSec=60min
+# Runs as root (it mounts drives, resets USB devices, writes sysfs), so no mount-namespace options here: those
+# would hide its mounts from the rest of the system. What it never needs is switched off (v0.9.0 security audit):
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

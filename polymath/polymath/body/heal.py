@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 import shutil
 import time
@@ -37,6 +36,7 @@ from polymath.body.sensors import unresponsive_usb_disks
 from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.logging import get_logger
+from polymath.core.safefs import safe_write
 
 log = get_logger("heal")
 
@@ -130,10 +130,8 @@ class Healer:
                 continue
             with contextlib.suppress(OSError):
                 target.parent.mkdir(parents=True, exist_ok=True)
-                tmp = target.with_name(f".{target.name}.tmp")
-                tmp.write_text(payload, encoding="utf-8")
-                os.chmod(tmp, 0o644)
-                os.replace(tmp, target)
+                # root writes into /run/polymath, which the polymath user owns: never through a planted link
+                safe_write(target.parent, target.name, payload, mode=0o644)
 
     def _did(self, st: HealState, action: str, detail: str) -> dict[str, Any]:
         entry = {"at": self.clock(), "action": action, "detail": detail}

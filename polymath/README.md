@@ -29,7 +29,15 @@ implemented here and learns only from data the agent downloads itself.
   or a different answer from what everything else it knew pointed to.
 - **Knowledge map:** an interactive star map of what it has read about on the dashboard, with a time-lapse of
   its brain growing. Click a topic and it tells you what it knows.
-- **Watch from your phone:** `http://<pi>:8765/live` shows the face and the live feed.
+- **Watch from your PC's browser, privately** (v0.9.0): `https://<pi>:8443/` in Chrome on your home network, after
+  pairing once with an 8-character code that `install.sh` (or `polymath access pair`) shows. Only paired browsers
+  get in: HTTPS with the Pi's own certificate, home network only (anything from the internet is refused before it
+  reaches the dashboard), a revocable key per device (`polymath access devices` / `revoke`), and a log of every
+  refusal. Install it as a Chrome app for its own window. The sign-in-free page stays on the Pi itself.
+- **Makes the SD card last** (v0.9.0): in SD-card mode it backs up weekly and keeps one backup (instead of two
+  nightly ones, about 5 GB of writes a night), keeps 3 GB free, and forecasts when the room would run out
+  (`polymath storage usage`, the dashboard, and the caretaker, who acts three days ahead).
+- **Watch from your phone:** `https://<pi>:8443/live` (paired like the PC) shows the face and the live feed.
 - **Busy, never falsely offline** (v0.8.2): while one long step works (a backup, a quiz, a big query on the SD
   card), a small watchdog thread vouches for it, and the feed says `one long step: 4 min so far — busy, not stuck`
   instead of `agent offline`. A really stuck agent is still restarted. Quizzes and search are about 3× faster.
@@ -127,8 +135,9 @@ sudo ./install.sh
 ```
 
 That's it. The agent and dashboard start now and at every boot. The desktop logs in automatically and opens
-a terminal with the **live feed**. The browser dashboard (charts, topics, agents, ask box) is in the menu, and
-on any device on your network at `http://<pi-address>:8765/`.
+a terminal with the **live feed**. The browser dashboard (charts, topics, agents, ask box) is in the menu. For
+your PC, the install ends with a pairing code and the address to open (`https://<pi-address>:8443/`): type the
+code in once and that browser is in ([docs/OPERATIONS.md §3](docs/OPERATIONS.md#browser)).
 
 ## Use
 

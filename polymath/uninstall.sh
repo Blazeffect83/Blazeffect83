@@ -73,6 +73,6 @@ if [ "$PURGE" = 1 ]; then
         userdel polymath || true
     fi
 else
-    say "kept /srv/polymath and /var/lib/polymath (learned data, backups) and /etc/polymath; use --purge --yes to delete them"
+    say "kept /srv/polymath and /var/lib/polymath (learned data, backups, paired browsers) and /etc/polymath (settings, the HTTPS certificate); use --purge --yes to delete them"
 fi
 say "done"

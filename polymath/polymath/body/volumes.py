@@ -65,6 +65,7 @@ from typing import Any
 from polymath.core import fsprobe
 from polymath.core.config import HOME_FILE, MOVED_FILE, Config
 from polymath.core.logging import get_logger
+from polymath.core.safefs import safe_dir, safe_write
 from polymath.memory.pool import BRAIN, MANIFEST, ignored_ids, read_manifest
 
 log = get_logger("volumes")
@@ -437,13 +438,12 @@ class Helper:
     ) -> Outcome:
         st = self.config.storage
         brain = mnt / BRAIN
-        created = not brain.exists()
-        brain.mkdir(exist_ok=True)
         posix = pr.get("TYPE") in POSIX_FS
-        if posix:
-            uid, gid = self.owner()
-            os.chown(brain, uid, gid)
-            os.chmod(brain, 0o750)
+        try:  # never through a link: a crafted drive's polymath-brain -> /etc must not make root chown /etc
+            created = safe_dir(brain, mode=0o750 if posix else None, owner=self.owner() if posix else None)
+        except OSError as exc:
+            self._cleanup(mnt, mounted=True)
+            return Outcome("skipped", f"its {BRAIN} folder is not a plain folder ({exc.strerror}): not used", vol)
         manifest = read_manifest(brain)
         if manifest is not None and manifest.get("retired"):
             self._cleanup(mnt, mounted=True)
@@ -477,11 +477,7 @@ class Helper:
             }
         manifest["device"] = dev
         manifest["attached_at"] = self.clock()
-        tmp = brain / (MANIFEST + ".tmp")
-        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        if posix:
-            os.chown(tmp, *self.owner())
-        tmp.replace(brain / MANIFEST)
+        safe_write(brain, MANIFEST, json.dumps(manifest, indent=2), mode=0o640, owner=self.owner() if posix else None)
         what = "dedicated drive" if manifest["dedicated"] else "shared drive"
         return Outcome(
             "attached",
@@ -652,11 +648,14 @@ class Helper:
         return Outcome("home", f"{out.detail}; the brain is back on this drive and the agent is starting", out.volume)
 
     def _write_manifest(self, brain: Path, manifest: dict[str, Any]) -> None:
-        tmp = brain / (MANIFEST + ".tmp")
-        tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        with contextlib.suppress(OSError):
-            os.chown(tmp, *self.owner())
-        tmp.replace(brain / MANIFEST)
+        try:
+            owner: tuple[int, int] | None = self.owner()
+        except (KeyError, OSError):
+            owner = None
+        try:
+            safe_write(brain, MANIFEST, json.dumps(manifest, indent=2), mode=0o640, owner=owner)
+        except PermissionError:  # not root (tests, a non-POSIX drive): the plain write, still never through a link
+            safe_write(brain, MANIFEST, json.dumps(manifest, indent=2), mode=0o640)
 
     def format_empty(self, vol: str, *, erase_files: bool = False) -> Outcome:
         """Reformat an adopted drive (only on request): Linux ext4, so the brain can move there. A drive holding

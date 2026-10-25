@@ -6,6 +6,9 @@
   heartbeat is younger than ``loop.heartbeat_stale`` (60 s) — so systemd, the
   live feed and monitoring see a stalled agent as unhealthy.
 * Strict CSP, small request bodies, per-client rate limit for ``/api/ask``.
+* Two listeners (``serve``): the Pi's own ``http://127.0.0.1:8765`` (loopback, no sign-in), and, for your other
+  devices, ``https://<pi>:8443``: home network only, a paired device required (``interface.access``). Both check the
+  ``Host`` header (DNS rebinding), and every POST must be JSON from the page's own origin (cross-site requests).
 * ``/api/feed`` serves the live learning feed to ``polymath feed`` (the desktop terminal), so the
   desktop user never needs access to the database.
 * It never hangs: requests run on a fixed pool of threads, each with its own read-only connection, and every
@@ -16,16 +19,20 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import sqlite3
+import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -34,6 +41,7 @@ from polymath.core.config import Config
 from polymath.core.db import Database
 from polymath.core.logging import get_logger
 from polymath.core.loop import heartbeat_path
+from polymath.interface import access as acc
 from polymath.version import read_build
 
 log = get_logger("dashboard")
@@ -57,9 +65,20 @@ STATIC = {
     "live.js": "text/javascript; charset=utf-8",
     "face.js": "text/javascript; charset=utf-8",
     "focus.js": "text/javascript; charset=utf-8",
+    "access.js": "text/javascript; charset=utf-8",
+    "pair.html": "text/html; charset=utf-8",
+    "pair.js": "text/javascript; charset=utf-8",
+    "manifest.webmanifest": "application/manifest+json",
+    "sw.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
     "icon.svg": "image/svg+xml",
 }
+# what a browser that is not paired yet may load from the remote listener: the pairing page and its parts, the
+# app manifest and icon (Chrome fetches those without cookies), and the Pi's public CA certificate
+PUBLIC_REMOTE = frozenset({"/pair", "/static/pair.js", "/static/style.css", "/static/icon.svg", "/ca.crt",
+                           "/manifest.webmanifest", "/sw.js", "/api/access/pair", "/api/access/me"})  # fmt: skip
+HANDSHAKE_S = 10.0  # a TLS client gets this long to say hello
+REQUEST_TIMEOUT_S = 30.0  # an idle or trickling connection is closed after this long (both listeners)
 SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
@@ -67,7 +86,28 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
     "Cache-Control": "no-store",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()",
 }
+
+
+@dataclass
+class Gate:
+    """Who may use a listener (``interface.access``): ``remote`` needs the home network and a paired device."""
+
+    access: acc.Access
+    remote: bool = False
+    nets: list[Any] = field(default_factory=list)
+    names: set[str] = field(default_factory=set)
+    tls_dir: Path = Path("/etc/polymath/tls")
+    port: int = 8443  # the remote listener's port (shown when a pairing code is made)
+
+
+def gate_for(config: Config, *, remote: bool) -> Gate:
+    a = config.access
+    return Gate(acc.Access(a.state_dir), remote=remote, nets=acc.networks(a.networks),
+                names=acc.host_names(a.names), tls_dir=Path(a.tls_dir), port=a.port)  # fmt: skip
 
 
 class DashboardData:
@@ -374,6 +414,23 @@ class DashboardData:
         except FeedUnavailable:
             raise FileNotFoundError(self.config.paths.db_path) from None  # nothing at all to show: 503
 
+    def storage(self, db: Database) -> dict[str, Any]:
+        """Where the room goes and when it would run out (``body.usage``; cheap: file sizes and vitals)."""
+        from polymath.body import usage
+
+        f = usage.files(self.config)
+        fc = usage.forecast(db, keep_free_gb=self.config.body.disk_min_free_gb)
+        where = "SD card" if f["sd_card"] else "brain's disk"
+        lines = [f"{usage.gb(f['free'])} free on the {where} (it keeps {usage.gb(f['keep_free'])} free): database "
+                 f"{usage.gb(f['database'])}, backups {usage.gb(f['backups'])} ({f['backup_count']}), indexes "
+                 f"{usage.gb(f['indexes'])}."]  # fmt: skip
+        if fc is not None and fc.get("days_left") is not None:
+            lines.append(f"Free space falls {fc['decline_gb_per_day']:.2f} GB a day: about {fc['days_left']:.0f} days "
+                         "before it starts dropping old document texts (facts stay).")  # fmt: skip
+        elif fc is not None:
+            lines.append("Free space is steady.")
+        return {"files": f, "forecast": fc, "lines": lines}
+
     def insights(self) -> dict[str, Any]:
         """The weekly recap, predictions, surprises, and the disks (one call for the dashboard's new panels)."""
         from polymath.body import wear
@@ -399,6 +456,7 @@ class DashboardData:
             "predictions": sb | {"line": predictions.describe(sb)},
             "didyouknow": surprise.recent(db, time.time() - 7 * 86400, 6),
             "wear": [r | {"line": wear.describe(r)} for r in wear.report(db, self.config)],
+            "storage": self.storage(db),
             "home": home_info,
             "changes": [
                 {
@@ -496,6 +554,10 @@ class DashboardData:
         return {**ans.to_dict(), "rendered": ans.render()}
 
 
+RATE_KEYS_IDLE = 1024  # more clients than this: drop the idle ones
+RATE_KEYS_MAX = 4096  # never more than this, whatever happens
+
+
 class RateLimiter:
     def __init__(self, per_minute: int) -> None:
         self.per_minute = per_minute
@@ -511,20 +573,73 @@ class RateLimiter:
             if len(q) >= self.per_minute:
                 return False
             q.append(now)
+            if len(self.hits) > RATE_KEYS_IDLE:  # one entry per client ever seen: drop the idle ones
+                for k in [k for k, v in self.hits.items() if not v or now - v[-1] > 60]:
+                    del self.hits[k]
+                if len(self.hits) > RATE_KEYS_MAX:  # a flood of busy addresses: forget the least recent half
+                    keep = sorted(self.hits.items(), key=lambda kv: kv[1][-1])[-RATE_KEYS_MAX // 2 :]
+                    self.hits = defaultdict(deque, keep)
             return True
 
 
-def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequestHandler]:
+def make_handler(data: DashboardData, limiter: RateLimiter, gate: Gate | None = None) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "Polymath"
         sys_version = ""
+        timeout = REQUEST_TIMEOUT_S
+        device: acc.Device | None = None
+
+        def _gate(self) -> bool:
+            """Let this request in? Sends the refusal itself when not (``interface.access``)."""
+            self.device = None
+            if gate is None:
+                return True
+            ip = str(self.client_address[0])
+            if gate.remote and not acc.client_allowed(ip, gate.nets):
+                gate.access.log("refused", ip=ip, why="not on the home network")
+                self._send(403, b"home network only\n", "text/plain; charset=utf-8")
+                return False
+            host = self.headers.get("Host")
+            if not acc.host_allowed(host, gate.names):
+                self._json(421, {"error": "this server does not answer to that host name"})
+                return False
+            path = urlsplit(self.path).path
+            if self.command == "POST":
+                ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                origin = self.headers.get("Origin")
+                if ctype != "application/json":
+                    self._json(415, {"error": "expected application/json"})
+                    return False
+                scheme = "https" if gate.remote else "http"
+                if (gate.remote or origin) and not acc.same_origin(origin, host, scheme):  # the CLI sends no Origin
+                    gate.access.log("refused", ip=ip, why="cross-site request", path=path)
+                    self._json(403, {"error": "cross-site requests are refused"})
+                    return False
+            if not gate.remote:
+                return True
+            self.device = gate.access.check(acc.cookie_token(self.headers.get("Cookie")), ip=ip)
+            if self.device is not None or path in PUBLIC_REMOTE:
+                return True
+            if self.command in {"GET", "HEAD"} and not path.startswith("/api/") and path != "/health":
+                self.send_response(303)
+                self.send_header("Location", "/pair")
+                self.send_header("Content-Length", "0")
+                for k, v in SECURITY_HEADERS.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                return False
+            self._json(401, {"error": "this browser is not paired with the Pi yet", "pair": "/pair"})
+            return False
 
         def log_message(self, fmt: str, *args: Any) -> None:
             log.debug("http", extra={"client": self.client_address[0], "line": fmt % args})
 
-        def _send(self, status: int, body: bytes, ctype: str = "application/json") -> None:
+        def _send(self, status: int, body: bytes, ctype: str = "application/json",
+                  extra: dict[str, str] | None = None) -> None:  # fmt: skip
             self.send_response(status)
             self.send_header("Content-Type", ctype)
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.send_header("Content-Length", str(len(body)))
             for k, v in SECURITY_HEADERS.items():
                 self.send_header(k, v)
@@ -532,17 +647,30 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
             if self.command != "HEAD":
                 self.wfile.write(body)
 
-        def _json(self, status: int, obj: Any) -> None:
-            self._send(status, json.dumps(obj, default=str).encode())
+        def _length(self) -> int:
+            """The request body's length, or -1 for a missing, negative or non-numeric Content-Length."""
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return -1
+            return n if n >= 0 else -1
+
+        def _json(self, status: int, obj: Any, extra: dict[str, str] | None = None) -> None:
+            self._send(status, json.dumps(obj, default=str).encode(), extra=extra)
 
         def do_HEAD(self) -> None:
             self.do_GET()
 
         def do_GET(self) -> None:
+            if not self._gate():
+                return
             url = urlsplit(self.path)
             path = url.path
             limited: Database | None = None
             try:
+                if gate is not None and (path in {"/pair", "/ca.crt", "/manifest.webmanifest", "/sw.js"}
+                                         or path.startswith("/api/access/")):  # fmt: skip
+                    return self._access_get(path)
                 if path == "/health" or path.startswith("/api/"):
                     try:
                         limited = data.db()
@@ -556,6 +684,8 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     return self._static(path.removeprefix("/static/"))
                 if path == "/health":
                     ok, body = data.health()
+                    if gate is not None and gate.remote:  # other devices learn only whether it is up
+                        body = {k: v for k, v in body.items() if k in {"ok", "heartbeat_age_s", "state"}}
                     return self._json(200 if ok else 503, body)
                 if path == "/api/overview":
                     return self._json(200, data.overview())
@@ -604,9 +734,14 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
                     limited.limit_queries(None)
 
         def do_POST(self) -> None:
-            if urlsplit(self.path).path != "/api/ask":
+            if not self._gate():
+                return
+            path = urlsplit(self.path).path
+            if gate is not None and path.startswith("/api/access/"):
+                return self._access_post(path)
+            if path != "/api/ask":
                 return self._json(405, {"error": "the dashboard is read-only"})
-            length = int(self.headers.get("Content-Length") or 0)
+            length = self._length()
             if length <= 0 or length > MAX_BODY:
                 return self._json(413, {"error": f"body must be 1..{MAX_BODY} bytes"})
             if not limiter.allow(self.client_address[0]):
@@ -628,6 +763,95 @@ def make_handler(data: DashboardData, limiter: RateLimiter) -> type[BaseHTTPRequ
             except Exception:
                 log.exception("ask failed")
                 return self._json(500, {"error": "internal error"})
+
+        # ------------------------------------------------------------------ private access (interface.access)
+        def _body(self) -> dict[str, Any] | None:
+            length = self._length()
+            if length < 0 or length > MAX_BODY:
+                self._json(413, {"error": f"body must be at most {MAX_BODY} bytes"})
+                return None
+            try:
+                obj = json.loads(self.rfile.read(length) or b"{}")
+            except ValueError:
+                self._json(400, {"error": "expected JSON"})
+                return None
+            if not isinstance(obj, dict):
+                self._json(400, {"error": "expected a JSON object"})
+                return None
+            return obj
+
+        def _owner(self) -> bool:
+            """The Pi itself (loopback listener) or a paired device: may manage access."""
+            assert gate is not None
+            return not gate.remote or self.device is not None
+
+        def _access_get(self, path: str) -> None:
+            assert gate is not None
+            if path == "/pair":
+                return self._static("pair.html")
+            if path == "/manifest.webmanifest":
+                return self._static("manifest.webmanifest")
+            if path == "/sw.js":
+                return self._static("sw.js")
+            if path == "/ca.crt":
+                try:
+                    pem = (gate.tls_dir / "ca.crt").read_bytes()
+                except OSError:
+                    return self._json(404, {"error": "no certificate yet (scripts/access-cert.sh)"})
+                disp = {"Content-Disposition": 'attachment; filename="polymath-ca.crt"'}
+                return self._send(200, pem, "application/x-x509-ca-cert", extra=disp)
+            if path == "/api/access/me":
+                dev = self.device.public() if self.device else None
+                known = {"devices": len(gate.access.devices())} if self._owner() else {}  # not told to strangers
+                return self._json(200, {"remote": gate.remote, "device": dev, **known,
+                                        "fingerprint": acc.fingerprints(gate.tls_dir / "ca.crt")})  # fmt: skip
+            if not self._owner():  # pragma: no cover - the gate already asked for a paired device
+                return self._json(401, {"error": "not paired"})
+            if path == "/api/access/devices":
+                mine = self.device.id if self.device else None
+                return self._json(
+                    200, {"devices": [d.public() | {"this": d.id == mine} for d in gate.access.devices()]}
+                )
+            if path == "/api/access/log":
+                return self._json(200, {"log": gate.access.history(100)})
+            return self._json(404, {"error": "not found"})
+
+        def _access_post(self, path: str) -> None:
+            assert gate is not None
+            body = self._body()
+            if body is None:
+                return None
+            ip = str(self.client_address[0])
+            if path == "/api/access/pair":
+                if not gate.remote:
+                    return self._json(400, {"error": f"pair from your other device, at https://<this Pi>:{gate.port}"})
+                name = acc.device_name(self.headers.get("User-Agent"), str(body.get("name") or ""))
+                try:
+                    token, dev = gate.access.pair(str(body.get("code") or ""), name=name, ip=ip)
+                except acc.PairError as exc:
+                    return self._json(403, {"error": str(exc)})
+                return self._json(
+                    200, {"ok": True, "device": dev.public()}, extra={"Set-Cookie": acc.set_cookie(token)}
+                )
+            if not self._owner():  # pragma: no cover - the gate already asked for a paired device
+                return self._json(401, {"error": "not paired"})
+            if path == "/api/access/code":
+                code = gate.access.new_code()
+                return self._json(200, {"code": code, "expires_in": int(acc.CODE_TTL), "urls": acc.lan_urls(gate.port),
+                                        "fingerprint": acc.fingerprints(gate.tls_dir / "ca.crt")})  # fmt: skip
+            if path == "/api/access/revoke":
+                which = str(body.get("id") or "")
+                if not which:
+                    return self._json(400, {"error": 'expected {"id": "<device id>"} or {"id": "all"}'})
+                n = gate.access.revoke(which, by=self.device.name if self.device else "the Pi")
+                own = self.device is not None and which in {"all", self.device.id}
+                return self._json(200, {"revoked": n}, extra={"Set-Cookie": acc.clear_cookie()} if own else None)
+            if path == "/api/access/logout":
+                if self.device is None:
+                    return self._json(400, {"error": "this browser is not signed in"})
+                gate.access.revoke(self.device.id, by=self.device.name)
+                return self._json(200, {"ok": True}, extra={"Set-Cookie": acc.clear_cookie()})
+            return self._json(404, {"error": "not found"})
 
         def do_PUT(self) -> None:
             self._json(405, {"error": "the dashboard is read-only"})
@@ -654,6 +878,7 @@ class PooledHTTPServer(ThreadingHTTPServer):
                  *, workers: int = WORKERS) -> None:  # fmt: skip
         super().__init__(address, handler)
         self.data = data
+        self.owns_data = True
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dashboard")
 
     def process_request(self, request: Any, client_address: Any) -> None:
@@ -661,19 +886,74 @@ class PooledHTTPServer(ThreadingHTTPServer):
 
     def server_close(self) -> None:
         super().server_close()
-        self.data.stop()
+        if self.owns_data:
+            self.data.stop()
         self.pool.shutdown(wait=False, cancel_futures=True)
 
 
-def make_server(config: Config, host: str | None = None, port: int | None = None) -> PooledHTTPServer:
+class TLSServer(PooledHTTPServer):
+    """The remote listener: each connection's TLS handshake runs on a worker thread with a time limit, so a slow or
+    silent client never holds up accepting the next one."""
+
+    def __init__(self, address: tuple[str, int], handler: type[BaseHTTPRequestHandler], data: DashboardData,
+                 ctx: ssl.SSLContext) -> None:  # fmt: skip
+        super().__init__(address, handler, data)
+        self.ctx = ctx
+        self.owns_data = False  # the loopback listener's data: stopped once, by it
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            request.settimeout(HANDSHAKE_S)
+            tls = self.ctx.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):  # not TLS, wrong version, or gave up: nothing to answer
+            self.shutdown_request(request)
+            return
+        super().process_request_thread(tls, client_address)
+
+
+def tls_context(tls_dir: Path) -> ssl.SSLContext | None:
+    """TLS 1.2+ with the Pi's certificate (``scripts/access-cert.sh``), or None when there is none yet."""
+    crt, key = Path(tls_dir) / "server.crt", Path(tls_dir) / "server.key"
+    if not (crt.is_file() and key.is_file()):
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.options |= ssl.OP_NO_COMPRESSION
+    try:
+        ctx.load_cert_chain(str(crt), str(key))
+    except (OSError, ssl.SSLError) as exc:
+        log.error("cannot load the dashboard's TLS certificate", extra={"error": str(exc)})
+        return None
+    return ctx
+
+
+def loopback(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def make_server(
+    config: Config, host: str | None = None, port: int | None = None, *, gate: Gate | None = None
+) -> PooledHTTPServer:
     data = DashboardData(config)
     server = PooledHTTPServer(
         (host or config.dashboard.host, config.dashboard.port if port is None else port),
-        make_handler(data, RateLimiter(ASK_PER_MINUTE)),
+        make_handler(data, RateLimiter(ASK_PER_MINUTE), gate),
         data,
     )
     data.start_counter()
     return server
+
+
+def make_remote_server(
+    config: Config, data: DashboardData, gate: Gate, ctx: ssl.SSLContext, *, host: str = "0.0.0.0",
+    port: int | None = None,
+) -> TLSServer:  # fmt: skip
+    """The listener for your other devices: HTTPS, home network, paired devices (``interface.access``)."""
+    return TLSServer((host, config.access.port if port is None else port),
+                     make_handler(data, RateLimiter(ASK_PER_MINUTE), gate), data, ctx)  # fmt: skip
 
 
 def self_check_url(server: PooledHTTPServer) -> str:
@@ -714,15 +994,40 @@ def serve(config: Config) -> int:
 
     from polymath.body.systemd_notify import Notifier
 
-    server = make_server(config)
+    host = config.dashboard.host
+    if not loopback(host):  # the sign-in-free listener never leaves the Pi; other devices use the remote one
+        log.warning("dashboard.host is not loopback: the Pi's own listener stays on 127.0.0.1 (other devices: "
+                    "https on access.port, after pairing)", extra={"host": host})  # fmt: skip
+        host = "127.0.0.1"
+    local = gate_for(config, remote=False)
+    server = make_server(config, host=host, gate=local)
     notifier = Notifier()
-    log.info("dashboard listening", extra={"host": config.dashboard.host, "port": server.server_address[1]})
+    log.info("dashboard listening", extra={"host": host, "port": server.server_address[1]})
+    remote: TLSServer | None = None
+    remote_gate: Gate | None = None
+    if config.access.remote:
+        ctx = tls_context(config.access.tls_dir)
+        if ctx is None:
+            log.warning("no TLS certificate: other devices cannot reach the dashboard (sudo ./install.sh makes one)",
+                        extra={"tls_dir": str(config.access.tls_dir)})  # fmt: skip
+        else:
+            try:
+                remote_gate = gate_for(config, remote=True)
+                remote = make_remote_server(config, server.data, remote_gate, ctx)
+            except OSError as exc:
+                log.error("cannot listen for other devices", extra={"port": config.access.port, "error": str(exc)})
+            else:
+                threading.Thread(target=remote.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True,
+                                 name="dashboard-remote").start()  # fmt: skip
+                log.info("listening for paired devices", extra={"port": config.access.port})
     stop_watch = threading.Event()
 
     def stop(*_: Any) -> None:
         stop_watch.set()
         notifier.stopping()
         threading.Thread(target=server.shutdown, daemon=True).start()
+        if remote is not None:
+            threading.Thread(target=remote.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
@@ -734,5 +1039,10 @@ def serve(config: Config) -> int:
         server.serve_forever(poll_interval=0.5)
     finally:
         stop_watch.set()
+        if remote is not None:
+            remote.server_close()
         server.server_close()
+        for g in (local, remote_gate):
+            if g is not None:
+                g.access.flush()  # the devices' last-seen times
     return 0

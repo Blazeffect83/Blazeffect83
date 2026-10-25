@@ -256,6 +256,11 @@ def run_checks(
         fix = "it works, but the drive keeps dropping out: give it a powered USB hub or its own power"
         checks.append(Check("drive helper", WARN, detail + str(last.get("detail")), fix))
 
+    # your other devices' access (interface.access)
+    from polymath.interface.access import access_check
+
+    status, detail, fix = access_check(config)
+    checks.append(Check("access", {"ok": OK, "warn": WARN, "bad": BAD}[status], detail, fix))
     # disk room
     try:
         free = shutil.disk_usage(data).free / 1e9

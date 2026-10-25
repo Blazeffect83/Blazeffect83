@@ -143,7 +143,10 @@ if [ "$DRY" = 0 ]; then
         -o -name '*.html' -o -name '*.sh' -o -name '*.toml' \) -exec md5sum {} + 2>/dev/null | sort -k2 | md5sum)"
     tar -C "$SRC" --exclude='./.git' --exclude='__pycache__' --exclude='*.pyc' --exclude='.pytest_cache' \
         --exclude='.mypy_cache' --exclude='.ruff_cache' --exclude='./build' --exclude='*.egg-info' -cf - . \
-        | tar -C "$OPT/src" -xf -
+        | tar -C "$OPT/src" --no-same-owner --no-same-permissions -xf -
+    # root owns the installed code (security audit): the services and pip never run files another user can change
+    chown -R root:root "$OPT/src" 2>/dev/null || true
+    chmod -R go-w "$OPT/src" 2>/dev/null || true
     stamp_after="$(find "$OPT/src" -type f \( -name '*.py' -o -name '*.sql' -o -name '*.js' -o -name '*.css' \
         -o -name '*.html' -o -name '*.sh' -o -name '*.toml' \) -exec md5sum {} + 2>/dev/null | sort -k2 | md5sum)"
     [ "$stamp_before" = "$stamp_after" ] || code_changed=1
@@ -180,12 +183,19 @@ if [ "$(cat "$BUILD_JSON" 2>/dev/null || true)" != "$build_new" ]; then
 fi
 
 # ------------------------------------------------------------------ configuration (never overwritten)
+# (v0.9.0) the dashboard's sign-in-free listener stays on the Pi; other devices use https with pairing ([access])
 CONF="$ROOT/etc/polymath/polymath.toml"
 if [ ! -f "$CONF" ]; then
     say "writing default configuration $CONF"
     run install -D -m 0644 "$SRC/config/polymath.toml" "$CONF"
 else
     say "keeping existing configuration $CONF"
+    if grep -qE '^host *= *"0\.0\.0\.0"' "$CONF"; then
+        say "dashboard: the sign-in-free listener now stays on the Pi (host = 127.0.0.1); your PC uses https://<pi>:8443" \
+            "after pairing (backup: $CONF.bak)"
+        run cp -p "$CONF" "$CONF.bak"
+        run sed -i 's/^host *= *"0\.0\.0\.0".*$/host = "127.0.0.1"                  # the Pi itself; other devices: [access] (https, pairing)/' "$CONF"
+    fi
     if grep -qs '^minecraft_' "$CONF"; then
         say "commenting out retired minecraft_* settings in $CONF (backup: $CONF.bak)"
         run cp -p "$CONF" "$CONF.bak"
@@ -303,6 +313,17 @@ else
     warn "no desktop user found (pass --user NAME): the live feed will not open automatically"
 fi
 
+# ------------------------------------------------------------------ HTTPS for your other devices (interface/access.py)
+if [ "$SYSTEM" = 1 ]; then
+    if [ "$DRY" = 0 ]; then
+        say "dashboard certificate for your home network (scripts/access-cert.sh)"
+        POLYMATH_TLS_DIR="$ROOT/etc/polymath/tls" "$OPT/src/scripts/access-cert.sh" \
+            || warn "no HTTPS certificate (see above): the dashboard is reachable only on the Pi itself until it is made"
+    else
+        run "$OPT/src/scripts/access-cert.sh"
+    fi
+fi
+
 # ------------------------------------------------------------------ enable and start
 if [ "$SYSTEM" = 1 ]; then
     if command -v raspi-config >/dev/null 2>&1; then
@@ -335,8 +356,10 @@ if [ "$SYSTEM" = 1 ]; then
         done
         if curl -fsS --max-time 2 http://localhost:8765/health 2>/dev/null; then
             echo
-            say "Polymath is running. Live feed: polymath feed (opens by itself at login)." \
-                "Dashboard: http://$(hostname -I | awk '{print $1}'):8765/"
+            say "Polymath is running. Live feed: polymath feed (opens by itself at login). On the Pi: http://localhost:8765/"
+            # your PC's browser: a one-time pairing code (interface/access.py); the code works once, for 15 minutes
+            "$OPT/venv/bin/polymath" access pair --from-install \
+                || warn "could not make a pairing code now: run 'polymath access pair' when you want to pair your PC"
         else
             warn "the agent has not reported in yet (it may still be starting): polymath doctor in a few minutes;" \
                 "details: journalctl -u polymath -n 50"

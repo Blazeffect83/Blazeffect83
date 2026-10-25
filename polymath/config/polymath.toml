@@ -69,8 +69,15 @@ relearn_delay_hours = 3.0           # after a wrong self-test answer: read about
 relearn_attempts = 3
 
 [dashboard]
-host = "0.0.0.0"
+host = "127.0.0.1"                  # the Pi's own browser and the live feed (loopback, no sign-in)
 port = 8765
+
+[access]
+# Your PC and phone: https://<pi>:8443, home network only, after pairing once (polymath access pair).
+remote = true
+port = 8443
+networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"]
+names = []                          # extra host names the Pi answers to, besides its own (and <name>.local)
 
 [agents]
 max_agents = 12                     # active agents (yours + evolved children)
@@ -103,4 +110,4 @@ standby_dir = "/var/lib/polymath/standby"
 sd_only = false
 sd_dir = "/var/lib/polymath/brain"
 sd_budget_gb = 0.0                  # 0: everything the card can give, less sd_keep_free_gb
-sd_keep_free_gb = 2.0               # the SD card always keeps this much free for the system
+sd_keep_free_gb = 3.0               # the SD card always keeps this much free (the system; a full card wears out)

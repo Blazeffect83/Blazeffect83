@@ -68,6 +68,21 @@ RestrictRealtime=yes
 RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
+# v0.9.0 (security audit): no capabilities at all, no clock/hostname/kernel-log access, other processes invisible,
+# no writable+executable memory (tested: the whole agent ran under the kernel's MDWE), only the system calls an
+# ordinary service makes, private files by default, and it never listens on a network port
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0027
+RemoveIPC=yes
+SocketBindDeny=any
 # Plugged-in drives (the storage pool) are mounted under /mnt/polymath; mounts made later propagate in.
 ReadWritePaths=/srv/polymath -/mnt/polymath
 LogRateLimitIntervalSec=30s

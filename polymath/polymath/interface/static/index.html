@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Polymath</title>
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -13,7 +14,7 @@
   <div id="face" class="face" title="what it is doing">[·_·]</div>
   <div id="health" class="pill">connecting…</div>
   <a class="live-link" href="/live">live feed ›</a>
-  <div class="meta"><span id="meta"></span> <span id="badge" class="badge"></span></div>
+  <div class="meta"><span id="access" class="access"></span> <span id="meta"></span> <span id="badge" class="badge"></span></div>
 </header>
 <div class="now-banner" id="now-banner"><span class="now-tag">NOW</span><span id="now">connecting…</span></div>
 <main>
@@ -54,7 +55,7 @@
 
   <section class="grid">
     <div class="card"><h2>Did you know?</h2><ul id="dyk" class="digest"></ul></div>
-    <div class="card"><h2>Disks — SD card wear</h2><ul id="wear" class="digest"></ul></div>
+    <div class="card"><h2>Storage and SD card wear</h2><ul id="wear" class="digest"></ul></div>
   </section>
 
   <section class="grid">
@@ -88,6 +89,13 @@
     <div class="card"><h2>Recent work</h2><table id="t-cycles"></table></div>
   </section>
 
+  <section class="card security-card">
+    <h2>Who can see this <span class="muted small-inline">— only browsers you paired, only on your home network</span></h2>
+    <div id="devices"></div>
+    <button id="pair-btn" type="button">Pair another device</button>
+    <div id="pair-out" aria-live="polite"></div>
+  </section>
+
   <section class="card">
     <h2>Explore the knowledge graph</h2>
     <form id="kg-form" class="row"><input id="kg-q" maxlength="200" placeholder="Entity name, e.g. Mars"><button type="submit">Look up</button></form>
@@ -97,6 +105,7 @@
 <footer>Everything here was learned by this machine from public dumps it downloaded itself — no AI services, no pretrained models.</footer>
 <script src="/static/face.js"></script>
 <script src="/static/focus.js"></script>
+<script src="/static/access.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

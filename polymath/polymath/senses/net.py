@@ -116,11 +116,23 @@ class StreamResponse:
     read_bytes: int = 0
 
     def read(self, n: int = 1 << 16) -> bytes:
-        data = self._resp.read(n)
-        self.read_bytes += len(data)
-        if self._decoder is not None:
-            return bytes(self._decoder.decompress(data)) if data else bytes(self._decoder.flush())
-        return data
+        if self._decoder is None:
+            data = self._resp.read(n)
+            self.read_bytes += len(data)
+            return data
+        # at most n decompressed bytes per call: a small gzip bomb never becomes a huge chunk in memory
+        while True:
+            tail = self._decoder.unconsumed_tail
+            if tail:
+                out = self._decoder.decompress(tail, n)
+            else:
+                data = self._resp.read(n)
+                self.read_bytes += len(data)
+                if not data:
+                    return bytes(self._decoder.flush())
+                out = self._decoder.decompress(data, n)
+            if out:  # an empty result (a gzip header, say) is not the end of the body
+                return bytes(out)
 
     def iter_chunks(self, n: int = 1 << 16) -> Iterator[bytes]:
         while True:

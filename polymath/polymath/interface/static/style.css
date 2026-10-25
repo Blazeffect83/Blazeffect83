@@ -138,3 +138,24 @@ body.live .focus-card { margin: 10px 12px 0; }
   .focus-note { grid-column: 1 / -1; }
   .focus-what { font-size: 18px; }
 }
+
+/* private access (access.js, pair.html) */
+.access { font-size: 13px; color: var(--muted); }
+.live-access { grid-column: 1 / -1; text-align: right; }
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.linkish.danger { color: var(--bad); }
+.devices { list-style: none; margin: 0 0 12px; padding: 0; }
+.devices li { padding: 6px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.pair-code { font: 700 34px/1.2 ui-monospace, "DejaVu Sans Mono", Menlo, monospace; letter-spacing: 4px; margin: 12px 0 4px; }
+.security-card button { margin-top: 4px; }
+body.pair-page { min-height: 100vh; }
+.pair-main { max-width: 620px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
+.pair-card h1 { margin: 0; }
+.pair-title { font-size: 18px; color: var(--text); text-transform: none; letter-spacing: 0; margin-top: 14px; }
+.pair-steps { padding-left: 1.2em; line-height: 1.5; }
+.pair-card form { display: grid; gap: 6px; }
+.pair-card input#code { font: 700 22px ui-monospace, "DejaVu Sans Mono", Menlo, monospace; letter-spacing: 3px; text-transform: uppercase; }
+.pair-card button { justify-self: start; margin-top: 8px; }
+.pair-msg { min-height: 1.4em; font-weight: 600; }
+.pair-msg.ok { color: var(--ok); } .pair-msg.bad { color: var(--bad); }
+code.wrap { overflow-wrap: anywhere; }

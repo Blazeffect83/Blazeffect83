@@ -439,6 +439,90 @@ storage-ignore.json      drives retired with `polymath storage retire` (never ad
   raw/  backups/         downloads and backups placed on the drive
 ```
 
+## Private access from your own browser (v0.9.0, `interface/access.py`)
+
+The dashboard runs **two listeners** from one process, sharing one `DashboardData`:
+
+| listener | address | who | sign-in |
+|---|---|---|---|
+| plain HTTP | `127.0.0.1:8765`, always loopback (an old `host = "0.0.0.0"` is overridden) | the Pi: the menu entry, the live feed, the CLI | none |
+| HTTPS (`TLSServer`) | `0.0.0.0:8443` (`[access] port`), only if `/etc/polymath/tls/server.{crt,key}` load | paired browsers on the home network | device key |
+
+Each request passes a `Gate` before any route runs, in this order:
+1. **Client address** (remote only): inside `[access] networks` (the private and link-local ranges), else 403 and a
+   log line. systemd's `IPAddressDeny=any` + `IPAddressAllow=localhost link-local 10/8 172.16/12 192.168/16
+   fc00::/7` drops other packets before the process sees them.
+2. **Host header**: an IP literal or one of the Pi's names (`<host>`, `<host>.local`, `localhost`, `[access] names`),
+   else 421. This defeats DNS rebinding (a page on `evil.example` re-pointed at the Pi's address).
+3. **POSTs**: `Content-Type: application/json` (415 otherwise: an HTML form cannot send it), and `Origin` must be
+   `<scheme>://<Host>` (403). The loopback listener checks `Origin` only when one is sent (the CLI sends none).
+4. **Device key** (remote only): the `pm_device` cookie (`HttpOnly; Secure; SameSite=Strict`, 400 days) must hash
+   to a paired device. Without it, pages redirect (303) to `/pair` and the API answers 401; only `PUBLIC_REMOTE`
+   (the pairing page and its script and style, the manifest, the service worker, `ca.crt`, `/api/access/me`,
+   `/api/access/pair`) is served.
+
+**Pairing** (`Access`, state in `/var/lib/polymath/access`, 0700, files 0600, written atomically):
+- `new_code()` (loopback, or a paired browser): 8 characters from a 32-letter alphabet without look-alikes
+  (40 bits), shown as `XXXX-XXXX`; one at a time, valid 15 minutes, one use.
+- `pair(code)`: five wrong guesses cancel the code; ten attempts per address per ten minutes are refused before the
+  code is even compared (`hmac.compare_digest`). Success makes a 256-bit token (`secrets.token_urlsafe(32)`); only
+  its SHA-256 is stored, with a name, when, and the last address. At most 20 devices.
+- `check(token)`: a dictionary lookup of the hash; last-seen is kept in memory and written at most every
+  10 minutes. The file's mtime is checked, so a revoke through the other listener (or the CLI) takes effect at once.
+- `revoke(id|all)`, `devices()`, and `access.log` (JSON lines, trimmed): codes made, pairings, revokes, refusals.
+
+**TLS** (`scripts/access-cert.sh`, run by `install.sh`): a local CA (P-256, 10 years, key 0600 root) signs a server
+certificate (P-256, 397 days, SANs: the host name, `.local`, `localhost`, 127.0.0.1 and the current addresses;
+key 0640 group `polymath`). It is renewed when missing, within 30 days of expiry, or when an address is no longer
+named, always with the same CA, so a PC that trusts the CA once keeps trusting it. `tls_context` requires TLS 1.2+;
+the handshake runs on the worker thread with a 10 s timeout (`HANDSHAKE_S`), so a stalled client cannot block
+`accept`. Remote `/health` shows only `ok`, `heartbeat_age_s` and `state` (no version or build).
+
+**The browser side:** `/pair` (`pair.html`, `pair.js`: the code, the certificate thumbprints, trusting the CA in
+Windows), `access.js` (the header badge, the *Who can see this* card with revoke and "pair another device"), a web
+app manifest and a service worker that caches nothing, so Chrome offers *Install page as app*. Every response
+carries the CSP (no inline script, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`,
+`Referrer-Policy: no-referrer`, COOP/CORP `same-origin`, a `Permissions-Policy` that turns off camera, microphone,
+location and the rest, and `Cache-Control: no-store`.
+
+**CLI:** `polymath access [status|pair|devices|revoke ID|log]` runs as the desktop user (no sudo) and talks to the
+loopback listener; `doctor`'s `access` line checks the certificate (present, not expiring, naming the current
+addresses) and that the HTTPS port answers.
+
+## Security audit (v0.9.0)
+
+A full review of every privileged path and every input that comes from outside:
+- **Root never writes through a link** (`core/safefs.py`). The root helpers write into directories the `polymath`
+  user owns (a drive's `polymath-brain`, `/run/polymath`). `safe_write` opens the directory with `O_NOFOLLOW`,
+  creates the temporary file with `O_CREAT|O_EXCL|O_NOFOLLOW` relative to it, sets mode and owner with
+  `fchmod`/`fchown`, and renames within it. `safe_dir` makes or opens a folder the same way. A crafted drive whose
+  `polymath-brain` is a link to `/etc` is skipped (`body/volumes.py`); `body/heal.py` saves its state the same way.
+- **Units:** the agent and the dashboard add `ProtectKernelLogs`, `ProtectClock`, `ProtectHostname`,
+  `ProtectProc=invisible`, an empty capability set, `MemoryDenyWriteExecute`, `SystemCallFilter=@system-service`,
+  `UMask=0027` and `RemoveIPC`; the agent also `SocketBindDeny=any` (it never listens). The root helpers
+  (`polymath-heal`, `polymath-volume@`) cannot use namespace options (their mounts must reach the system), so they
+  get the subset that still applies: `NoNewPrivileges`, `RestrictAddressFamilies=AF_UNIX AF_NETLINK`,
+  `IPAddressDeny=any`, `RestrictNamespaces`, `RestrictSUIDSGID`, `LockPersonality`, `MemoryDenyWriteExecute`.
+- **No terminal escapes from the web:** page titles and texts lose control characters and bidi overrides
+  (`senses/html_text.py`), and the feed strips them again before painting (`interface/feed.py`).
+- **Bounded decompression:** `StreamResponse.read(n)` returns at most `n` decompressed bytes (`unconsumed_tail`), so
+  a small gzip bomb never becomes one huge chunk.
+- **Smaller fixes:** a garbage `Content-Length` is a 413, not a crash; the rate limiter forgets idle clients and
+  never holds more than 4,096; root owns the installed code (`chown -R root`, `chmod -R go-w`).
+
+## Storage on a small disk (v0.9.0, `body/usage.py`)
+
+- **SD-card mode** keeps one backup (`SD_BACKUPS`) and runs it weekly (`SD_BACKUP_EVERY_DAYS`, via
+  `maintenance.backup_every_s`), and keeps 3 GB free (`sd_keep_free_gb`). A backup short of room deletes older
+  backups first (never the newest); eviction keeps one backup in SD-card mode, two otherwise.
+- **`usage.files`**: sizes of the database (+ WAL), backups, vector indexes and downloads, free space and budget.
+- **`usage.forecast`**: a least-squares line through hourly averages of the vitals' free space over 72 h (at least
+  6 h of history); slower than 0.02 GB/day counts as steady. `days_left` is how long until the reserve.
+- **`usage.breakdown`** (`--detail` only, it reads every page): SQLite `dbstat` grouped into search index, document
+  texts, knowledge graph, language statistics, reasoning, other.
+- **Orin** reads `days_to_full` as a signal (`disk_low`, hard limit under 3 days), and its backup-age limit is
+  1.5 × the backup interval.
+
 ## Process boundaries and safety
 
 - **Agent unit:**
@@ -449,6 +533,6 @@ storage-ignore.json      drives retired with `polymath storage retire` (never ad
 - **Dashboard:**
   - It opens the database with `mode=ro`.
   - `/health` is 200 only when the database opens and the agent's heartbeat is under 60 s old.
-  - Every other method than GET/HEAD and `POST /api/ask` returns 405.
+  - Every other method than GET/HEAD, `POST /api/ask` and `POST /api/access/*` returns 405.
   - A strict Content-Security-Policy is set, request bodies are capped at 4 KB, and `/api/ask` is limited to 20 requests per minute per client.
 - **Outbound HTTP** only reaches public addresses. The resolved IP is pinned at connect time, so DNS rebinding cannot reach the LAN.

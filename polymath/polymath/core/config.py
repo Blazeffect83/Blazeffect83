@@ -34,6 +34,18 @@ class ConfigError(ValueError):
     """Raised for invalid configuration files or values."""
 
 
+ACCESS_NETWORKS = (  # private and link-local ranges: the home network (interface.access)
+    "127.0.0.0/8",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "169.254.0.0/16",
+    "fc00::/7",
+    "fe80::/10",
+)
+
+
 @dataclass
 class PathsConfig:
     data_dir: Path = Path("/srv/polymath")
@@ -197,13 +209,25 @@ class StorageConfig:
     sd_only: bool = False
     sd_dir: Path = Path("/var/lib/polymath/brain")
     sd_budget_gb: float = 0.0  # 0: everything the card can give (what the brain uses + what is free − sd_keep_free_gb)
-    sd_keep_free_gb: float = 2.0  # the SD card keeps this much free for the system
+    sd_keep_free_gb: float = 3.0  # the SD card keeps this much free (the system, and a card that is not full lasts)
 
 
 @dataclass
 class DashboardConfig:
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"  # the Pi's own, sign-in-free listener: always loopback (other devices use [access])
     port: int = 8765
+
+
+@dataclass
+class AccessConfig:
+    """Private access from your own browsers on the home network (``interface.access``)."""
+
+    remote: bool = True  # serve https://<pi>:<port> to paired devices on the home network
+    port: int = 8443
+    networks: list[str] = field(default_factory=lambda: list(ACCESS_NETWORKS))  # who may even connect
+    names: list[str] = field(default_factory=list)  # extra host names the Pi answers to (besides its own)
+    state_dir: Path = Path("/var/lib/polymath/access")  # paired devices, the pairing code, the access log
+    tls_dir: Path = Path("/etc/polymath/tls")  # ca.crt, server.crt, server.key (scripts/access-cert.sh)
 
 
 @dataclass
@@ -214,6 +238,7 @@ class Config:
     senses: SensesConfig = field(default_factory=SensesConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    access: AccessConfig = field(default_factory=AccessConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     log_level: str = "INFO"
@@ -253,6 +278,17 @@ class Config:
             raise ConfigError("storage.standby_after_s must be at least 30 seconds")
         if not 0.5 <= self.storage.standby_budget_gb <= 50:
             raise ConfigError("storage.standby_budget_gb must be between 0.5 and 50")
+        if not 1 <= self.access.port <= 65535 or self.access.port == self.dashboard.port:
+            raise ConfigError("access.port must be a free port other than dashboard.port")
+        try:
+            import ipaddress
+
+            for net in self.access.networks:
+                n = ipaddress.ip_network(net, strict=False)
+                if n.prefixlen == 0:
+                    raise ConfigError(f"access.networks: {net} would let the whole internet in")
+        except ValueError as exc:
+            raise ConfigError(f"access.networks: {exc}") from exc
         if self.storage.sd_budget_gb < 0:
             raise ConfigError("storage.sd_budget_gb must be >= 0 (0: sized to the SD card)")
         if not 0.5 <= self.storage.sd_keep_free_gb <= 50:
@@ -371,13 +407,15 @@ def load_config(path: Path | str | None = None, *, env: dict[str, str] | None = 
     return cfg
 
 
-SD_BACKUPS = 2  # nightly backups kept in SD-card mode (each one takes room on the card)
+SD_BACKUPS = 1  # backups kept in SD-card mode: each is a GB or more on the card the brain itself lives on
+SD_BACKUP_EVERY_DAYS = 7  # SD-card mode backs up weekly: each backup writes the whole brain twice to the card
 
 
 def apply_sd_only(cfg: Config) -> None:
     """SD-card mode (``storage.sd_only``, see ``core.sdcard``): the brain lives in ``storage.sd_dir`` on the SD card
     and nothing touches a drive. No pool, no moving or mounting the brain's drive, no healing it, no standby brain
-    (this *is* the brain), two backups, and the card keeps ``sd_keep_free_gb`` free instead of the drive's 10 GB."""
+    (this *is* the brain), one backup a week, and the card keeps ``sd_keep_free_gb`` free instead of the drive's
+    10 GB."""
     st = cfg.storage
     if not st.sd_only:
         return

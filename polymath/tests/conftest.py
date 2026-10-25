@@ -22,6 +22,10 @@ data_dir = "{tmp_path / "data"}"
 run_dir = "{tmp_path / "run"}"
 require_separate_mount = false
 
+[access]
+state_dir = "{tmp_path / "access"}"
+tls_dir = "{tmp_path / "tls"}"
+
 [loop]
 idle_sleep = 0.05
 planners = false

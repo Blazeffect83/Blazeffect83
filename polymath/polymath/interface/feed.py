@@ -988,6 +988,7 @@ def compact(n: int | float, *, short: bool = False) -> str:
     return f"{int(n):,}"
 
 
+SAFE_TEXT = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")  # control and bidi characters
 NARROW = 100  # columns: below this (a small Pi touchscreen) the feed packs its lines tighter
 
 
@@ -1532,6 +1533,7 @@ class Screen:
         width = (self.cols if width is None else max(0, width)) if self.fancy else 10_000
         out, used = [], 0
         for text, style in segs:
+            text = SAFE_TEXT.sub("", text)  # whatever a document says, it never reaches the terminal as a command
             if not self.unicode:
                 for a, b in ASCII_FALLBACK.items():
                     text = text.replace(a, b)

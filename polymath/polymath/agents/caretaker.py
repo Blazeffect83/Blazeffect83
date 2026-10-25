@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from polymath.body.maintenance import backup_every_s
 from polymath.core.logging import get_logger
 
 log = get_logger("caretaker")
@@ -92,6 +93,7 @@ class Signal:
 SIGNALS: tuple[Signal, ...] = (
     Signal("temp_c", "heat", "high", True, 5.0, "°C", "CPU temperature"),
     Signal("free_gb", "disk_low", "low", False, 0.5, "GB", "free space"),
+    Signal("days_to_full", "disk_low", "low", False, 0.5, "days", "until the disk reaches its reserve"),
     Signal("rss_mb", "memory_high", "high", False, 100.0, "MB", "agent memory"),
     Signal("wal_mb", "wal_big", "high", False, 16.0, "MB", "write-ahead log"),
     Signal("backup_age_h", "backup_stale", "high", False, 6.0, "h", "last good backup"),
@@ -384,6 +386,11 @@ class Orin:
         except OSError:
             pass
         out["backup_age_h"] = self._backup_age_h()
+        from polymath.body.usage import forecast
+
+        fc = forecast(db, keep_free_gb=self.config.body.disk_min_free_gb, now=now)
+        if fc is not None and fc.get("days_left") is not None:
+            out["days_to_full"] = float(fc["days_left"])
         from polymath.core import netstate
 
         st = netstate.get(db)
@@ -421,7 +428,9 @@ class Orin:
             "free_gb": value < b.disk_min_free_gb * 1.5,
             "rss_mb": value > 2400.0,  # MemoryHigh is 2600 MB
             "wal_mb": value > 256.0,
-            "backup_age_h": value > 36.0 and not getattr(self.config, "standby", False),
+            "backup_age_h": value > 1.5 * backup_every_s(self.config) / 3600
+            and not getattr(self.config, "standby", False),
+            "days_to_full": value < 3.0,  # the disk would reach its reserve within three days
             "offline_min": value > 30.0,
             "blocklists_age_d": value > 14.0,
         }

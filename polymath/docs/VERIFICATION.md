@@ -1000,6 +1000,78 @@ a job silent for 130 s. The feed was polled every 5 s:
 
 **Not yet run on the Pi.**
 
+## 12s. Private access from your PC, a security audit, and storage that lasts (v0.9.0)
+
+**Why:** Christian, 2026-10-25: make the SD card's storage last while he fixes the SSD, "double check all its
+security parameters", and a way to view the Pi "from my browser on my PC only on my home network", easy, and "only I
+can access it", in Chrome, without touching the Pi.
+
+**Measured first:**
+- **Where the SD card's room and writes went** (the Pi in SD-card mode, from its own reports): the brain was
+  3.6 GB, two backups of about 1.7 GB each were kept, and every nightly backup wrote an uncompressed 3.6 GB copy
+  plus the compressed one: about 5 GB of writes a night onto the card the brain lives on. Hence one backup, weekly.
+- **Inside the database** (`dbstat`, a 480 MB test brain): the full-text index (`chunk_fts`, 161 MB) and the document
+  texts (103 MB) are the largest. A leaner FTS index (`detail=column`) would save about 45 % of it but changes search
+  ranking: left as an idea, not done.
+- **The audit** (a subagent read every privileged path and input, then each finding was checked by hand): two high
+  findings (root helpers following a symlink planted in a `polymath`-owned folder: a crafted USB drive or a
+  compromised agent could have root overwrite or chown any file), unit hardening gaps, terminal escape codes from
+  page titles into the feed, and smaller ones. Fixed: everything listed in ARCHITECTURE "Security audit". Not done,
+  each needing Christian's decision: trusting a drive's filesystem less (drives are already mounted `nodev,nosuid,noexec`;
+  checking the filesystem before mounting is not done), stream decompression caps for the large dump readers, the proxy's DNS
+  fallback, `TIOCSTI` on the feed's terminal, `git safe.directory` when `install.sh` reads a clone as root, and the
+  XML parsers that do not go through `safexml`.
+
+**End to end** (development container, a real `polymath dashboard` process with certificates from
+`scripts/access-cert.sh`, both listeners up):
+- **Attacks with curl, each refused as designed:** no cookie → 303 to `/pair` (pages) and 401 (API); a spoofed
+  `Host` → 421 on both listeners; a `text/plain` POST → 415; a cross-site `Origin` → 403; a missing `Origin` on the
+  HTTPS listener → 403; a garbage `Content-Length` → 413; a request body over 4 KB → 413; plain HTTP to port 8443 →
+  the connection closes with nothing sent; a pairing attempt on the loopback listener → 400; remote `/health` shows
+  no version or build.
+- **Chromium (Playwright) paired for real:** `/pair` loaded over HTTPS, a code from `polymath access pair` was typed
+  in, the dashboard opened with its *Who can see this* card, and the cookie carried `HttpOnly`, `Secure`,
+  `SameSite=Strict`. The state directory was 0700 and its files 0600; the device file held only the token's hash.
+  Screenshots of the pairing page and the paired dashboard were checked.
+- **`MemoryDenyWriteExecute`** can break numpy or SQLite if they map writable code. The kernel's equivalent
+  (`prctl(PR_SET_MDWE)`) was switched on in a process that then ran the real agent: 54 slices across 35 job kinds,
+  zero errors. The dashboard was run the same way.
+- **The certificate script:** makes the CA and server certificate with the right modes; a second run does nothing;
+  a new address renews the server certificate under the same CA (`openssl verify` passes); `--status` shows the
+  thumbprint. The first version renewed every time (the SAN header line was glued to the first name); fixed.
+
+**Tests** (45 new):
+- `tests/test_access.py` (16): pairing gives a key once and stores only its hash, file modes; wrong guesses cancel
+  the code, expiry, the per-address limit and its table staying small; devices listed, revoked across processes
+  (mtime reload) and last-seen without a write per request; the log stays small; home network, Host, Origin, cookie
+  and device-name checks; fingerprints and URLs; the certificate script (makes, renews for a new address with the
+  same CA, `--status`); both listeners end to end (pair, sign in, sign out, refused requests of every kind, plain
+  HTTP on the TLS port, a client outside the home network); the loopback listener revokes; the CLI (`pair`,
+  `devices`, `revoke`, `log`, `status`, the dashboard down); doctor's `access` line (ok, a new address, expired, port
+  closed, remote off, no certificate); TLS context errors; the rate limiter forgets idle clients and stays under
+  4,096 in a flood; config validation (no `/0`, ports differ); `serve()` keeps the sign-in-free listener on loopback
+  even with an old `host = "0.0.0.0"`.
+- `tests/test_security.py` (13, one run twice): `safe_write` (mode, atomic, no leftovers, a planted temporary-name
+  link, a planted final-name link, a linked directory, a failed write), `safe_dir` (links and files refused); a
+  crafted drive whose `polymath-brain` links elsewhere is skipped and the target untouched; `heal` never writes
+  through a link in `/run/polymath`; page titles and texts lose escape and bidi characters, and so does the feed; a
+  20 MB gzip (and deflate) bomb comes out in chunks of at most 64 KB; the unit hardening lines; the install's
+  ownership and certificate steps; `polymath access` runs without sudo.
+- `tests/test_usage.py` (16): the forecast (too little history, falling, steady, already under the reserve, old
+  readings ignored); file sizes (links not counted twice); the report with and without detail; the database
+  breakdown (and a missing or broken file: the test caught a crash on a missing database, fixed); SD-card mode
+  backs up weekly and keeps one; the planner's interval; a backup short of room deletes older backups first, or is
+  skipped keeping the newest; eviction keeps one backup in SD-card mode and two otherwise; Orin's `days_to_full`
+  opens `disk_low`; the backup-age limit follows the interval; the dashboard's storage lines; `polymath storage
+  usage`.
+- `tests/test_sdcard.py` expects one backup, a 3 GB reserve and the new budget. The access tests first failed
+  because the test helper passed headers in the body's place; fixed in the helper, not the code.
+
+**Result:** RESULT_LINE `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and
+ShellCheck (`-S warning`) are clean.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the
@@ -1016,6 +1088,9 @@ SD card only (59 GB, 28 GB free) and no NVMe. It is not the Pi 5 the original sp
 
 Not claimed until measured:
 
+0. v0.9.0 on the Pi: `install.sh` prints a pairing code; Chrome on the PC pairs over `https://<pi>:8443/`; the PC
+   trusts the CA; *Install page as app*; `polymath access devices` lists it; a revoke locks it out; the weekly
+   backup in SD-card mode and `polymath storage usage` after a day of vitals.
 0. v0.5.2 on the Pi: install it (it updates both service units: watchdog, restart policy, `/run/polymath`), then
    `polymath doctor`; unplug the network cable for a few minutes and watch the feed go `offline` and come back.
 0. v0.5.0 on the Pi's full graph: the reasoning skills on many more things, dated facts after the next Wikidata read,

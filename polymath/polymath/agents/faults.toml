@@ -15,18 +15,20 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.8.2"
-updated = "2026-10-22"
+updated_for = "0.9.0"
+updated = "2026-10-25"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
 
 [situation]
-as_of = "2026-10-22"
+as_of = "2026-10-25"
 summary = """SD-card mode switched on (2026-10-15, sd-card-mode.sh on, as Christian ran it): the SSD was not mounted; the brain was started from the SD card's old copy (/srv/polymath-sd-copy, 3.6 GB, renamed to /var/lib/polymath/brain); 25.7 GB free on the card; v0.7.0 (7bbd425) installed over v0.5.6. During the install the dashboard answered 503 (the agent had not reported in yet: normal while it starts). dpkg is still 'interrupted', so uhubctl was not installed (not needed in SD-card mode, but apt stays blocked until dpkg --configure -a). The SSD itself is untouched and unused; Christian fixes it himself."""
 waiting_on = [
     "2026-10-15: Christian reports Polymath is up and running again (on the SD card); the step 7 lines themselves were not sent",
     "2026-10-22: Christian: 'it's going good' (v0.8.1 installed, on the SD card), but the agent goes offline for a few minutes after learning something",
-    "install v0.8.2 (the vigil: busy, not offline; faster quizzes and search): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (SD-card mode stays on)",
+    "2026-10-25: Christian likes how it is going; still working on the SSD himself (on hold). Asked for: storage that does not run out, a security check, and private access from his PC's Chrome on the home network only",
+    "install v0.9.0 (private access from your PC, security hardening, leaner storage): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (it prints a pairing code at the end; SD-card mode stays on)",
+    "then on the PC (Chrome): open the https address install.sh printed, Advanced → Proceed, type the pairing code; optional: trust the Pi's certificate (the pairing page shows how) and Install Polymath as an app window",
     "after v0.8.2 has run a day, see which steps were slow: polymath caretaker (lines 'jobs/slow:…'), and whether the watchdog restarted it before: journalctl -u polymath --since -2d | grep -ciE 'watchdog|SIGABRT'",
     "Christian, with sudo, when convenient: sudo dpkg --configure -a   (finishes the interrupted package install; apt is blocked until then)",
     "on hold (Christian, 2026-10-15: leave the SSD alone for now): fixing the SSD and sd-card-mode.sh off. Do not suggest SSD work until he brings it up",
@@ -40,6 +42,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.9.0"
+date = "2026-10-25"
+changes = """Private access, a security audit, leaner storage. ACCESS: the dashboard used to listen on the whole network with no sign-in. Now the Pi's own listener is loopback only (http://127.0.0.1:8765, no sign-in: the live feed, doctor, the Pi's browser), and other devices use https://<pi>:8443: home network only (checked per request and by systemd IPAddressAllow), TLS 1.2+ with a certificate from Polymath's own small CA (scripts/access-cert.sh, run by install.sh; renewed when the Pi's address changes or within 30 days of expiry), and a paired device. polymath access pair (install.sh prints one) gives a one-time code (15 min, 5 wrong guesses cancel it, 10 attempts per address per 10 min); the browser gets a 256-bit device key in an HttpOnly, Secure, SameSite=Strict cookie (the Pi keeps only its SHA-256, files 0600 in /var/lib/polymath/access). Host header checked (DNS rebinding), POSTs must be JSON from the page's own origin (CSRF), on both listeners. polymath access devices|revoke|log; the dashboard's Who can see this panel lists devices, revokes them, makes codes; Chrome can install it as an app window (manifest, service worker that caches nothing). SECURITY AUDIT fixes: the root helpers (volumes, heal) no longer follow symlinks planted in polymath-owned folders (core/safefs.py: O_NOFOLLOW, dir_fd, fchown); every unit hardened (no capabilities, MemoryDenyWriteExecute tested under the kernel's MDWE, @system-service syscall filter, ProtectProc, UMask 0027; the root helpers get the namespace-free subset); page titles can no longer carry terminal escape codes into the feed; HTTP decompression is bounded; a bad Content-Length no longer errors; the rate limiter no longer grows without bound; remote /health hides the build; installed code is owned by root. STORAGE: in SD-card mode one backup (was two) taken weekly (was nightly: each wrote the whole brain twice to the card), older backups go first when room is short, the card keeps 3 GB free (was 2); polymath storage usage [--detail] shows where the room goes and a forecast; the dashboard shows it; Orin opens disk_low early when the forecast says the reserve is reached within 3 days, and its backup-age limit follows the backup interval (no false alarm with weekly backups)."""
+
 [[update]]
 version = "0.8.2"
 date = "2026-10-22"
@@ -501,13 +508,16 @@ causes = [
     { cause = "the backup failed its check, or the agent was never up at 3 am", prior = 0.4 },
 ]
 checks = ["polymath backup --list", "df -h /var/lib/polymath/brain /srv/polymath"]
-self_healing = ["Orin asks for a backup now (at most every 6 hours); eviction frees room first when the disk is short"]
+self_healing = [
+    "Orin asks for a backup now (at most every 6 hours); eviction frees room first when the disk is short",
+    "SD-card mode backs up weekly, so Orin waits ten and a half days there; a backup already due is not asked for twice (v0.9.0)",
+]
 steps = [
     { needs = "caretaker", do = "take a backup now" },
     { needs = "you", do = "if it keeps failing, see why", command = "polymath backup --list; journalctl -u polymath -n 80 --no-pager | grep -i backup" },
 ]
 since = "0.8.0"
-updated = "0.8.0"
+updated = "0.9.0"
 
 [[fault]]
 id = "blocklists-stale"
@@ -727,6 +737,74 @@ since = "0.8.2"
 updated = "0.8.2"
 
 [[fault]]
+id = "access-no-cert"
+title = "Your PC cannot open the dashboard: no HTTPS certificate"
+area = "dashboard"
+codes = []
+patterns = ["no HTTPS certificate", "cannot open the dashboard"]
+symptoms = ["doctor: 'access: no HTTPS certificate yet'", "Chrome on the PC: 'This site can't be reached' at https://<pi>:8443"]
+causes = [
+    { cause = "install.sh could not run scripts/access-cert.sh (openssl missing)", prior = 0.7 },
+    { cause = "/etc/polymath/tls was deleted", prior = 0.3 },
+]
+checks = ["ls -l /etc/polymath/tls", "command -v openssl", "/opt/polymath/src/scripts/access-cert.sh --status"]
+self_healing = ["none: making a certificate is a system change (root)"]
+steps = [
+    { needs = "sudo", do = "make the certificate, then restart the dashboard", command = "sudo /opt/polymath/src/scripts/access-cert.sh && sudo systemctl restart polymath-dashboard" },
+    { needs = "approval", do = "if openssl is missing, install it (a package change)", command = "sudo apt install openssl" },
+]
+since = "0.9.0"
+updated = "0.9.0"
+
+[[fault]]
+id = "access-cert-stale"
+title = "The dashboard's certificate does not fit any more"
+area = "dashboard"
+codes = []
+patterns = ["does not name this Pi's address", "certificate has expired", "NET::ERR_CERT_COMMON_NAME_INVALID"]
+symptoms = [
+    "doctor: 'the certificate does not name this Pi's address …' or 'has expired'",
+    "Chrome warns again although the Pi's authority is trusted (ERR_CERT_COMMON_NAME_INVALID or DATE_INVALID)",
+]
+causes = [
+    { cause = "the router gave the Pi a new address", prior = 0.8 },
+    { cause = "the certificate is older than 397 days and install.sh has not run since", prior = 0.2 },
+]
+checks = ["hostname -I", "/opt/polymath/src/scripts/access-cert.sh --status"]
+self_healing = ["install.sh renews it whenever it runs; the authority stays the same, so the PC keeps trusting it"]
+steps = [
+    { needs = "sudo", do = "renew it for the current address", command = "sudo /opt/polymath/src/scripts/access-cert.sh && sudo systemctl restart polymath-dashboard" },
+    { needs = "you", do = "to stop addresses changing: reserve the Pi's address in the router (DHCP reservation), or open https://<hostname>.local:8443" },
+]
+since = "0.9.0"
+updated = "0.9.0"
+
+[[fault]]
+id = "access-refused"
+title = "A browser is refused (pairing, sign-in, or not on the home network)"
+area = "dashboard"
+codes = []
+patterns = ["not paired with the Pi", "too many attempts", "code is cancelled", "home network only", "code has expired", "no pairing code is waiting"]
+symptoms = [
+    "the pairing page: 'wrong code', 'that code has expired', 'too many wrong codes', or 'too many attempts from this computer'",
+    "a page that says 'home network only'",
+    "a browser that worked goes back to the pairing page (it was signed out or revoked)",
+]
+causes = [
+    { cause = "the pairing code was mistyped, expired (15 min) or already used (it works once)", prior = 0.6 },
+    { cause = "the device was revoked, signed out, or its cookies were cleared", prior = 0.25 },
+    { cause = "the device is not on the home network (mobile data, VPN, guest network on another range)", prior = 0.15 },
+]
+checks = ["polymath access log", "polymath access devices"]
+self_healing = ["codes expire and cancel themselves; per-address attempt limits reset after 10 minutes"]
+steps = [
+    { needs = "you", do = "make a fresh code and type it within 15 minutes", command = "polymath access pair" },
+    { needs = "you", do = "a device you do not recognise in the list: revoke it", command = "polymath access revoke <id>" },
+]
+since = "0.9.0"
+updated = "0.9.0"
+
+[[fault]]
 id = "agent-restarts"
 title = "The agent keeps restarting"
 area = "agent"
@@ -822,14 +900,17 @@ causes = [
 checks = ["df -h /srv/polymath /var/lib/polymath/brain", "polymath storage list", "sudo du -sh /var/lib/polymath/* /var/log"]
 self_healing = [
     "it evicts the least valuable data first and spills documents onto plugged-in drives",
-    "in SD-card mode: no drives; eviction keeps the card 2 GB free (oldest feeds and web pages go first, facts stay)",
+    "in SD-card mode: no drives; eviction keeps the card 3 GB free (oldest feeds and web pages go first, facts stay)",
+    "SD-card mode keeps one backup, taken weekly; older backups are deleted before any document text (v0.9.0)",
+    "Orin opens a disk incident early when the forecast says the reserve is reached within 3 days (v0.9.0)",
 ]
 steps = [
     { needs = "you", do = "plug in another drive: it becomes extra brain space by itself (not in SD-card mode)" },
     { needs = "sudo", do = "in SD-card mode: see what else fills the card", command = "sudo du -xh --max-depth=2 / 2>/dev/null | sort -h | tail -20" },
+    { needs = "you", do = "see where Polymath's room goes and when it would run out", command = "polymath storage usage --detail" },
 ]
 since = "0.5.2"
-updated = "0.7.0"
+updated = "0.9.0"
 
 [[fault]]
 id = "body-read-only"

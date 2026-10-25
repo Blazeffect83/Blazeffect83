@@ -1,4 +1,6 @@
-# Polymath dashboard (read-only web UI on port 8765). Installed by install.sh.
+# Polymath dashboard (read-only web UI). Installed by install.sh.
+# Two listeners: http://127.0.0.1:8765 for the Pi itself (no sign-in), and https://<pi>:8443 for your other devices on
+# the home network, after pairing them once (polymath access pair; docs/OPERATIONS.md "Your PC's browser").
 [Unit]
 Description=Polymath dashboard
 Documentation=file:///opt/polymath/src/docs/OPERATIONS.md
@@ -42,6 +44,25 @@ LockPersonality=yes
 RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
+RestrictRealtime=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0027
+RemoveIPC=yes
+# Home network only, enforced by the kernel for this service (the dashboard checks again for every request):
+# loopback, link-local and the private ranges. Nothing on the internet can reach it, even if a router forwards it.
+IPAddressDeny=any
+IPAddressAllow=localhost link-local 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 fc00::/7
+# /var/lib/polymath/access (0700): the paired devices (only key hashes), the pairing code, the access log
+StateDirectory=polymath/access
+StateDirectoryMode=0700
 # The database is opened read-only; SQLite's WAL index (-shm) still needs a writable directory.
 ReadOnlyPaths=/srv/polymath -/mnt/polymath
 # "-": the dashboard must start even while the brain's drive is not mounted (it then shows why).

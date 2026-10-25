@@ -231,6 +231,7 @@ async function insights() {
     list($("#dyk"), d.didyouknow, "nothing surprising yet");
     const wearLines = d.wear.map((w) => w.line + (w.status && w.status !== "ok" ? ` — ${w.status === "critical" ? "far " : ""}over budget` : ""));
     if (d.home) wearLines.unshift(`The brain lives on the drive ${d.home.name || d.home.id}; the SD card only boots the Pi.`);
+    if (d.storage && d.storage.lines) wearLines.unshift(...d.storage.lines);
     list($("#wear"), wearLines, "measuring (every 15 minutes)…");
     const undo = new Set(["rolled_back", "demoted", "retired", "reset"]);
     $("#changes").innerHTML = d.changes.length ? d.changes.map((c) =>

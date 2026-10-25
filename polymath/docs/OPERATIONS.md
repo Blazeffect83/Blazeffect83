@@ -49,14 +49,20 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
   are already plugged in (§8);
 - comments out the `minecraft_*` settings of earlier versions in an existing configuration (backup:
   `polymath.toml.bak`). Left in place, they would be ignored with a warning;
-- starts everything and waits for `/health`.
+- (v0.9.0) makes root the owner of the installed code, so no service runs a file another user could change;
+- (v0.9.0) moves an old `host = "0.0.0.0"` under `[dashboard]` to `127.0.0.1` (backup: `polymath.toml.bak`): the
+  sign-in-free listener stays on the Pi, other devices use HTTPS with pairing;
+- (v0.9.0) makes the dashboard's HTTPS certificate (`scripts/access-cert.sh`, below);
+- starts everything and waits for `/health`, then prints a **pairing code** for your PC's browser.
 
 ## 3. Everyday
 
 | | |
 |---|---|
 | live feed | opens in a terminal at login · `polymath feed` in any terminal · menu: *Polymath live feed* |
-| dashboard | `http://<pi>:8765/` · menu: *Polymath dashboard* |
+| dashboard | on the Pi: `http://localhost:8765/` · menu: *Polymath dashboard* · your PC: `https://<pi>:8443/` after pairing ([below](#browser)) |
+| who can see it | `polymath access` (status) · `pair` (a code for a new browser) · `devices` · `revoke <id>` (or `all`) · `log` |
+| where the room goes | `polymath storage usage` (database, backups, indexes, and when the disk would reach its reserve) · `--detail` splits the database (slow: reads all of it) |
 | is everything working? | `polymath doctor`: brain, agent, internet, dashboard and disk, each with the fix if broken |
 | status | `polymath status` · `systemctl status polymath polymath-dashboard` |
 | logs | `journalctl -u polymath -f` (JSON lines; `-o cat` for compact) |
@@ -68,11 +74,66 @@ sudo ./uninstall.sh --purge --yes   # also delete everything it learned, and its
 | tell me about … | `polymath tell "topic"`, or ask "Tell me about …" on the dashboard |
 | its predictions | `polymath predictions` (guessed before reading; confirmed, wrong, open) |
 | SD card wear | `polymath wear` |
-| on your phone | `http://<pi>:8765/live`: the face and the live feed |
+| on your phone | `https://<pi>:8443/live` (pair it like the PC): the face and the live feed |
 | knowledge map | on the dashboard: topics clustered by what they share, sized by documents. ▶ plays the time-lapse; click a topic to ask about it |
 | ask harder questions | `polymath ask "Is Brazil bigger than Angola?"` · "How far is Paris from Berlin?" · "Who was alive at the same time as Mozart?" · "What causes malaria?" · "Can penguins fly?" · "How do I …?" · "Who is the head of government of the capital of France?" |
 | what it changed about itself | `polymath changes` (`--all` adds trials that changed nothing; `--json`), the dashboard panel *How it improved itself*, "improved" lines in the feed |
 | overrule a tuned setting | `polymath changes --reset NAME` (or `all`): back to the default and pinned · `polymath changes --allow NAME` (or `all`) lets it tune again |
+
+### <a id="browser"></a>Your PC's browser (v0.9.0)
+
+Polymath on your PC, in Chrome, while you work: only on your home network, and only for browsers you paired.
+
+**Pair once (2 minutes, no need to touch the Pi):**
+1. The install ends with a box like this (or run `polymath access pair` on the Pi, or over `ssh`):
+
+   ```text
+     Open Polymath on your PC (Chrome), on your home network:
+         https://192.168.1.50:8443/
+         https://pis.local:8443/
+     Pairing code:   K7QF-3MXA      (works once, for 15 minutes)
+   ```
+2. Open the address on your PC. Chrome first says *Your connection is not private*: the Pi made its own
+   certificate, which Chrome does not know yet. Choose **Advanced → Proceed to 192.168.1.50 (unsafe)**. The
+   connection is still encrypted.
+3. Type the code and a name for the device. That browser is now paired for 400 days; everything else still
+   needs no password.
+4. Optional, to remove the warning for good: on the pairing page, **Download the Pi's certificate** (`ca.crt`),
+   open it → *Install Certificate* → *Current User* → *Place all certificates in the following store* →
+   **Trusted Root Certification Authorities** → Finish. Check that the thumbprint Windows shows matches the one
+   on the Pi's screen (`polymath access`). Restart Chrome. The certificate is made on the Pi, its key never leaves
+   it, and it can only vouch for this Pi's own names.
+5. Optional, its own window: Chrome menu ⋮ → *Cast, save and share* → **Install page as app** (or the install
+   icon in the address bar). It opens like a program, from the Start menu or the taskbar.
+
+A paired phone or tablet works the same way (`/live` is the face and the feed). A paired browser can make a code
+for the next device from the dashboard's *Who can see this* card, so the Pi itself is never needed.
+
+**What keeps everyone else out:**
+- **Home network only.** The dashboard refuses any address outside the private ranges (`192.168.x.x`, `10.x.x.x`,
+  `172.16–31.x.x`, IPv6 local), and systemd drops such packets before the program sees them (`IPAddressAllow`).
+  Your router does not forward port 8443, so nothing on the internet reaches it anyway.
+- **Paired browsers only.** Pairing gives that browser a random 256-bit key, kept in a cookie scripts cannot read
+  (`HttpOnly`, `Secure`, `SameSite=Strict`). The Pi stores only a hash of it, so even a copy of its files opens
+  nothing. A code works once, for 15 minutes; five wrong guesses cancel it and ten attempts from one computer in
+  ten minutes are refused.
+- **Encrypted.** HTTPS (TLS 1.2 or newer) with the Pi's own certificate; plain HTTP on the port gets nothing.
+- **No tricks from other sites.** Requests must name the Pi itself (no DNS rebinding), changes must come from the
+  dashboard's own pages (`Origin` checked, JSON only), and the pages forbid framing and outside scripts.
+- **You see and control it.** The *Who can see this* card and `polymath access devices` list every paired device
+  with when and from where it was last seen; *revoke* or `polymath access revoke <id>` (or `all`) locks it out at
+  once. `polymath access log` lists pairings, removals and every refused attempt.
+- **The sign-in-free page stays on the Pi.** `http://localhost:8765/` (the menu entry, the live feed, the CLI)
+  listens only on the Pi itself. `http://<pi>:8765/` from another device no longer works, on purpose.
+
+**If the Pi's address changes** (a new one from the router), the certificate no longer names it: `polymath doctor`
+says so, and `sudo /opt/polymath/src/scripts/access-cert.sh && sudo systemctl restart polymath-dashboard` renews
+it (same authority, so a PC that trusts it keeps trusting it). Better: give the Pi a fixed address in the router
+(a *DHCP reservation*), or use `https://<name>.local:8443/`.
+
+Settings (`[access]`): `remote` (true; false: only the Pi itself), `port` (8443), `networks` (the private ranges),
+`names` (extra host names to answer to). The certificate script: `sudo ./scripts/access-cert.sh` (make or renew),
+`--force` (a new server certificate), `--status` (no sudo).
 
 ### How it improves itself
 
@@ -207,7 +268,8 @@ language model and no randomness: the face is a function of the agent's state, t
 
 The feed reads from the dashboard service (`/api/feed`, localhost), so the desktop user needs no access to
 `/srv/polymath`. Options: `--plain` (no pinned header, for logs or `ssh`), `--no-color`, `--once`,
-`--interval 3`, `--url http://<pi>:8765` (watch from another machine), `--direct` (read the database
+`--interval 3`, `--url http://127.0.0.1:8765` (since v0.9.0 the sign-in-free listener answers only on the Pi; other
+machines use the browser, [below](#browser)), `--direct` (read the database
 directly, as a user who can). To stop the window opening at login, delete
 `~/.config/autostart/polymath-feed.desktop` and the `open-feed.sh` lines in `~/.config/labwc/autostart` and
 `~/.config/wayfire.ini`.
@@ -399,7 +461,11 @@ Pi).
   - `PRAGMA quick_check` verifies the copy;
   - the copy is compressed with xz and stored in `/srv/polymath/backups/`;
   - the newest 7 are kept (`body.backup_keep`);
-  - a backup is skipped, and logged, if the disk could not hold it.
+  - (v0.9.0) when the disk is short of room, older backups are deleted first (the newest is always kept); only if
+    it still could not hold it is the backup skipped, and logged.
+- **In SD-card mode** (v0.9.0) the backup runs **weekly** and **one** is kept: each backup writes about three times
+  the brain's size to the card the brain lives on, so a nightly one cost about 5 GB of writes a night. Orin's
+  backup-age alarm follows the interval (36 h nightly, 10.5 days weekly).
 - **On demand:** `polymath backup` · `polymath backup --list`.
 - **Restore:**
 
@@ -453,6 +519,17 @@ when it switches. Any of these set in `polymath.toml` stays as you set it.
 **Drop-ins.** Files in `/etc/polymath/polymath.d/*.toml` are read after `polymath.toml`, in name order, and override
 it key by key (a typo is refused there too). `scripts/sd-card-mode.sh` switches SD-card mode with one
 (`sd-card.toml`), so `polymath.toml` itself is never edited by a script.
+
+**Your other devices** (`[access]`, v0.9.0, see [§3](#browser)):
+
+```toml
+[access]
+remote = true        # false: the dashboard answers only on the Pi itself
+port = 8443          # HTTPS for paired browsers on your home network
+networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+            "fc00::/7", "fe80::/10"]   # the only addresses let in at all
+names = []           # extra host names (the Pi's own name, <name>.local and localhost are always answered)
+```
 
 Apply changes with `sudo systemctl restart polymath polymath-dashboard`.
 
@@ -589,10 +666,12 @@ off again. `--keep-ssd-on` leaves its USB device on.
 
 **In SD-card mode**:
 - everything runs as usual, dumps included;
-- the brain may use all the card can give (what it uses plus what is free) but `sd_keep_free_gb` (2 GB), which
-  stays free for the system. When the card runs low, it slows down and evicts the least valuable bodies first
-  (old feeds and web pages; the facts stay);
-- two nightly backups are kept, and the SD card wear guard watches the writes;
+- the brain may use all the card can give (what it uses plus what is free) but `sd_keep_free_gb` (3 GB since
+  v0.9.0), which stays free for the system. When the card runs low, it slows down and evicts the least valuable
+  bodies first (old feeds and web pages; the facts stay);
+- one backup is kept and it runs weekly (v0.9.0), and the SD card wear guard watches the writes;
+- `polymath storage usage` shows where the room goes and how many days are left at the current rate; the dashboard
+  shows the same, and Orin opens a `disk_low` incident when the reserve is under three days away;
 - no drive is used: no storage pool, no moving or mounting the brain's drive, no `storage heal`, no standby brain
   (this *is* the brain);
 - the feed shows `learning on the SD card` and `(SD-card mode since …: the brain is on the SD card, N GB of room;
@@ -608,7 +687,7 @@ on the SD card`. If the SSD does not come back within two minutes, **SD-card mod
 changes, and the agent keeps learning on the SD card.
 
 Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/lib/polymath/brain`),
-`sd_budget_gb` (0: what the card can give), `sd_keep_free_gb` (2.0).
+`sd_budget_gb` (0: what the card can give), `sd_keep_free_gb` (3.0).
 
 ## 9. Troubleshooting
 
@@ -639,6 +718,15 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | the feed says `offline` | no internet: it studies what it has and resumes by itself; check the router or cable if it lasts |
 | the header said `agent offline` for a few minutes after it learned something (before v0.8.2) | one long step (a backup, a quiz, training, a big query on the SD card) went over a minute without a sign of life. The feed called that offline, and after 2 minutes systemd restarted the agent. Since v0.8.2 the vigil vouches for it: the NOW line says `(one long step: 4 min so far — busy, not stuck)`. Which steps were slow: `polymath caretaker` (`jobs/slow:…` lines) and `polymath status` (`slow_steps`). Whether it was restarted before: `journalctl -u polymath --since -2d \| grep -ciE 'watchdog\|SIGABRT'` |
 | `agent offline` even with v0.8.2 | it really stopped or hung. After 15 min with no progress the vigil stops vouching and systemd restarts it. `polymath doctor`; `journalctl -u polymath -n 80` |
+| Chrome: *Your connection is not private* (`NET::ERR_CERT_AUTHORITY_INVALID`) on `https://<pi>:8443/` | expected until you trust the Pi's certificate: **Advanced → Proceed**, or trust it once ([§3](#browser), step 4) |
+| Chrome: `NET::ERR_CERT_COMMON_NAME_INVALID` after it worked | the Pi got a new address: `sudo /opt/polymath/src/scripts/access-cert.sh && sudo systemctl restart polymath-dashboard`, or use `https://<name>.local:8443/`; a DHCP reservation in the router keeps the address |
+| Chrome: *This site can't be reached* on port 8443 | `polymath doctor` (`access` line); `systemctl status polymath-dashboard`; no certificate yet: `sudo /opt/polymath/src/scripts/access-cert.sh` (needs `openssl`), then restart the dashboard |
+| `http://<pi>:8765/` from the PC stopped working (v0.9.0) | on purpose: that listener needs no sign-in, so it answers only on the Pi. Use `https://<pi>:8443/` and pair |
+| the page says *home network only* | the PC's address is not in `[access] networks` (a VPN on the PC, or a guest Wi-Fi): switch it off, or add that range |
+| the pairing page says the code expired or is cancelled | a code works once, for 15 minutes, and five wrong guesses cancel it: `polymath access pair` for a new one |
+| a paired browser is sent back to pairing | its key was removed (`polymath access log` says when), cookies were cleared, or 400 days passed: pair again |
+| a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
+| `polymath storage usage` forecast says a few days left | the card fills up: the oldest document texts go first (the facts stay). Plug in a drive, or lower what it reads (`[senses]`); the forecast updates hourly |
 | no feed window at login | is a terminal installed (`sudo apt install lxterminal`)? `~/.xsession-errors` shows launcher errors |
 | a plugged-in drive is not used | `journalctl -u 'polymath-volume@*'` says why it was skipped; `polymath storage list` |
 | the agent waits: "the brain lives on the drive …" | plug that drive in; `journalctl -u 'polymath-volume@*'` shows it being mounted |

@@ -94,7 +94,12 @@ def backup_job(ctx: JobContext) -> JobOutcome:
     out_dir = pool.backup_dir(need=db_size) if pool is not None else cfg.paths.backup_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(out_dir).free
-    if free < 1.5 * db_size + cfg.body.disk_min_free_gb * 1e9 / 2:
+    need = 1.5 * db_size + cfg.body.disk_min_free_gb * 1e9 / 2
+    if free < need:  # make room: older backups go before this one is skipped (the newest is always kept)
+        for old in backups(backup_dirs(cfg))[1:]:
+            old.unlink(missing_ok=True)
+        free = shutil.disk_usage(out_dir).free
+    if free < need:
         detail = f"skipped: {free / 1e9:.1f} GB free, database is {db_size / 1e9:.1f} GB"
         ctx.db.execute(
             "INSERT INTO backups(created, path, bytes, ok, detail) VALUES(?,?,?,?,?)", (time.time(), "", 0, 0, detail)
@@ -189,7 +194,8 @@ def evict_job(ctx: JobContext) -> JobOutcome:
         return JobOutcome(done=True, result={"need_mb": 0, "data_gb": round(data_gb, 2)})
     if free_gb < cfg.body.disk_min_free_gb:
         removed = 0
-        for old in [b for b in backups(backup_dirs(cfg))[2:] if b.parent == cfg.paths.backup_dir]:
+        keep = 1 if cfg.storage.sd_only else 2  # on the SD card a second copy of the brain costs a GB or more
+        for old in [b for b in backups(backup_dirs(cfg))[keep:] if b.parent == cfg.paths.backup_dir]:
             freed += old.stat().st_size
             old.unlink(missing_ok=True)
             removed += 1
@@ -396,8 +402,16 @@ def housekeeping_job(ctx: JobContext) -> JobOutcome:
     return JobOutcome(done=True, value=0.01, result=res)
 
 
+def backup_every_s(cfg: Any) -> float:
+    """Nightly; weekly in SD-card mode, where each backup writes the whole brain twice to the card it lives on."""
+    from polymath.core.config import SD_BACKUP_EVERY_DAYS
+
+    return SD_BACKUP_EVERY_DAYS * 86400.0 if cfg.storage.sd_only else 86400.0
+
+
 def planner(agent: Any) -> None:
     hour = agent.config.body.backup_hour
     if not getattr(agent.config, "standby", False):  # the standby brain (core.standby) is not backed up
-        agent.scheduler.ensure_recurring("body.backup", 86400, priority=3.0, phase=local_phase(hour))
+        agent.scheduler.ensure_recurring("body.backup", backup_every_s(agent.config), priority=3.0,
+                                         phase=local_phase(hour))  # fmt: skip
     agent.scheduler.ensure_recurring("body.housekeeping", 86400, priority=3.0, phase=local_phase((hour + 2) % 24))

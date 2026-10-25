@@ -442,6 +442,11 @@ def classify(blocks: list[Block]) -> list[str]:
     return final
 
 
+# control characters (C0 except tab/newline, DEL, C1) and bidi overrides: a page must not smuggle terminal escape
+# sequences (window titles, cursor moves) or reversed text into the live feed through its title or text
+CONTROL = re.compile("[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+
+
 def extract(html_text: str, base_url: str = "") -> Extracted:
     tok = _Tokenizer(base_url)
     try:
@@ -450,7 +455,7 @@ def extract(html_text: str, base_url: str = "") -> Extracted:
     except (AssertionError, ValueError):  # malformed markup: keep what was parsed
         tok._flush()
     out = tok.out
-    out.title = _WS.sub(" ", "".join(tok.title_parts)).strip()
+    out.title = _WS.sub(" ", CONTROL.sub("", "".join(tok.title_parts))).strip()
     labels = classify(out.blocks)
     kept = [b for b, lab in zip(out.blocks, labels) if lab == "good"]
     paragraphs: list[str] = []
@@ -459,7 +464,7 @@ def extract(html_text: str, base_url: str = "") -> Extracted:
             paragraphs.append(b.text)
         else:
             paragraphs.append(b.text)
-    out.text = "\n\n".join(paragraphs)
+    out.text = CONTROL.sub("", "\n\n".join(paragraphs))
     return out
 
 

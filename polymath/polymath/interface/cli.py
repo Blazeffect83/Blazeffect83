@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -640,6 +641,21 @@ def cmd_storage(config: Config, args: argparse.Namespace) -> int:
     from polymath.body.volumes import Helper
 
     op = args.op
+    if op == "usage":
+        from polymath.body import usage
+
+        try:
+            db: Database | None = Database(config.paths.db_path, readonly=True)
+        except (FileNotFoundError, OSError, sqlite3.Error):
+            db = None
+        try:
+            if args.detail:
+                print("reading the whole database to split it up (a minute or more on an SD card)…", file=sys.stderr)
+            print("\n".join(usage.lines(config, db, detail=args.detail)))
+        finally:
+            if db is not None:
+                db.close()
+        return 0
     if op == "list":
         rows = storage_rows(config)
         if args.json:
@@ -987,6 +1003,93 @@ def cmd_doctor(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(c.level == doctor.BAD for c in checks) else 0
 
 
+def _local_dashboard(config: Config, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Ask the dashboard's loopback listener (the Pi itself needs no sign-in). Raises RuntimeError with a hint."""
+    import urllib.error
+    import urllib.request
+
+    url = f"http://127.0.0.1:{config.dashboard.port}{path}"
+    data = json.dumps(body or {}).encode() if method == "POST" else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(req, timeout=15) as resp:
+            out: dict[str, Any] = json.loads(resp.read() or b"{}")
+            return out
+    except urllib.error.HTTPError as exc:
+        try:
+            msg = json.loads(exc.read() or b"{}").get("error") or exc.reason
+        except ValueError:
+            msg = exc.reason
+        raise RuntimeError(f"the dashboard said: {msg}") from exc
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        raise RuntimeError("the dashboard is not answering on this Pi: sudo systemctl restart polymath-dashboard "
+                           "(then polymath doctor)") from exc  # fmt: skip
+
+
+def cmd_access(config: Config, args: argparse.Namespace) -> int:
+    """Your other devices' access to the dashboard (``interface.access``): pair, list, revoke, log."""
+    import datetime
+
+    def when(t: float) -> str:
+        return datetime.datetime.fromtimestamp(float(t)).strftime("%Y-%m-%d %H:%M") if t else "never"
+
+    try:
+        if args.op == "pair":
+            d = _local_dashboard(config, "POST", "/api/access/code")
+            urls = list(d.get("urls") or [])
+            fp = d.get("fingerprint") or {}
+            minutes = int(d.get("expires_in", 900)) // 60
+            line = "─" * 64
+            print(line)
+            print("  Open Polymath on your PC (Chrome), on your home network:")
+            for u in urls:
+                print(f"      {u}")
+            print(f"\n  Pairing code:   {d['code']}      (works once, for {minutes} minutes)\n")
+            print("  Chrome first warns that the connection is not private: the Pi made its own certificate.")
+            print("  Choose Advanced → Proceed, or trust the Pi once (the pairing page shows how) to remove it.")
+            if fp.get("sha1"):
+                print(f"  The Pi's certificate thumbprint (SHA-1): {fp['sha1']}")
+            if getattr(args, "from_install", False):
+                print("  Need another code later (a new PC, or this one ran out)? polymath access pair")
+            print(line)
+            return 0
+        if args.op in {"devices", "list"}:
+            d = _local_dashboard(config, "GET", "/api/access/devices")
+            devs = d.get("devices") or []
+            if not devs:
+                print("no paired devices: only the Pi itself can see Polymath (polymath access pair to add one)")
+            for dev in devs:
+                print(
+                    f"{dev['id']}  {dev['name']:<28} paired {when(dev['created'])}   "
+                    f"last seen {when(dev['last_seen'])} from {dev.get('last_ip') or '?'}"
+                )
+            return 0
+        if args.op == "revoke":
+            if not args.which:
+                print("which one? polymath access revoke <id> (see polymath access devices), or: all", file=sys.stderr)
+                return 2
+            d = _local_dashboard(config, "POST", "/api/access/revoke", {"id": args.which})
+            n = int(d.get("revoked", 0))
+            print(f"revoked {n} device{'s' if n != 1 else ''}" if n else f"no device {args.which!r}")
+            return 0 if n else 1
+        if args.op == "log":
+            for e in _local_dashboard(config, "GET", "/api/access/log").get("log") or []:
+                rest = " ".join(f"{k}={v}" for k, v in sorted(e.items()) if k not in {"at", "event"})
+                print(f"{when(float(e.get('at') or 0))}  {e.get('event', '?'):<8} {rest}")
+            return 0
+        me = _local_dashboard(config, "GET", "/api/access/me")  # status
+        fp = me.get("fingerprint") or {}
+        print(f"paired devices: {me.get('devices', 0)}")
+        print(f"remote access: https on port {config.access.port}, home network only"
+              if config.access.remote else "remote access: off ([access] remote = false)")  # fmt: skip
+        print(f"certificate: {'thumbprint ' + fp['sha1'] if fp.get('sha1') else 'none yet (sudo ./install.sh)'}")
+        return 0
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
 def cmd_caretaker(config: Config, args: argparse.Namespace) -> int:
     """What the caretaker knows: the situation now, known problems and their fixes, what happened before."""
     from polymath.agents import faults
@@ -1280,6 +1383,12 @@ def build_parser() -> argparse.ArgumentParser:
     ct.add_argument("--json", action="store_true")
     ct.set_defaults(func=cmd_caretaker)
 
+    ac = sub.add_parser("access", help="your PC's and phone's access to the dashboard: pair, devices, revoke, log")
+    ac.add_argument("op", nargs="?", default="status", choices=["status", "pair", "devices", "list", "revoke", "log"])
+    ac.add_argument("which", nargs="?", help="with `revoke`: a device id (polymath access devices), or `all`")
+    ac.add_argument("--from-install", action="store_true", help=argparse.SUPPRESS)
+    ac.set_defaults(func=cmd_access)
+
     vr = sub.add_parser("version", help="installed version and commit, and whether the agent runs it")
     vr.add_argument("--json", action="store_true")
     vr.set_defaults(func=cmd_version)
@@ -1342,6 +1451,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sto = sub.add_parser("storage", help="drives in the brain: list, retire, eject (attach/detach run from udev)")
     stsub = sto.add_subparsers(dest="op", required=True)
+    stu = stsub.add_parser("usage", help="where the room goes (database, backups, indexes) and when it would run out")
+    stu.add_argument("--detail", action="store_true", help="also split the database by what it holds (slow)")
     stl = stsub.add_parser("list", help="the main disk and every drive, with brain space and use")
     stl.add_argument("--json", action="store_true")
     str_ = stsub.add_parser("retire", help="bring a drive's documents back, then it can be unplugged for good")
