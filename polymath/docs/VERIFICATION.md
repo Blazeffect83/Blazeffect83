@@ -1200,7 +1200,7 @@ widened.
 not told; doctor uses them when it may not read the file, says so when the dashboard does not answer, and reports
 no certificate when there is none; `cert_info` raises only for a permission error.
 
-**Result:** RESULT_LINE
+**Result:** 829 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath` and mypy over the tests and scripts are clean.
 
 **Not yet run on the Pi.**
 
