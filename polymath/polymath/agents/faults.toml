@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.11.0"
+updated_for = "0.11.1"
 updated = "2026-10-25"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -35,7 +35,8 @@ waiting_on = [
     "install v0.10.0 (the SSD watch: moves back onto the SSD by itself once it is plugged in at USB 3 and healthy for 10 min, and back to the SD card by itself if it fails again): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh",
     "then: the feed's SD-card line and polymath doctor ('sd card') say what the SSD watch sees: not plugged in / needs more power / USB 2 / checking / back on the SSD",
     "2026-10-25: Christian will add more drives (the Pi 4 has two USB 3 and two USB 2 ports) and wants Polymath to pick by itself which holds the brain, which keeps the backups and which are extra, and to know what each drive holds so that a drive lost by accident is relearned onto the others, the most important first",
-    "install v0.11.0 (drive roles + inventory and relearning): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (then: polymath storage roles)",
+    "2026-10-25: Christian installed v0.11.0 (9c16c4e) on the Pi; polymath doctor then crashed with PermissionError on /etc/polymath/tls/server.crt (fixed in 0.11.1)",
+    "install v0.11.1 (doctor no longer crashes as you): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (then: polymath doctor; polymath storage roles)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
 suspected_root_cause = "the SSD links at USB 2 (black port, USB 2 cable or hub) and stalls there; UAS is not in use at USB 2"
@@ -46,6 +47,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.11.1"
+date = "2026-10-25"
+changes = """polymath doctor (run as you) crashed on the Pi with PermissionError: /etc/polymath/tls/server.crt is readable by root and the dashboard only (the folder is 0750, group polymath), and Python 3.13 raises instead of answering 'not a file'. Now cert_info says when it may not read the certificate, and doctor asks the dashboard's loopback listener (/api/access/me, which on the Pi's own listener carries the certificate's names, addresses and expiry); if the dashboard does not answer, doctor says so and suggests sudo polymath doctor. No permissions were widened. Checked by running doctor, access, caretaker, feed and storage roles as an unprivileged user against root-owned 0750/0700 folders, with and without a running dashboard."""
+
 [[update]]
 version = "0.11.0"
 date = "2026-10-25"
@@ -577,6 +583,26 @@ steps = [
 ]
 since = "0.11.0"
 updated = "0.11.0"
+
+[[fault]]
+id = "doctor-crashed"
+title = "polymath doctor (or another command run as you) stops with a Traceback"
+area = "install"
+codes = []
+patterns = ["Traceback", "PermissionError", "Permission denied"]
+symptoms = ["polymath doctor prints a Traceback ending in PermissionError: [Errno 13] Permission denied: '/etc/polymath/tls/server.crt'"]
+causes = [
+    { cause = "a check read a file that only root and the dashboard may read (fixed in 0.11.1 for the HTTPS certificate)", prior = 0.8 },
+    { cause = "an older build is still installed", prior = 0.2 },
+]
+checks = ["cat /opt/polymath/build.json", "sudo polymath doctor   (as root it can read everything)"]
+self_healing = ["none: it is a bug in the command; the agent and the dashboard keep running"]
+steps = [
+    { needs = "you", do = "install the fix", command = "cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh" },
+    { needs = "you", do = "meanwhile, run it as root", command = "sudo polymath doctor" },
+]
+since = "0.11.1"
+updated = "0.11.1"
 
 [[fault]]
 id = "agent-memory-high"
@@ -1192,4 +1218,13 @@ what = "Christian plugged the SSD in again: it was not picked up and the feed st
 cause = "SD-card mode ignores every drive by design until sd-card-mode.sh off; whether the Pi saw the drive at all (power, USB 2) is not known yet"
 fault = "ssd-watch"
 fixed_in = "0.10.0"
+open = true
+
+[[history]]
+date = "2026-10-25"
+version = "0.11.0"
+what = "After installing v0.11.0 (9c16c4e), polymath doctor stopped with a Traceback: PermissionError: [Errno 13] Permission denied: '/etc/polymath/tls/server.crt'."
+cause = "doctor runs as Christian; the certificate folder is root's and the dashboard's (0750, group polymath), and Python 3.13's Path.is_file raises on EACCES instead of answering False; the tests ran as root and never saw it"
+fault = "doctor-crashed"
+fixed_in = "0.11.1"
 open = true

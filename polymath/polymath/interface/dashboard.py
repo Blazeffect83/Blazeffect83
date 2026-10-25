@@ -830,7 +830,10 @@ def make_handler(data: DashboardData, limiter: RateLimiter, gate: Gate | None = 
                 return self._send(200, pem, "application/x-x509-ca-cert", extra=disp)
             if path == "/api/access/me":
                 dev = self.device.public() if self.device else None
-                known = {"devices": len(gate.access.devices())} if self._owner() else {}  # not told to strangers
+                known: dict[str, Any] = {"devices": len(gate.access.devices())} if self._owner() else {}
+                if not gate.remote:  # the Pi itself (polymath doctor runs as you and may not read the certificate)
+                    with contextlib.suppress(OSError):
+                        known["cert"] = acc.cert_info(gate.tls_dir / "server.crt")
                 return self._json(200, {"remote": gate.remote, "device": dev, **known,
                                         "fingerprint": acc.fingerprints(gate.tls_dir / "ca.crt")})  # fmt: skip
             if not self._owner():  # pragma: no cover - the gate already asked for a paired device

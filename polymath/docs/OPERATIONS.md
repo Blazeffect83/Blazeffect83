@@ -776,6 +776,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | symptom | check |
 |---|---|
 | anything | `polymath doctor`: each broken part with the command that fixes it |
+| `polymath doctor` prints a Traceback ending in `PermissionError … /etc/polymath/tls/server.crt` (v0.11.0) | fixed in v0.11.1: install the update; meanwhile `sudo polymath doctor` |
 | service won't start | `journalctl -u polymath -b`; is `/srv/polymath` mounted (`findmnt /srv/polymath`)? |
 | dashboard says "cannot reach the database" | `systemctl status polymath`; `ls -l /srv/polymath/db` |
 | `/health` 503 | heartbeat older than 60 s: the agent is stopped, paused for heat, or hung (the watchdog restarts it) |

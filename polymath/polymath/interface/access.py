@@ -405,20 +405,40 @@ def lan_urls(port: int) -> list[str]:
 
 
 def cert_info(crt: Path) -> dict[str, Any] | None:
-    """Names, addresses and expiry of the dashboard's certificate (for ``polymath doctor``), or None."""
+    """Names, addresses and expiry of the dashboard's certificate (for ``polymath doctor``), or None when there is
+    none. Raises ``PermissionError`` when it may not be read (as you: ``/etc/polymath/tls`` is root's and the
+    dashboard's), so the caller can ask the dashboard instead."""
     import ssl
 
     decode = getattr(getattr(ssl, "_ssl", None), "_test_decode_cert", None)  # CPython's own decoder (no extra package)
-    if decode is None or not Path(crt).is_file():
-        return None
     try:
+        if decode is None or not Path(crt).is_file():
+            return None
         raw = decode(str(crt))
         not_after = ssl.cert_time_to_seconds(str(raw["notAfter"]))
+    except PermissionError:
+        raise
     except (ssl.SSLError, OSError, KeyError, ValueError):
         return None
     sans = raw.get("subjectAltName") or ()
     return {"names": [v for k, v in sans if k == "DNS"], "ips": [v for k, v in sans if k == "IP Address"],
             "not_after": float(not_after)}  # fmt: skip
+
+
+def cert_from_dashboard(config: Any) -> dict[str, Any] | None:
+    """The certificate's facts as the dashboard reads them (loopback, no sign-in): ``{}`` when it has none, None when
+    the dashboard does not answer."""
+    import urllib.request
+
+    url = f"http://127.0.0.1:{int(config.dashboard.port)}/api/access/me"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(urllib.request.Request(url), timeout=5) as resp:
+            body = json.loads(resp.read() or b"{}")
+    except (OSError, ValueError):
+        return None
+    cert = body.get("cert") if isinstance(body, dict) else None
+    return cert if isinstance(cert, dict) else {}
 
 
 def access_check(config: Any, *, now: float | None = None) -> tuple[str, str, str]:
@@ -428,7 +448,15 @@ def access_check(config: Any, *, now: float | None = None) -> tuple[str, str, st
     fix_cert = "sudo /opt/polymath/src/scripts/access-cert.sh   (install.sh does it too)"
     if not a.remote:
         return "ok", "only on the Pi itself ([access] remote = false)", ""
-    info = cert_info(Path(a.tls_dir) / "server.crt")
+    try:
+        info = cert_info(Path(a.tls_dir) / "server.crt")
+    except PermissionError:  # doctor runs as you: the dashboard (which may read it) says what it is
+        info = cert_from_dashboard(config)
+        if info is None:
+            return ("warn", "the HTTPS certificate could not be checked (it is readable by root and the dashboard "
+                    "only, and the dashboard is not answering)", "sudo polymath doctor")  # fmt: skip
+        if not info:
+            info = None
     if info is None:
         return "warn", "no HTTPS certificate yet: your PC cannot open the dashboard", fix_cert
     days = (info["not_after"] - now) / 86400

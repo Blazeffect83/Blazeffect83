@@ -1180,6 +1180,30 @@ played (no services in the container). Settling set to one minute.
 
 **Not yet run on the Pi.**
 
+## 12v. Doctor no longer crashes when it may not read the certificate (v0.11.1)
+
+**Why:** on the Pi, right after installing v0.11.0, `polymath doctor` stopped with `PermissionError: [Errno 13]
+Permission denied: '/etc/polymath/tls/server.crt'`. Doctor runs as Christian; that folder is readable by root and the
+dashboard only, and Python 3.13 raises there. The test suite runs as root, so it never saw it.
+
+**Reproduced first** (development container): a user without privileges, a configuration whose certificate folder
+is root's (0750), the access folder 0700 and the data folder 0750, like the Pi. v0.11.0 (`9c16c4e`) stopped with the
+same Traceback.
+
+**After the fix**, as that user: `polymath doctor` finished; without a dashboard its access line says the
+certificate could not be checked and to use `sudo polymath doctor`; with a real dashboard running (as root) it read
+the certificate through the dashboard and reported on it. `polymath access`, `polymath caretaker`,
+`polymath feed --once` and `polymath storage roles` also ran as that user without errors. No permissions were
+widened.
+
+**Tests:** `tests/test_access.py` (2 more): the Pi's own listener tells the certificate's facts and other devices are
+not told; doctor uses them when it may not read the file, says so when the dashboard does not answer, and reports
+no certificate when there is none; `cert_info` raises only for a permission error.
+
+**Result:** RESULT_LINE
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

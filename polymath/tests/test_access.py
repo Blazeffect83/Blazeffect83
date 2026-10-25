@@ -402,6 +402,48 @@ def test_doctor_says_whether_remote_access_is_ready(servers, config, monkeypatch
     assert "no HTTPS certificate" in acc.access_check(config)[1]
 
 
+def test_doctor_as_you_asks_the_dashboard_about_the_certificate(servers, config, monkeypatch):
+    """The Pi, 2026-10-25: `polymath doctor` (run as you) crashed with PermissionError on /etc/polymath/tls/server.crt,
+    which only root and the dashboard may read. Now it asks the dashboard, and never crashes."""
+    local, remote, _gate = servers
+    config.dashboard.port = local.server_address[1]
+    config.access.port = remote.server_address[1]
+    monkeypatch.setattr(acc, "lan_addresses", lambda: ["192.168.1.50"])
+    me = json.loads(call(local, "GET", "/api/access/me", tls=False)[2])
+    assert "192.168.1.50" in me["cert"]["ips"]  # the Pi's own listener says what the certificate names
+    assert "cert" not in json.loads(call(remote, "GET", "/api/access/me", tls=True)[2])  # other devices are not told
+    real = acc.cert_info
+    calls = {"n": 0}
+
+    def as_you(crt: Path) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:  # doctor's own try (as you): not allowed
+            raise PermissionError(13, "Permission denied", str(crt))
+        return real(crt)  # the dashboard's (it may read it)
+
+    monkeypatch.setattr(acc, "cert_info", as_you)
+    status, detail, _fix = acc.access_check(config)
+    assert status == "ok" and "paired devices" in detail
+    monkeypatch.setattr(acc, "cert_info", lambda crt: (_ for _ in ()).throw(PermissionError(13, "denied")))
+    monkeypatch.setattr(acc, "cert_from_dashboard", lambda cfg: None)
+    status, detail, fix = acc.access_check(config)
+    assert status == "warn" and "could not be checked" in detail and fix == "sudo polymath doctor"
+    monkeypatch.setattr(acc, "cert_from_dashboard", lambda cfg: {})
+    assert "no HTTPS certificate" in acc.access_check(config)[1]
+
+
+def test_cert_info_says_when_it_may_not_read_the_certificate(tmp_path, monkeypatch):
+    crt = tmp_path / "server.crt"
+    crt.write_text("x")
+    monkeypatch.setattr(Path, "is_file", lambda self: (_ for _ in ()).throw(PermissionError(13, "denied")))
+    with pytest.raises(PermissionError):
+        acc.cert_info(crt)
+    monkeypatch.setattr(Path, "is_file", lambda self: (_ for _ in ()).throw(OSError(5, "I/O error")))
+    assert acc.cert_info(crt) is None
+    config = type("C", (), {"dashboard": type("D", (), {"port": 1})()})()
+    assert acc.cert_from_dashboard(config) is None  # nothing answers there
+
+
 # ------------------------------------------------------------------ smaller parts
 def test_tls_context_needs_both_files_and_a_valid_pair(tmp_path):
     assert tls_context(tmp_path) is None
