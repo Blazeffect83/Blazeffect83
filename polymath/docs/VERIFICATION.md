@@ -1227,7 +1227,7 @@ Then: "fix this for future issues as well", and "give caretaker abilities to cha
 - `tests/test_storage.py` (1 more): an empty partition table is repartitioned and formatted, or left with a reason
   when `format_blank_disks` is off. Two older tests now expect that, and that empty folders are not documents.
 
-**Result:** RESULT_LINE
+**Result:** 841 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck are clean.
 
 **Not yet run on the Pi.**
 
