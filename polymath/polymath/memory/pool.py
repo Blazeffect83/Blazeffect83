@@ -185,10 +185,15 @@ class StoragePool:
                 self._roles = raw if isinstance(raw, dict) else {}
         return self._roles
 
+    def usable(self) -> list[Volume]:
+        """The drives Polymath may write to: all, but those drive care is about to reformat (``body.roles``)."""
+        pending = set(self.roles().get("pending") or [])
+        return [v for v in self.volumes() if v.id not in pending]
+
     def choose(self, need: int = 0) -> Volume | None:
         """The online drive with the most room that can take ``need`` bytes; extra drives before the backup drive."""
         backup = str(self.roles().get("backup") or "")
-        fits = [(r, v.id, v) for v in self.volumes() if (r := self.room(v)) > 0 and r >= need]
+        fits = [(r, v.id, v) for v in self.usable() if (r := self.room(v)) > 0 and r >= need]
         return max(fits, key=lambda t: (t[1] != backup, t[0], t[1]))[2] if fits else None
 
     def totals(self) -> dict[str, Any]:
@@ -267,7 +272,7 @@ class StoragePool:
         chosen = self.find(str(self.roles().get("backup") or ""))
         if chosen is not None and self.room(chosen) >= need:
             return chosen.path / "backups"
-        fits = [(r, v.id, v) for v in self.volumes() if (r := self.room(v)) > 0 and r >= need]
+        fits = [(r, v.id, v) for v in self.usable() if (r := self.room(v)) > 0 and r >= need]
         v = max(fits, key=lambda t: (t[0], t[1]))[2] if fits else None
         return v.path / "backups" if v is not None else self.config.paths.backup_dir
 

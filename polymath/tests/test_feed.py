@@ -591,3 +591,22 @@ def test_long_messages_wrap_under_their_text_on_a_small_screen():
     very_long = [("x", ""), (" word" * 60, "")]
     assert len(scr.wrap(very_long, 4)) == Screen.WRAP_ROWS  # at most three rows
     assert scr.wrap([], 4) == [[]]
+
+
+def test_while_the_brain_is_stuck_on_the_sd_card_the_header_says_which_drive_cannot_take_it(db, tmp_path):
+    f = Feed(db, run_dir=tmp_path)
+    assert f.drive_roles() is None  # no decision yet
+    decision = "the brain stays on the SD card: EA06-6985 cannot hold it (on USB 2)"
+    roles: dict[str, Any] = {"brain": "sd", "decision": decision, "drives": [{"id": "EA06-6985"}]}
+    (tmp_path / "drive-roles.json").write_text(json.dumps(roles))
+    assert f.status()["drive_roles"] == {"decision": decision}
+    (tmp_path / "drive-roles.json").write_text(json.dumps(roles | {"brain": "EA06-6985"}))
+    assert f.drive_roles() is None  # the brain has a drive: nothing to say
+    (tmp_path / "drive-roles.json").write_text("{not json")
+    assert f.drive_roles() is None and Feed(db).drive_roles() is None
+    base = {"online": True, "state": "paused", "mode": "pause", "paused_reason": "only 1.9 GB free on the data disk",
+            "counts": {}, "drive_roles": {"decision": decision}}  # fmt: skip
+    lines = [text_of(x) for x in status_lines(base)]
+    assert lines[2] == " LEARNING   between topics" and lines[3] == " DRIVES   " + decision
+    learning = [text_of(x) for x in status_lines(base | {"focus": {"what": "Mars", "why": "curious"}})]
+    assert not any("DRIVES" in x for x in learning)  # while it learns, its progress keeps the line

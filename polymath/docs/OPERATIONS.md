@@ -628,6 +628,19 @@ and full extra room. A drive with your files on it is never reformatted by itsel
 over 4 GB fits). A disk with only an empty partition table (what deleting its volumes in Windows leaves) counts as
 blank and is formatted too. Off: `[storage] care_format_empty = false`.
 
+**v0.11.3.** "Nothing" now means none of *your* files: what computers leave behind (macOS `._` files, `.apdisk`,
+`.Spotlight-V100`, a Linux `.Trash-1000`, Windows' `System Volume Information`, chkdsk's `FOUND.000`) and a maker's
+installers do not count. Until it is reformatted, such a drive shows the role **`pending`** in `polymath storage roles`
+and nothing is put on it (no backups, no documents). If Polymath already put data there (an older version, or the
+minute before the decision), it is reformatted anyway **only while the brain is stuck on the SD card**: those
+documents are read again and the backups taken again. A drive with your files says once what is on it and is left
+alone. A drive drive care reformatted takes the brain right after (it already settled).
+
+**The brain stays on the SD card and the feed is paused for disk space?** Look at the feed's **DRIVES** line (or
+`polymath storage roles`): it names each drive that cannot take the brain and why, what only you can fix first. The
+usual one is **on USB 2**: move the drive to a **blue** USB 3 port, with a USB 3 cable and no USB 2 hub. USB 2 is
+refused for the brain on purpose: the SSD froze the Pi there before.
+
 ### <a id="relearn"></a>What each drive holds, and a drive lost by accident (v0.11.0)
 
 Every hour Polymath writes down what each drive holds: the documents whose texts are there (how many, from which
@@ -832,6 +845,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | the pairing page says the code expired or is cancelled | a code works once, for 15 minutes, and five wrong guesses cancel it: `polymath access pair` for a new one |
 | a paired browser is sent back to pairing | its key was removed (`polymath access log` says when), cookies were cleared, or 400 days passed: pair again |
 | a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
+| the feed: `DRIVES  the brain stays on the SD card: X cannot hold it (on USB 2 …)` | move X to a blue USB 3 port (USB 3 cable, no USB 2 hub). A "formatted for Windows/macOS" reason with none of your files on it fixes itself: it is reformatted for Linux after 10 minutes ([§8](#wiped)) |
 | `polymath storage roles` says a drive is `not the brain: …` | the reason it gives: on USB 2 (move it to a blue port), holds your files or is formatted for Windows/macOS (only a Polymath drive holds the brain), too small, still settling (10 min), or dropped out this week. It is used for backups or extra room meanwhile |
 | doctor: `the drives ask for … mA, more than the 1200 mA a Pi 4 gives` | too many bus-powered drives for the Pi's ports: a powered USB 3 hub, or drives with their own power supply; otherwise they drop out |
 | `SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain` | the brain's SSD was reformatted (its brain is gone) or another drive is plugged in. If you reformatted it: `sudo polymath storage keep-sd-brain` (the SD card's brain becomes the brain and moves onto the SSD by itself); v0.11.2 also does this by itself when it recognises the drive ([§8](#wiped)) |

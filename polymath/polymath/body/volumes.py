@@ -90,7 +90,35 @@ HOME = "home"  # polymath-brain/home on a drive: the whole data directory, when 
 SERVICES = ("polymath.service", "polymath-dashboard.service")
 # what an "empty" drive may hold and still be reformatted on request (OS housekeeping, never user files)
 JUNK = {"lost+found", "System Volume Information", "$RECYCLE.BIN", ".Trashes", ".Spotlight-V100", ".fseventsd",
-        ".TemporaryItems", "Thumbs.db", ".DS_Store", "desktop.ini", "autorun.inf", "IndexerVolumeGuid"}  # fmt: skip
+        ".TemporaryItems", "Thumbs.db", ".DS_Store", "desktop.ini", "autorun.inf", "IndexerVolumeGuid", "RECYCLER",
+        "Recycled", ".apdisk", ".VolumeIcon.icns", ".DocumentRevisions-V100", ".PKInstallSandboxManager",
+        ".PKInstallSandboxManager-SystemSoftware", ".com.apple.timemachine.donotpresent", ".metadata_never_index",
+        ".metadata_never_index_unless_rootfs", ".HFS+ Private Directory Data\r", ".Trash"}  # fmt: skip
+OWN_NOTES = {MANIFEST, MANIFEST + ".tmp", "inventory.json", ".inventory.json.tmp"}  # Polymath's notes, not data
+
+
+def clutter(name: str) -> bool:
+    """System housekeeping a computer leaves on a drive: never your files (macOS ``._`` twins, Linux trash, chkdsk)."""
+    return name in JUNK or name.startswith(("._", ".Trash-", "FOUND."))
+
+
+def loose_files(root: Path) -> list[str]:
+    """What sits on a drive besides clutter, Polymath's own folder and a maker's installers: your files. Raises
+    OSError when the drive cannot be read (then nothing may be assumed about it)."""
+    entries = sorted(e for e in os.listdir(root) if e != BRAIN and not clutter(e))
+    return [] if entries and factory_files(root) is not None else entries
+
+
+def own_files(brain: Path, limit: int = 100_000) -> list[str]:
+    """Polymath's data in a drive's polymath-brain folder (documents, backups, downloads), its notes aside."""
+    out: list[str] = []
+    if not brain.is_dir():
+        return out
+    for base, _dirs, names in os.walk(brain):
+        out += [str(Path(base, n).relative_to(brain)) for n in names if not (Path(base) == brain and n in OWN_NOTES)]
+        if len(out) >= limit:
+            break
+    return out
 
 
 def tree_stats(root: Path) -> tuple[int, int]:
@@ -115,7 +143,7 @@ def factory_files(root: Path) -> list[str] | None:
     """
     found, total = [], 0
     try:
-        entries = [e for e in os.listdir(root) if e not in JUNK and e != BRAIN and not e.startswith("._")]
+        entries = [e for e in os.listdir(root) if e != BRAIN and not clutter(e)]
     except OSError:
         return None
     for name in entries:
@@ -780,10 +808,14 @@ class Helper:
         except PermissionError:  # not root (tests, a non-POSIX drive): the plain write, still never through a link
             safe_write(brain, MANIFEST, json.dumps(manifest, indent=2), mode=0o640)
 
-    def format_empty(self, vol: str, *, erase_files: bool = False, by: str = "polymath storage format") -> Outcome:
+    def format_empty(
+        self, vol: str, *, erase_files: bool = False, drop_own: bool = False, by: str = "polymath storage format"
+    ) -> Outcome:
         """Reformat an adopted drive: Linux ext4, so the brain can move there. On request, or by the drive roles for a
-        drive that holds nothing at all (``body.roles``). A drive holding files is refused unless ``erase_files``
-        (the user listed them and typed --erase-files); one holding Polymath's documents always is."""
+        drive that holds none of your files (``body.roles``). A drive holding files is refused unless ``erase_files``
+        (the user listed them and typed --erase-files). Polymath's own data there (spilled documents, backups,
+        downloads) is refused too unless ``drop_own``: the drive roles' choice when the brain is stuck on the SD card
+        and this drive can free it (the documents are read again by the relearning, the backups taken again)."""
         with self._locked():
             mp = str(self.config.storage.mount_root / vol)
             src = next((s for m, s in self.mounts_of() if m == mp), "")
@@ -793,18 +825,19 @@ class Helper:
             manifest = read_manifest(brain) or {}
             if manifest.get("home"):
                 return Outcome("skipped", "this drive holds the brain; it is never reformatted", vol)
-            files = [e for e in os.listdir(mp) if e not in JUNK and e != BRAIN]
-            own = {MANIFEST, MANIFEST + ".tmp", "inventory.json", ".inventory.json.tmp"}
-            inside = [str(Path(b) / n) for b, _d, names in os.walk(brain) for n in names
-                      if not (Path(b) == brain and n in own)] if brain.exists() else []  # fmt: skip
-            if inside:  # spilled documents live here (or backups, downloads): erasing them would lose them
+            try:
+                files, inside = loose_files(Path(mp)), own_files(brain)
+            except OSError as exc:
+                return Outcome("skipped", f"{mp} cannot be read ({exc}); nothing was changed", vol)
+            if inside and not drop_own:  # spilled documents live here (or backups, downloads): erasing them loses them
                 return Outcome("skipped", f"{BRAIN}/ holds Polymath's documents; retire the drive first", vol)
             if files and not erase_files:
-                shown = ", ".join(sorted(files)[:5]) + (" …" if len(files) > 5 else "")
+                shown = ", ".join(files[:5]) + (" …" if len(files) > 5 else "")
                 return Outcome("skipped", f"the drive holds files ({shown}); it is not reformatted. To erase them "
                                f"too: sudo polymath storage format {vol} --yes --erase-files", vol)  # fmt: skip
             self.remember_formatted(self.identity(src), {"was": manifest.get("fstype", ""), "uuid_before": vol,
-                                                         "by": by, "device": src})  # fmt: skip
+                                                         "by": by, "device": src,
+                                                         "dropped_own_files": len(inside)})  # fmt: skip
             self.run(["umount", mp])
             if any(m == mp for m, _s in self.mounts_of()):
                 return Outcome("skipped", f"{mp} is busy; nothing was changed", vol)

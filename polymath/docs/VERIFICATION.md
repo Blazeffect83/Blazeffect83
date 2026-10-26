@@ -1229,6 +1229,33 @@ Then: "fix this for future issues as well", and "give caretaker abilities to cha
 
 **Result:** 841 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck are clean.
 
+**On the Pi (2026-10-25):** installed (`00ae952`); `sudo polymath storage keep-sd-brain` answered `promoted` in 2 min 37 s.
+
+## 12x. Why the brain stays on the SD card, and drive care that is not stopped by clutter (v0.11.3)
+
+**Why:** Christian, 2026-10-25, after keep-sd-brain: "It's still showing barely any space". The feed: paused, only
+1.9 GB free on the data disk; drive roles: "backups go to EA06-698 (USB 2 hard disk, 512 GB of room)". The brain
+did not move because that drive is on a USB 2 link (refused on purpose) and exFAT, and drive care did not reformat
+it. Nothing said so.
+
+**Tests** (development container):
+- `tests/test_roles.py` (5 more): the Pi's case: an exFAT drive on USB 2 with no label is `pending` (not the backup
+  drive; the pool puts neither documents nor backups on it), is reformatted once settled, and the decision reads
+  "the brain stays on the SD card: EA06-6985 cannot hold it (on USB 2 (move it to a blue USB 3 port); formatted for
+  Windows/macOS (exfat): reformatted for Linux by itself", reported once, not every minute; `storage roles` explains
+  `pending`; on a USB 3 link and ext4 it takes the brain. A drive reformatted under a new name takes the brain at
+  once. Polymath's own documents on an NTFS drive go (`drop_own`) while the brain is on the SD card, and the event
+  says how many; a drive with the user's folder (and a macOS `._` file) is said once and never reformatted, with
+  the decision saying so. Clutter from macOS, Linux, Windows and chkdsk and a maker's installer are not the user's
+  files; `own_files` honours its limit. `format_empty(drop_own=True)` formats past Polymath's backups and the
+  registry records how many files were dropped. The earlier tests (Polymath's documents on a drive with the brain on
+  a drive are never erased) still pass.
+- `tests/test_feed.py` (1 more): `Feed.drive_roles()` only while the brain is on the SD card (not with no file, bad
+  JSON, no run directory, or the brain on a drive); the header's DRIVES line stands between topics, not while a
+  topic is being learned.
+
+**Result:** 847 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath` and mypy over the tests and scripts are clean (no shell script changed).
+
 **Not yet run on the Pi.**
 
 ## 13. Raspberry Pi 4 on-device results

@@ -17,6 +17,7 @@ import pytest
 from polymath.body import roles as rl
 from polymath.body import volumes as vols
 from polymath.core.config import HOME_FILE, MOVED_FILE, ConfigError
+from polymath.interface import cli
 from polymath.memory import pool as storage_pool
 from tests.test_storage import GB, Drives, FakeSystem
 
@@ -42,6 +43,7 @@ class FakeHelper:
         self.moves: list[tuple[str, ...]] = []
         self.result = "moved"
         self.manifests: dict[str, dict[str, Any]] = {}
+        self.formatted_as = ""  # the drive's new name after a format ("" keeps it)
 
     def mounts_at(self, path: Path) -> list[tuple[str, str]]:
         return [(str(path), "/dev/sda2")] if self.mounted and path == self.data else []
@@ -72,9 +74,11 @@ class FakeHelper:
     def _write_manifest(self, brain: Path, manifest: dict[str, Any]) -> None:
         (brain / storage_pool.MANIFEST).write_text(json.dumps(manifest))
 
-    def format_empty(self, vol: str, *, erase_files: bool = False, by: str = "") -> vols.Outcome:
-        self.moves.append(("format", vol, by))
-        return vols.Outcome("attached", f"{vol} formatted ext4", vol)
+    def format_empty(
+        self, vol: str, *, erase_files: bool = False, drop_own: bool = False, by: str = ""
+    ) -> vols.Outcome:
+        self.moves.append(("format", vol, by) + (("drop_own",) if drop_own else ()))
+        return vols.Outcome("attached", f"{vol} formatted ext4", self.formatted_as or vol)
 
 
 # what lsblk and sysfs would say about each drive
@@ -538,7 +542,6 @@ def test_format_empty_ignores_polymaths_notes_but_never_erases_its_documents(two
     (new / "backups" / "polymath-1.sqlite3.xz").write_bytes(b"b")
     out = h.format_empty("new", by="drive roles (empty drive)")
     assert out.action == "skipped" and "holds Polymath's documents" in out.detail
-    (new / "backups" / "polymath-1.sqlite3.xz").unlink()
     real = h.run
 
     def run(args: list[str], *, input: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -548,10 +551,10 @@ def test_format_empty_ignores_polymaths_notes_but_never_erases_its_documents(two
         return out
 
     h.run = run
-    h.format_empty("new", by="drive roles (empty drive)")
+    h.format_empty("new", drop_own=True, by="drive roles (empty drive)")  # the brain is stuck on the SD card
     assert ["mkfs.ext4", "-q", "-F", "-L", "POLYMATH", "-m", "0", "/dev/sdc1"] in fake.calls
     reg = json.loads(h.registry.read_text())
-    assert any(v.get("by") == "drive roles (empty drive)" for v in reg.values())
+    assert any(v.get("by") == "drive roles (empty drive)" and v.get("dropped_own_files") == 1 for v in reg.values())
 
 
 def test_an_old_brain_drive_coming_back_never_covers_the_brain_that_lives_on(two_drives, config):
@@ -572,3 +575,99 @@ def test_the_sd_card_remembers_which_drive_holds_the_brain(two_drives, config, m
     marker = json.loads((data / MOVED_FILE).read_text())
     assert marker["id"] == "new" and marker["serial"] == "S-NEW" and marker["usb"] == "04e8:4001"
     assert vols.Helper.drive_identity(h, {"serial": " S1 ", "model": "M"})["serial"] == "S1"
+
+
+# ------------------------------------------------------------------ v0.11.3: the Pi's case, a USB 2 exFAT drive
+USB2_DISK = {"disk": "sda", "tran": "usb", "rotational": True, "speed": 480, "power_ma": 896, "usb": "/sys/u/1-1"}
+
+
+def test_a_usb2_exfat_drive_says_why_the_brain_stays_on_the_sd_card_and_is_reformatted_then_takes_the_brain(w):
+    w.config.storage.care_format_empty = False  # as v0.11.2 left it on the Pi: the backup drive
+    w.plug("EA06-6985", USB2_DISK, label="EA06-6985", fstype="exfat", budget=512 * GB, dedicated=False)
+    w.tick()
+    assert w.public()["backup"] == "EA06-6985"
+    w.config.storage.care_format_empty = True
+    w.tick(5)
+    assert w.public()["events"][-1]["detail"] == "backups stay with the brain until EA06-6985 is reformatted for Linux"
+    pub = w.public()
+    assert pub["brain"] == "sd" and pub["pending"] == ["EA06-6985"] and w.role("EA06-6985") == "pending"
+    assert "reformatted for Linux by itself; nothing is put on it" in "\n".join(cli.roles_lines(pub))
+    assert pub["backup"] == ""  # no backups (nor documents) go onto a drive about to be reformatted
+    assert w.roles().pool.choose(1) is None and w.roles().pool.backup_dir() == w.config.paths.backup_dir
+    w.tick(6)  # settled: drive care reformats it (on USB 2 too: then it serves for backups and extra room)
+    assert ("format", "EA06-6985", "drive roles (empty drive)") in w.helper.moves
+    decision = w.public()["decision"]
+    assert decision.startswith(
+        "the brain stays on the SD card: EA06-6985 cannot hold it (on USB 2 (move it to a "
+        "blue USB 3 port); formatted for Windows/macOS (exfat): reformatted for Linux by itself"
+    )
+    assert [e["event"] for e in w.public()["events"]].count("blocked") == 1
+    w.tick()
+    w.tick()
+    assert [e["event"] for e in w.public()["events"]].count("blocked") == 1  # said once, not every minute
+    # moved to a blue port and reformatted: it can take the brain
+    w.drives.unplug("EA06-6985")
+    w.tick()
+    w.plug("POLYMATH", {**USB2_DISK, "speed": 5000}, budget=512 * GB)
+    w.tick()
+    w.tick(11)
+    assert w.helper.moves[-1] == ("home", "POLYMATH") and w.public()["blocked"] == ""
+
+
+def test_a_drive_drive_care_reformatted_under_a_new_name_does_not_settle_again(w):
+    w.helper.formatted_as = "fresh"
+    w.plug("exfat", SSD, fstype="exfat", budget=4 * GB)
+    w.tick()
+    w.tick(11)
+    assert ("format", "exfat", "drive roles (empty drive)") in w.helper.moves
+    w.drives.unplug("exfat")
+    w.plug("fresh", SSD, budget=4 * GB)  # what attach makes of it: the same drive, ext4 now
+    w.tick()
+    assert w.helper.moves[-1] == ("home", "fresh")  # at once: it settled under its old name
+
+
+def test_polymaths_own_data_on_a_windows_drive_goes_only_to_free_the_brain_from_the_sd_card(w):
+    spilled = w.plug("ntfs", SSD, fstype="ntfs", budget=4 * GB)
+    (spilled / "bodies").mkdir()
+    (spilled / "bodies" / "pack-000001.bin").write_bytes(b"p")
+    w.tick()
+    assert w.role("ntfs") == "pending"
+    w.tick(11)
+    assert ("format", "ntfs", "drive roles (empty drive)", "drop_own") in w.helper.moves
+    formatting = next(e for e in w.public()["events"] if e["event"] == "formatting")
+    assert "the 1 file(s) Polymath put there go" in formatting["detail"]
+
+
+def test_a_windows_drive_with_your_files_is_said_once_and_left_alone(w):
+    photos = w.plug("photos", HDD, label="PHOTOS", fstype="exfat", dedicated=False, budget=4 * GB)
+    (photos.parent / "Holiday").mkdir()
+    (photos.parent / "._.Trashes").write_bytes(b"")  # macOS clutter is not a file of yours
+    w.tick()
+    w.tick(11)
+    w.tick(60 * 25)
+    assert not [m for m in w.helper.moves if m[0] == "format"] and w.role("photos") == "backup"
+    skipped = [e for e in w.public()["events"] if e["event"] == "format_skipped"]
+    assert len(skipped) == 1 and "holds files (Holiday)" in skipped[0]["detail"]
+    assert "with your files on it: never reformatted" in w.public()["decision"]
+    (photos.parent / "Holiday" / "a.jpg").write_bytes(b"j")
+    w.tick()
+    assert len([e for e in w.public()["events"] if e["event"] == "format_skipped"]) == 1  # same top level
+
+
+def test_clutter_from_every_computer_is_not_your_files(tmp_path):
+    root = tmp_path / "drive"
+    (root / "polymath-brain").mkdir(parents=True)
+    for junk in ("._.Trashes", ".Trash-1000", ".apdisk", "FOUND.000", "System Volume Information", ".fseventsd"):
+        (root / junk).mkdir()
+    assert vols.loose_files(root) == []
+    (root / "Samsung Portable SSD Software").mkdir()
+    (root / "Samsung Portable SSD Software" / "setup.exe").write_bytes(b"x")
+    assert vols.loose_files(root) == []  # the maker's installer
+    (root / "Thesis.docx").write_bytes(b"d")
+    assert vols.loose_files(root) == ["Samsung Portable SSD Software", "Thesis.docx"]
+    brain = root / "polymath-brain"
+    (brain / "inventory.json").write_text("{}")
+    assert vols.own_files(brain) == [] and vols.own_files(root / "none") == []
+    (brain / "backups").mkdir()
+    (brain / "backups" / "b.xz").write_bytes(b"b")
+    assert vols.own_files(brain) == ["backups/b.xz"] and len(vols.own_files(brain, limit=1)) == 1

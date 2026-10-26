@@ -675,6 +675,19 @@ class Feed:
         drives, extra = (int(row["n"]), int(row["b"])) if row else (0, 0)
         return {"primary_bytes": int(primary or 0), "drives": drives, "drive_bytes": extra}
 
+    def drive_roles(self) -> dict[str, Any] | None:
+        """While the brain is on the SD card: what the drive roles see (``body.roles``), e.g. which drive cannot take
+        it and why. None otherwise, or when there is no decision yet."""
+        if self.run_dir is None:
+            return None
+        try:
+            raw = json.loads((Path(self.run_dir) / "drive-roles.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(raw, dict) or raw.get("brain") != "sd" or not raw.get("drives") or not raw.get("decision"):
+            return None
+        return {"decision": str(raw["decision"])}
+
     def status(self) -> dict[str, Any]:
         now = time.time()
         hb = self.db.kv_get("heartbeat") or {}
@@ -737,6 +750,7 @@ class Feed:
             "net": self.net(),
             **({"sd_card": sd} if isinstance(sd := self.db.kv_get("sd_card"), dict) else {}),
             **({"caretaker": ct} if isinstance(ct := self.db.kv_get("caretaker"), dict) else {}),
+            **({"drive_roles": dr} if (dr := self.drive_roles()) else {}),
         }
 
     def focus(self, cycles: list[Any], now: float) -> dict[str, Any]:
@@ -1401,7 +1415,11 @@ def status_lines(st: dict[str, Any] | None, *, offline: str = "", width: int = 0
     if width:
         while len(parts) > 2 and sum(len(seg[0]) for _p, seg in parts) > width - 1:
             parts.remove(min(parts, key=lambda ps: ps[0]))
-    return [line1, now_line(st), *focus_lines(st, width=width), [seg for _p, seg in parts]]
+    learning = focus_lines(st, width=width)
+    roles = st.get("drive_roles") or {}
+    if roles.get("decision") and not isinstance(st.get("focus"), dict):  # between topics: the drives matter more
+        learning = [learning[0], [(" DRIVES ", "nowwarn"), ("  " + str(roles["decision"]), "yellow")]]
+    return [line1, now_line(st), *learning, [seg for _p, seg in parts]]
 
 
 def badge(installed: Build, st: dict[str, Any] | None, *, width: int = 0) -> list[Seg]:

@@ -669,6 +669,8 @@ def roles_lines(rec: dict[str, Any] | None) -> list[str]:
     for d in rec.get("drives") or []:
         speed = f", reads {d['mbps']:.0f} MB/s" if d.get("mbps") else ""
         why = f" — not the brain: {d['why_not']}" if d.get("why_not") and d.get("role") != "brain" else ""
+        if d.get("role") == "pending":
+            why += " (none of your files on it: reformatted for Linux by itself; nothing is put on it until then)"
         out.append(f"  {d.get('role', '?'):<7} {d.get('name', '?')[:28]:<28} {d.get('kind', '')}, "
                    f"{d.get('size_gb', 0):.0f} GB ({d.get('free_gb', 0):.0f} free){speed}; score "
                    f"{d.get('score', 0):g}{why}")  # fmt: skip

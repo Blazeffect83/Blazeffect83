@@ -589,6 +589,18 @@ Run by `polymath storage heal` (root, every minute) after the drive helper and t
   refuses any file and any Polymath document, records the drive, runs `mkfs.ext4` and attaches it again. One drive a
   run, a drive at most once a day. `format_empty` now looks for files at any depth in `polymath-brain` (empty folders
   and Polymath's own notes do not count).
+- **v0.11.3.** `volumes.loose_files(root)` is the user's files: top-level entries that are not `clutter()` (JUNK, macOS
+  `._*`, `.Trash-*`, `FOUND.*`) and not a maker's installers (`factory_files`); it raises when the drive cannot be
+  read. `volumes.own_files(brain)` is Polymath's data there, its notes aside. `DriveRoles._pending`: care on, a
+  non-home Windows/macOS drive with no loose files and either no own files or the brain on the SD card; those ids are
+  `RolesState.pending` (role `pending`, never the backup), and `StoragePool.usable()` (used by `choose` and
+  `backup_dir`) leaves them out. `_care` formats a pending drive once settled with
+  `format_empty(drop_own=<own files present>)`; a drive with loose files gets one `format_skipped` event per distinct
+  top level. A new name from the format inherits the old one's `seen.since`. `DriveRoles.reasons()` lists every
+  reason (`eligible()` is its first); while the brain is on the SD card `_blocked()` turns them into words, what
+  only the user can fix first, the decision names up to three drives, and a `blocked` event goes out when the set of
+  drives and reason kinds changes (`RolesState.blocked`). `Feed.drive_roles()` hands that decision to the header,
+  which shows it as a DRIVES line in place of the second LEARNING line between topics.
 
 ## What each drive holds, and relearning (v0.11.0, `memory/inventory.py`)
 

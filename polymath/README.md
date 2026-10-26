@@ -95,6 +95,9 @@ implemented here and learns only from data the agent downloads itself.
   - **A wiped brain drive is no dead end** (v0.11.2): reformat the SSD and the SD card's brain takes over (or the brain
     is rebuilt from its newest backup on another drive), then moves onto the best drive by itself. Empty drives
     formatted for Windows/macOS are reformatted for Linux by themselves; a drive with your files never is.
+  - **Says why the brain stays on the SD card** (v0.11.3): the feed's DRIVES line names the drive that cannot take
+    it and why ("on USB 2: move it to a blue USB 3 port"). A Windows/macOS drive with none of your files is kept free
+    of data until it is reformatted, and computer clutter (macOS `._` files, `.Trash-1000`…) no longer stops that.
   - **Knows what each drive holds, and relearns a lost one** (v0.11.0): if a drive is gone over two hours, what it
     held is read again onto the other drives, the documents most facts rest on first; plugged back in, it is all
     readable again.

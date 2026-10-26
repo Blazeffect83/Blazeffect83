@@ -44,7 +44,6 @@ from __future__ import annotations
 import contextlib
 import json
 import math
-import os
 import re
 import shutil
 import time
@@ -128,6 +127,8 @@ class RolesState:
     next_move: float = 0.0
     brain_bytes: int = 0  # the brain's size (measured at most hourly: it walks the whole data directory)
     brain_bytes_at: float = 0.0
+    blocked: str = ""  # which drives cannot take the brain off the SD card, and why (reported when it changes)
+    pending: list[str] = field(default_factory=list)  # Windows/macOS drives drive care reformats: no data meanwhile
     events: list[dict[str, Any]] = field(default_factory=list)  # newest last: {at, event, detail}
 
 
@@ -289,22 +290,61 @@ class DriveRoles:
                 st.brain_bytes, st.brain_bytes_at = tree_stats(self.config.paths.data_dir)[1], now
         return st.brain_bytes
 
-    def eligible(self, d: Drive, need: int) -> str:
-        """Why ``d`` cannot hold the brain ("" when it can)."""
+    def reasons(self, d: Drive, need: int) -> list[tuple[str, str]]:
+        """Every reason ``d`` cannot hold the brain, as (kind, words); none when it can."""
         st = self.config.storage
+        out = []
         if d.fstype not in POSIX:
-            return f"formatted for Windows/macOS ({d.fstype or '?'})"
+            out.append(("foreign", f"formatted for Windows/macOS ({d.fstype or '?'})"))
         if not d.dedicated:
-            return "it holds your files"
+            out.append(("files", "it holds your files"))
         if d.tran == "usb" and d.speed and d.speed < 5000 and not st.brain_allow_usb2:
-            return "on USB 2 (move it to a blue USB 3 port)"
+            out.append(("usb2", "on USB 2 (move it to a blue USB 3 port)"))
         if d.drops >= FLAKY_DROPS:
-            return f"dropped out {d.drops} times this week"
+            out.append(("flaky", f"dropped out {d.drops} times this week"))
         if not d.home and d.free < need:
-            return f"too small: the brain needs {need / 1e9:.0f} GB free there"
+            out.append(("small", f"too small: the brain needs {need / 1e9:.0f} GB free there"))
         if not d.home and d.plugged_s < st.brain_settle_min * 60:
-            return f"plugged in {d.plugged_s / 60:.0f} min ago (it settles for {st.brain_settle_min:.0f})"
-        return ""
+            out.append(("settling", f"plugged in {d.plugged_s / 60:.0f} min ago (it settles for "
+                                    f"{st.brain_settle_min:.0f})"))  # fmt: skip
+        return out
+
+    def eligible(self, d: Drive, need: int) -> str:
+        """Why ``d`` cannot hold the brain ("" when it can): the first reason."""
+        why = self.reasons(d, need)
+        return why[0][1] if why else ""
+
+    def contents(self, d: Drive) -> tuple[list[str], list[str]] | None:
+        """(your files on the drive, Polymath's data in its folder), or None when the drive cannot be read."""
+        from polymath.body.volumes import loose_files, own_files
+
+        try:
+            return loose_files(d.brain.parent), own_files(d.brain)
+        except OSError:
+            return None
+
+    def _pending(self, d: Drive, on_sd: bool) -> bool:
+        """Drive care will reformat this Windows/macOS drive: none of your files on it, and nothing of Polymath's
+        either, or the brain is stuck on the SD card (then what Polymath put there is worth less than freeing it)."""
+        if not self.config.storage.care_format_empty or d.home or d.fstype not in FOREIGN:
+            return False
+        got = self.contents(d)
+        return got is not None and not got[0] and (not got[1] or on_sd)
+
+    def _blocked(self, d: Drive, need: int, on_sd: bool) -> str:
+        """Why ``d`` cannot take the brain off the SD card, every reason, in words for the feed."""
+        out = []
+        first = {"usb2": 0, "files": 1, "small": 2, "flaky": 3, "foreign": 4}  # what only you can fix comes first
+        for kind, words in sorted(self.reasons(d, need), key=lambda r: first.get(r[0], 9)):
+            if kind == "settling" or (kind == "files" and d.fstype in FOREIGN):
+                continue
+            if kind == "foreign":
+                if self._pending(d, on_sd):
+                    words += ": reformatted for Linux by itself (none of your files are on it)"
+                elif self.config.storage.care_format_empty:
+                    words += " with your files on it: never reformatted while they are there"
+            out.append(words)
+        return "; ".join(out)
 
     def _measure(self, st: RolesState, drives: list[Drive]) -> None:
         """One read-speed measurement per run: the brain's drive and the drives that could hold it, once a day."""
@@ -384,12 +424,26 @@ class DriveRoles:
             if best is not None and now >= st.next_move and self.config.storage.move_home:
                 return self._move_from_sd(st, drives, best)
             waiting = [d for d in drives if d.why_not.startswith("plugged in")]
-            decision = (
-                f"the brain is on the SD card; {waiting[0].name} becomes its home once it has settled"
-                if waiting
-                else "the brain is on the SD card: plug in an SSD of Polymath's own on a blue "
-                "USB 3 port and the brain moves onto it by itself"
+            blocked = [(d, why) for d in drives if not d.home and d.why_not and (why := self._blocked(d, need, True))]
+            if waiting:
+                decision = f"the brain is on the SD card; {waiting[0].name} becomes its home once it has settled"
+            elif blocked:
+                decision = (
+                    "the brain stays on the SD card: "
+                    + "; ".join(f"{d.name} cannot hold it ({why})" for d, why in blocked[:3])
+                    + ". Or plug in an SSD of Polymath's own on a blue USB 3 port and the brain moves onto it"
+                )
+            else:
+                decision = (
+                    "the brain is on the SD card: plug in an SSD of Polymath's own on a blue "
+                    "USB 3 port and the brain moves onto it by itself"
+                )
+            sig = "|".join(
+                f"{d.id}:" + ",".join(k for k, _ in self.reasons(d, need) if k != "settling") for d, _ in blocked
             )
+            if sig and sig != st.blocked and not waiting:
+                self._event(st, "blocked", decision)
+            st.blocked = sig if not waiting else st.blocked
         elif where == "drive" and home is not None:
             flaky = home.drops >= FLAKY_DROPS
             gain = (best.score - home.score) if best is not None else 0.0
@@ -423,7 +477,10 @@ class DriveRoles:
             decision = "the brain's drive is not there: the drive helper brings it back (nothing moves meanwhile)"
         else:
             decision = "the brain lives on its own disk"
+        if where != "sd":
+            st.blocked = ""
         # ---- backups and extra room
+        st.pending = sorted(d.id for d in drives if self._pending(d, where == "sd"))
         self._assign(st, drives, home if where == "drive" else None)
         st.brain = home.id if where == "drive" and home is not None else where
         st.decision = decision
@@ -438,8 +495,8 @@ class DriveRoles:
         except OSError:
             need = 0
         for d in drives:
-            d.role = "brain" if home is not None and d.id == home.id else "extra"
-        other_disk = [d for d in drives if d.role != "brain" and (home is None or not d.disk or d.disk != home.disk)]
+            d.role = "brain" if home is not None and d.id == home.id else "pending" if d.id in st.pending else "extra"
+        other_disk = [d for d in drives if d.role == "extra" and (home is None or not d.disk or d.disk != home.disk)]
         steady = [d for d in other_disk if d.drops < FLAKY_DROPS and d.room > 0 and d.room >= need]
         pick = max(steady, key=lambda d: (-d.drops, d.room, d.id)) if steady else None
         if pick is not None:
@@ -452,6 +509,9 @@ class DriveRoles:
                     f"backups go to {pick.name} ({pick.kind()}, {pick.room / 1e9:.0f} GB of "
                     "room), a different drive from the brain's",
                 )
+            elif st.backup in st.pending:
+                name = next((d.name for d in drives if d.id == st.backup), st.backup)
+                self._event(st, "backups", f"backups stay with the brain until {name} is reformatted for Linux")
             elif st.backup:
                 self._event(st, "backups", "backups are back on the brain's own drive (no other drive has room)")
         st.backup = pick.id if pick else ""
@@ -541,39 +601,54 @@ class DriveRoles:
 
     def _empty(self, d: Drive) -> bool:
         """Nothing of yours and nothing of Polymath's on it (its own manifest and inventory aside)."""
-        own = {".polymath-volume.json", ".polymath-volume.json.tmp", "inventory.json", ".inventory.json.tmp"}
-        from polymath.body.volumes import JUNK as junk  # system clutter, never your files
-
-        try:
-            if any(e not in junk and e != d.brain.name for e in os.listdir(d.brain.parent)):
-                return False
-            for base, _dirs, names in os.walk(d.brain):
-                if any(not (Path(base) == d.brain and n in own) for n in names):
-                    return False
-        except OSError:
-            return False
-        return True
+        got = self.contents(d)
+        return got is not None and not got[0] and not got[1]
 
     def _care(self, st: RolesState, drives: list[Drive]) -> None:
-        """Drive care: an empty drive formatted for Windows/macOS is reformatted for Linux (one a run, once a day at
-        most per drive), so it can hold the brain, backups over 4 GB and full extra room. Never one with a file on it,
-        never the brain's drive."""
+        """Drive care: a Windows/macOS-formatted drive with none of your files on it is reformatted for Linux (one a
+        run, once a day at most per drive), so it can hold the brain, backups over 4 GB and full extra room. What
+        Polymath itself put there is dropped only when the brain is stuck on the SD card (it is read again). Never one
+        with a file of yours on it (said once, with what is on it), never the brain's drive."""
         now = self.clock()
         if not self.config.storage.care_format_empty:
             return
+        on_sd = st.brain == "sd"
         for d in drives:
-            seen = st.seen.get(d.id, {})
-            if d.home or d.fstype not in FOREIGN or d.plugged_s < self.config.storage.brain_settle_min * 60:
+            if d.home or d.fstype not in FOREIGN:
                 continue
-            if now - float(seen.get("care_tried") or 0) < 86400 or not self._empty(d):
+            seen = st.seen.setdefault(d.id, {"since": now, "drops": []})
+            got = self.contents(d)
+            if got is None:
+                continue
+            theirs, mine = got
+            if theirs:
+                note = "|".join(theirs[:5])
+                if seen.get("care_note") != note:
+                    seen["care_note"] = note
+                    shown = ", ".join(theirs[:5]) + (" …" if len(theirs) > 5 else "")
+                    self._event(st, "format_skipped", f"{d.name} is formatted for Windows/macOS ({d.fstype}) and "
+                                f"holds files ({shown}): it is never reformatted while they are there, so it cannot "
+                                "hold the brain; it serves as extra room")  # fmt: skip
+                continue
+            if mine and not on_sd:
+                continue  # the brain has a drive: Polymath's data there is worth more than reformatting it
+            if d.plugged_s < self.config.storage.brain_settle_min * 60:
+                continue
+            if now - float(seen.get("care_tried") or 0) < 86400:
                 continue
             seen["care_tried"] = now
-            self._event(st, "formatting", f"{d.name} is empty and formatted for Windows/macOS ({d.fstype}): "
-                        "reformatting it for Linux (ext4) so Polymath can use all of it")  # fmt: skip
+            dropped = (f"; the {len(mine)} file(s) Polymath put there go (its documents are read again, its "
+                       "backups taken again), to free the brain from the SD card") if mine else ""  # fmt: skip
+            self._event(st, "formatting", f"{d.name} holds none of your files and is formatted for Windows/macOS "
+                        f"({d.fstype}): reformatting it for Linux (ext4) so Polymath can use all of it"
+                        + dropped)  # fmt: skip
             self.save(st, persist=True)
-            res = self.helper.format_empty(d.id, by="drive roles (empty drive)")
+            res = self.helper.format_empty(d.id, drop_own=bool(mine), by="drive roles (empty drive)")
             if res.action in {"attached", "formatted", "already", "moved", "home"}:
                 self._event(st, "formatted", f"{d.name} is formatted for Linux now: {res.detail}")
+                new = str(getattr(res, "volume", "") or "")
+                if new and new != d.id:  # the same drive under its new name: it has settled already
+                    st.seen[new] = {"since": seen.get("since") or now, "drops": list(seen.get("drops") or [])}
             else:
                 self._event(st, "format_skipped", f"{d.name} was not reformatted: {res.detail}")
             return
