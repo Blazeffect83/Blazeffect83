@@ -323,3 +323,18 @@ def test_agent_pulse_file_during_long_slices(config):
     assert time.time() - pulse.stat().st_mtime < 60
     agent.shutdown()
     agent.db.close()
+
+
+def test_a_disk_pause_holds_until_room_is_back_and_says_why(config, db):
+    config.body.disk_min_free_gb = 3.0  # the SD card's (sd_keep_free_gb)
+    g, _clock, state, _ = guard_for(config, db, 50.0, free=1.4)
+    st = g.observe()
+    assert st.mode == "pause" and db.kv_get("body_reason") == "only 1.4 GB free on the data disk"
+    state["free"] = 1.9  # eviction freed a little: still paused, not on and off every few minutes
+    st = g.observe()
+    assert st.mode == "pause" and st.reasons[0] == "only 1.9 GB free on the data disk (resumes at 2.2 GB)"
+    state["free"] = 2.3
+    st = g.observe()
+    assert st.mode == "yield" and db.kv_get("body_reason") == "only 2.3 GB free on the data disk"
+    state["free"] = 1.9  # below the resume point but above the pause point: light work, not a pause
+    assert g.observe().mode == "yield"

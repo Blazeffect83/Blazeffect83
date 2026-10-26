@@ -610,3 +610,16 @@ def test_while_the_brain_is_stuck_on_the_sd_card_the_header_says_which_drive_can
     assert lines[2] == " LEARNING   between topics" and lines[3] == " DRIVES   " + decision
     learning = [text_of(x) for x in status_lines(base | {"focus": {"what": "Mars", "why": "curious"}})]
     assert not any("DRIVES" in x for x in learning)  # while it learns, its progress keeps the line
+
+
+def test_a_pause_shows_its_real_reason_never_a_guessed_cooling_down(db):
+    f = Feed(db)
+    db.kv_set("heartbeat", {"ts": time.time(), "state": "running", "cycle": 9})
+    db.execute("INSERT INTO vitals(at, temp_c, mode) VALUES(?, 50.0, 'pause')", (time.time(),))
+    db.kv_set("body_reason", "only 1.9 GB free on the data disk")
+    st = f.status()  # the body paused before the loop recorded it: its own reason
+    assert st["paused_reason"] == "only 1.9 GB free on the data disk"
+    db.kv_set("body_reason", "")
+    st = f.status()
+    assert st["paused_reason"] is None
+    assert text_of(status_lines(st)[1]) == " NOW   paused — why: polymath doctor"

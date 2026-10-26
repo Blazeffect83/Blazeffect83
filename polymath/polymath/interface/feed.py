@@ -675,6 +675,13 @@ class Feed:
         drives, extra = (int(row["n"]), int(row["b"])) if row else (0, 0)
         return {"primary_bytes": int(primary or 0), "drives": drives, "drive_bytes": extra}
 
+    def paused_reason(self, state: str, mode: str) -> str | None:
+        """Why it is paused: the loop's record, or the body's own (its mode can change before the loop records it)."""
+        reason = self.db.kv_get("paused_reason") if state == "paused" else None
+        if not reason and mode == "pause":
+            reason = self.db.kv_get("body_reason")
+        return str(reason) if reason else None
+
     def drive_roles(self) -> dict[str, Any] | None:
         """While the brain is on the SD card: what the drive roles see (``body.roles``), e.g. which drive cannot take
         it and why. None otherwise, or when there is no decision yet."""
@@ -742,7 +749,7 @@ class Feed:
             "build": hb.get("build"),
             "temp_c": None if vit is None or vit["temp_c"] is None else round(float(vit["temp_c"]), 1),
             "mode": str(vit["mode"]) if vit else "normal",
-            "paused_reason": self.db.kv_get("paused_reason") if state == "paused" else None,
+            "paused_reason": self.paused_reason(state, str(vit["mode"]) if vit else "normal"),
             "curious": curious,
             **self.focus(cycles, now),
             "counts": self.counts(now),
@@ -1259,7 +1266,7 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         return [
             (" NOW ", "nowwarn"),
             ("  paused", "byellow"),
-            (f" — {st.get('paused_reason') or 'cooling down'}", "yellow"),
+            (f" — {st.get('paused_reason') or 'why: polymath doctor'}", "yellow"),
         ]
     activity = str(st.get("activity") or "starting up")
     segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
@@ -1510,7 +1517,7 @@ def transitions(seen: _Seen, st: dict[str, Any]) -> list[dict[str, Any]]:
             "normal": f"back to full speed{temp}",
             "throttle": f"running hot{temp}: light work only",
             "yield": "low on disk space: light work only while it frees room",
-            "pause": f"paused: {st.get('paused_reason') or 'cooling down' + temp}",
+            "pause": f"paused: {st.get('paused_reason') or 'why: polymath doctor'}{temp}",
         }.get(mode, mode)
         out.append({"kind": "body", "at": now, "text": text, "style": "green" if mode == "normal" else "yellow"})
     seen.mode = mode

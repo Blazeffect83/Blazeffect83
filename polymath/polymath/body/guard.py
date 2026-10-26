@@ -42,6 +42,7 @@ log = get_logger("body")
 VITALS_EVERY = 300.0
 SIZE_EVERY = 600.0
 PAUSE_HYSTERESIS = 5.0
+DISK_RESUME_AT = 0.75  # of disk_min_free_gb: a disk pause (below half of it) ends there
 THROTTLE_HYSTERESIS = 3.0
 EVICT_PRIORITY = 3.5  # urgent: runs ahead of the bandit's choices
 SPILL_PRIORITY = 2.95  # ahead of learning work, behind eviction
@@ -88,6 +89,7 @@ class Guard:
         self.wear = WearMeter(config, db)
         self.saver = False
         self._read_only = False
+        self._disk_paused = False
 
     # ----------------------------------------------------------------- sensors
     def data_gb(self) -> float:
@@ -137,8 +139,13 @@ class Guard:
         elif thermal == "throttle":
             want("throttle", f"CPU {v.temp_c:.1f} °C ≥ throttle point")
         if v.disk_free_gb is not None:
-            if v.disk_free_gb < b.disk_min_free_gb / 2:
-                want("pause", f"only {v.disk_free_gb:.1f} GB free on the data disk")
+            # a disk pause holds until three quarters of the free space it wants are back: eviction frees a little,
+            # reading fills it again, and without the margin it would pause and resume every few minutes
+            hold = self._disk_paused and v.disk_free_gb < b.disk_min_free_gb * DISK_RESUME_AT
+            self._disk_paused = v.disk_free_gb < b.disk_min_free_gb / 2 or hold
+            if self._disk_paused:
+                want("pause", f"only {v.disk_free_gb:.1f} GB free on the data disk"
+                     + (f" (resumes at {b.disk_min_free_gb * DISK_RESUME_AT:.1f} GB)" if hold else ""))  # fmt: skip
                 disk_critical = True
             elif v.disk_free_gb < b.disk_min_free_gb:
                 want("yield", f"only {v.disk_free_gb:.1f} GB free on the data disk")
@@ -155,6 +162,8 @@ class Guard:
             reasons.append(f"slowed by Orin the caretaker: {why}")
         if mode != self._last_mode:
             log.info("body mode changed", extra={"from": self._last_mode, "to": mode, "reasons": reasons})
+            with contextlib.suppress(Exception):  # why, for the feed: it sees the mode before the loop's own record
+                self.db.kv_set("body_reason", "; ".join(reasons))
             if mode != "normal":  # the caretaker's inbox (core/issues): heat, a full disk, a failing card
                 code = "read_only" if self._read_only else "thermal" if thermal in {"pause", "throttle"} else "disk"
                 with contextlib.suppress(Exception):

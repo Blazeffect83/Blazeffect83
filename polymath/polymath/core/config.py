@@ -224,6 +224,7 @@ class StorageConfig:
     auto_roles: bool = True
     brain_settle_min: float = 10.0  # a drive must stay plugged in this long before the brain moves onto it
     brain_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is too slow and froze before: never the brain unless allowed
+    brain_prefer: str = "largest"  # among the drives that may hold the brain: "largest" (most room) or "fastest"
     # Drive care (body.roles, v0.11.2): a plugged-in drive formatted for Windows/macOS (exFAT, NTFS, FAT32) that holds
     # nothing at all is reformatted for Linux (ext4), so it can hold the brain, backups over 4 GB and full extra room.
     # A drive with any file on it is never reformatted by itself.
@@ -316,6 +317,8 @@ class Config:
             raise ConfigError("storage.sd_keep_free_gb must be between 0.5 and 50")
         if not 0.1 <= self.storage.relearn_after_h <= 720:
             raise ConfigError("storage.relearn_after_h must be between 0.1 and 720 hours")
+        if self.storage.brain_prefer not in {"largest", "fastest"}:
+            raise ConfigError("storage.brain_prefer must be 'largest' or 'fastest'")
         if not 1 <= self.storage.brain_settle_min <= 1440:
             raise ConfigError("storage.brain_settle_min must be between 1 and 1440 minutes")
         if not 1 <= self.storage.sd_return_stable_min <= 1440:
@@ -432,10 +435,46 @@ def load_config(
     if not cfg.storage.sd_only:
         apply_home(cfg)  # home-drive.json lives on the drive: never looked for in SD-card mode
         apply_capacity(cfg, data)
+        apply_brain_on_sd(cfg)
     elif cfg.storage.sd_budget_gb <= 0:
         cfg.body.disk_budget_gb = sd_budget(cfg)
     cfg.validate()
     return cfg
+
+
+def root_is_sd_card(mounts: Path = Path("/proc/self/mounts")) -> bool:
+    """Whether the system runs from an SD card (``/`` is an ``mmcblk`` partition, as on a Raspberry Pi)."""
+    try:
+        for line in mounts.read_text(encoding="utf-8").splitlines():
+            fields = line.split()
+            if len(fields) >= 2 and fields[1] == "/":
+                return fields[0].startswith("/dev/mmcblk")
+    except OSError:
+        pass
+    return False
+
+
+def brain_on_sd_card(cfg: Config, *, mounts: Path = Path("/proc/self/mounts")) -> bool:
+    """Whether the brain lives on the SD card itself: its data directory is on the root filesystem of a Pi that
+    runs from an SD card (no drive mounted there). True in SD-card mode too."""
+    probe = Path(cfg.paths.data_dir)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        same = os.stat(probe).st_dev == os.stat("/").st_dev
+    except OSError:
+        return False
+    return same and root_is_sd_card(mounts)
+
+
+def apply_brain_on_sd(cfg: Config, *, mounts: Path = Path("/proc/self/mounts")) -> bool:
+    """The brain on the SD card outside SD-card mode (made the brain by ``keep-sd-brain``, waiting for a drive to
+    move onto): the card keeps ``sd_keep_free_gb`` free, as in SD-card mode, not the drive's 10 GB, or the agent
+    pauses below 5 GB and evicts for room a card never has. Returns whether it applied."""
+    if cfg.storage.sd_only or not brain_on_sd_card(cfg, mounts=mounts):
+        return False
+    cfg.body.disk_min_free_gb = min(cfg.body.disk_min_free_gb, cfg.storage.sd_keep_free_gb)
+    return True
 
 
 SD_BACKUPS = 1  # backups kept in SD-card mode: each is a GB or more on the card the brain itself lives on

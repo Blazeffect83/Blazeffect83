@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.11.3"
+updated_for = "0.11.4"
 updated = "2026-10-26"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -41,6 +41,8 @@ waiting_on = [
     "then: the empty SSD is formatted for Linux by itself (exFAT/NTFS/blank) and the brain moves onto it after 10 minutes (polymath storage roles)",
     "2026-10-25 19:07: Christian: 'It's still showing barely any space' (feed: paused, only 1.9 GB free on the data disk; drive roles: backups go to EA06-698 (USB 2 hard disk, 512 GB of room)). The brain did not move: the drive is on USB 2 and exFAT",
     "install v0.11.3: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh",
+    "2026-10-26: Christian: 'It keeps pausing for cooling at 50c'. Not heat (the pause is at 82 °C): after keep-sd-brain ended SD-card mode the SD card was held to the drive's 10 GB reserve (pause below 5 GB) with ~2 GB free, eviction freed a little, it resumed, paused again, and the feed labelled every pause 'cooling down' because the reason had not been recorded yet (fixed in 0.11.4)",
+    "2026-10-26: Christian asked for the brain to go on the largest storage device (0.11.4: storage.brain_prefer = largest)",
     "then Christian moves the SSD to a blue USB 3 port (USB 3 cable, no USB 2 hub); drive care reformats it to ext4 after 10 minutes and the brain moves onto it right after (polymath storage roles shows brain on it, doctor clean)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
@@ -53,6 +55,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.11.4"
+date = "2026-10-26"
+changes = """From the Pi: 'it keeps pausing for cooling at 50 °C'. THE CARD'S RESERVE: the brain on the SD card outside SD-card mode (made the brain by keep-sd-brain, waiting for a drive) now keeps storage.sd_keep_free_gb (3 GB) free like SD-card mode, not the drive's 10 GB (config.apply_brain_on_sd, in load_config when the data directory is on the root filesystem of a Pi running from an SD card: / is an mmcblk partition); before, it paused below 5 GB and evicted towards 15 GB. A DISK PAUSE HOLDS until three quarters of disk_min_free_gb are free again (guard DISK_RESUME_AT; the reason says 'resumes at N GB'), instead of pausing and resuming every few minutes. THE REASON: the guard records why the body mode changed (kv body_reason); the feed shows it while the loop has not recorded its own yet, and never guesses 'cooling down' (no reason: 'why: polymath doctor'). THE LARGEST DRIVE: storage.brain_prefer = "largest" (new default; "fastest" is the old order): off the SD card the brain goes on the largest drive that may hold it, and among drives within a quarter of that size the best by speed; between drives it moves at night onto one a quarter larger (LARGER_BY 1.25), or, when both are about as large, a class faster; never onto a much smaller one. Drive sizes are the drives' own as recorded at adoption. Eligibility is unchanged (Linux-formatted, of Polymath's own, USB 3, steady, room for 3× the brain)."""
+
 [[update]]
 version = "0.11.3"
 date = "2026-10-26"
@@ -1086,8 +1093,9 @@ codes = ["body/disk:*"]
 patterns = ["GB free on the data disk"]
 symptoms = ["the feed: 'slowed: low on disk'", "a problem line: 'only N GB free on the data disk'"]
 causes = [
-    { cause = "the brain outgrew its disk budget, or other files filled the disk", prior = 0.7 },
-    { cause = "SD-card mode: the card is small (about 15 GB) and other files on it grew (logs, packages)", prior = 0.3 },
+    { cause = "the brain outgrew its disk budget, or other files filled the disk", prior = 0.6 },
+    { cause = "SD-card mode, or the brain on the SD card waiting for a drive: the card is small and other files on it grew (logs, packages)", prior = 0.3 },
+    { cause = "before 0.11.4: the brain on the SD card outside SD-card mode was held to the drive's 10 GB reserve (pause below 5 GB)", prior = 0.1 },
 ]
 checks = ["df -h /srv/polymath /var/lib/polymath/brain", "polymath storage list", "sudo du -sh /var/lib/polymath/* /var/log"]
 self_healing = [
@@ -1095,6 +1103,7 @@ self_healing = [
     "in SD-card mode: no drives; eviction keeps the card 3 GB free (oldest feeds and web pages go first, facts stay)",
     "SD-card mode keeps one backup, taken weekly; older backups are deleted before any document text (v0.9.0)",
     "Orin opens a disk incident early when the forecast says the reserve is reached within 3 days (v0.9.0)",
+    "the brain on the SD card outside SD-card mode keeps the card's 3 GB reserve too; a disk pause holds until 3/4 of the reserve is free (v0.11.4)",
 ]
 steps = [
     { needs = "you", do = "plug in another drive: it becomes extra brain space by itself (not in SD-card mode)" },
@@ -1102,7 +1111,7 @@ steps = [
     { needs = "you", do = "see where Polymath's room goes and when it would run out", command = "polymath storage usage --detail" },
 ]
 since = "0.5.2"
-updated = "0.9.0"
+updated = "0.11.4"
 
 [[fault]]
 id = "body-read-only"
@@ -1295,4 +1304,13 @@ what = "After keep-sd-brain the feed still said 'paused — only 1.9 GB free on 
 cause = "the drive is on a USB 2 link (refused for the brain on purpose) and formatted exFAT; drive care counted something on it as a file and did not reformat it; the roles' decision only said 'plug in an SSD … on a blue USB 3 port'"
 fault = "drive-roles"
 fixed_in = "0.11.3"
+open = true
+
+[[history]]
+date = "2026-10-26"
+version = "0.11.2"
+what = "Christian: 'It keeps pausing for cooling at 50c'. The feed showed pauses labelled cooling down at 50 °C, again and again."
+cause = "not heat (the thermal pause is at 82 °C): with SD-card mode ended by keep-sd-brain, the brain on the SD card was held to the drive's 10 GB reserve, so ~2 GB free meant a disk pause; eviction freed a little and it flapped; the feed fell back to 'cooling down' when the loop had not recorded the reason yet"
+fault = "body-disk"
+fixed_in = "0.11.4"
 open = true

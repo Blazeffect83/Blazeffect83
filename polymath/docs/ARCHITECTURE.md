@@ -601,6 +601,14 @@ Run by `polymath storage heal` (root, every minute) after the drive helper and t
   only the user can fix first, the decision names up to three drives, and a `blocked` event goes out when the set of
   drives and reason kinds changes (`RolesState.blocked`). `Feed.drive_roles()` hands that decision to the header,
   which shows it as a DRIVES line in place of the second LEARNING line between topics.
+- **v0.11.4.** `storage.brain_prefer` ("largest", default, or "fastest"): with "largest" the candidates are ordered
+  drives within `LARGER_BY` (1.25) of the largest first, each group by score; `_better(best, home)` moves between
+  drives for a quarter more size, or, both about as large, for `MOVE_MARGIN` more score. `Drive.size` is the
+  manifest's `size_bytes` (the drive), else the filesystem's. `config.apply_brain_on_sd` (in `load_config`, not in
+  SD-card mode): the data directory on the root filesystem and `/` an `mmcblk` partition → `disk_min_free_gb =
+  min(…, sd_keep_free_gb)`. The guard's disk pause holds until `DISK_RESUME_AT` (0.75) of `disk_min_free_gb` is free
+  and records `kv body_reason` on every mode change; `Feed.paused_reason` falls back to it while the loop's
+  `paused_reason` is not there yet.
 
 ## What each drive holds, and relearning (v0.11.0, `memory/inventory.py`)
 

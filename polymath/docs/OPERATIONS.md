@@ -636,6 +636,15 @@ minute before the decision), it is reformatted anyway **only while the brain is 
 documents are read again and the backups taken again. A drive with your files says once what is on it and is left
 alone. A drive drive care reformatted takes the brain right after (it already settled).
 
+**v0.11.4: the largest drive.** The brain goes on the **largest** drive that may hold it; among drives within a
+quarter of that size, the fastest. Later it moves at night onto a drive a quarter larger (or, about as large, a class
+faster), never onto a much smaller one. `[storage] brain_prefer = "fastest"` goes by speed first, as before.
+
+**Paused, "cooling down", at 50 °C?** That was a disk pause with the wrong label (before v0.11.4): the thermal pause
+is at 82 °C. With the brain on the SD card outside SD-card mode (after `keep-sd-brain`) the card was held to a
+drive's 10 GB reserve. Now it keeps the card's 3 GB (`sd_keep_free_gb`), a disk pause holds until 2.2 GB are free
+again (no more on and off), and the feed shows the real reason.
+
 **The brain stays on the SD card and the feed is paused for disk space?** Look at the feed's **DRIVES** line (or
 `polymath storage roles`): it names each drive that cannot take the brain and why, what only you can fix first. The
 usual one is **on USB 2**: move the drive to a **blue** USB 3 port, with a USB 3 cable and no USB 2 hub. USB 2 is

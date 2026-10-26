@@ -68,6 +68,7 @@ FOREIGN = {"vfat", "exfat", "ntfs"}  # Windows/macOS: never the brain; reformatt
 FLAKY_WINDOW_S = 7 * 86400.0
 FLAKY_DROPS = 3  # drop-outs in a week: not trusted with the brain
 MOVE_MARGIN = 2.0  # a better drive must score this much more (a class better) before the brain moves
+LARGER_BY = 1.25  # with brain_prefer = "largest": a drive must be this much larger before the brain moves onto it
 MOVE_EVERY_S = 86400.0  # at most one move between drives a day (a failing brain drive excepted)
 RETRY_MOVE_S = 6 * 3600.0  # after a move that failed
 MEASURE_EVERY_S = 86400.0  # each drive's read speed, once a day
@@ -235,7 +236,7 @@ class DriveRoles:
             f = self.facts(device)
             try:
                 usage = shutil.disk_usage(v.path)
-                size, free = int(usage.total), int(usage.free)
+                size, free = int(v.size_bytes or usage.total), int(usage.free)
             except OSError:
                 size, free = v.size_bytes, 0
             seen = st.seen.setdefault(v.id, {"since": now, "drops": []})
@@ -289,6 +290,25 @@ class DriveRoles:
             with contextlib.suppress(OSError):
                 st.brain_bytes, st.brain_bytes_at = tree_stats(self.config.paths.data_dir)[1], now
         return st.brain_bytes
+
+    def _better(self, best: Drive, home: Drive) -> str:
+        """Why ``best`` is worth moving the brain onto from ``home`` ("" when it is not): a quarter larger, with
+        ``brain_prefer = "largest"``; a class better (``MOVE_MARGIN``) with "fastest"."""
+        if self.config.storage.brain_prefer == "largest":
+            if best.size >= home.size * LARGER_BY:
+                return (f"{best.name} is the larger drive ({best.kind()}, {best.size / 1e9:.0f} GB against "
+                        f"{home.size / 1e9:.0f} GB)")  # fmt: skip
+            if home.size >= best.size * LARGER_BY:
+                return ""  # the brain's drive is the larger one
+        if best.score - home.score >= MOVE_MARGIN:
+            return f"{best.name} is the better drive ({best.kind()}, {best.score:g} against {home.score:g})"
+        return ""
+
+    def _words(self, d: Drive) -> str:
+        """``T7 (USB 3 SSD, 1000 GB), the largest drive plugged in`` (or ``…, the best drive plugged in``)."""
+        if self.config.storage.brain_prefer == "largest":
+            return f"{d.name} ({d.kind()}, {d.size / 1e9:.0f} GB), the largest drive plugged in"
+        return f"{d.name} ({d.kind()}), the best drive plugged in"
 
     def reasons(self, d: Drive, need: int) -> list[tuple[str, str]]:
         """Every reason ``d`` cannot hold the brain, as (kind, words); none when it can."""
@@ -416,7 +436,11 @@ class DriveRoles:
         for d in drives:
             d.score = brain_score(d)
             d.why_not = self.eligible(d, need)
+        largest = self.config.storage.brain_prefer == "largest"
         cands = sorted([d for d in drives if not d.why_not and not d.home], key=lambda d: (-d.score, d.id))
+        if largest and cands:  # the largest, and among drives about as large (within a quarter) the best
+            top = max(d.size for d in cands)
+            cands = [d for d in cands if d.size * LARGER_BY > top] + [d for d in cands if d.size * LARGER_BY <= top]
         best = cands[0] if cands else None
         decision = ""
         # ---- the brain
@@ -446,25 +470,17 @@ class DriveRoles:
             st.blocked = sig if not waiting else st.blocked
         elif where == "drive" and home is not None:
             flaky = home.drops >= FLAKY_DROPS
-            gain = (best.score - home.score) if best is not None else 0.0
+            better = self._better(best, home) if best is not None else ""
             if (
                 best is not None
                 and now >= st.next_move
-                and (flaky or (gain >= MOVE_MARGIN and self._night(now) and now - st.last_move >= MOVE_EVERY_S))
+                and (flaky or (better and self._night(now) and now - st.last_move >= MOVE_EVERY_S))
             ):
-                return self._move_between(
-                    st,
-                    drives,
-                    home,
-                    best,
-                    "it keeps dropping out"
-                    if flaky
-                    else f"{best.name} is the better drive ({best.kind()}, {best.score:g} against {home.score:g})",
-                )
-            if best is not None and gain >= MOVE_MARGIN:
+                return self._move_between(st, drives, home, best, "it keeps dropping out" if flaky else better)
+            if best is not None and better:
                 decision = (
-                    f"the brain moves onto {best.name} ({best.kind()}, the better drive) tonight, after "
-                    f"{(self.config.body.backup_hour + 1) % 24:02d}:00"
+                    f"the brain moves onto {best.name} tonight, after "
+                    f"{(self.config.body.backup_hour + 1) % 24:02d}:00: {better}"
                 )
             elif flaky:
                 decision = (
@@ -472,7 +488,7 @@ class DriveRoles:
                     "another SSD of Polymath's own and the brain moves onto it"
                 )
             else:
-                decision = f"the brain is on {home.name} ({home.kind()}), the best drive plugged in"
+                decision = f"the brain is on {self._words(home)}"
         elif where == "missing":
             decision = "the brain's drive is not there: the drive helper brings it back (nothing moves meanwhile)"
         else:
@@ -568,7 +584,7 @@ class DriveRoles:
         self._event(
             st,
             "moving",
-            f"moving the brain off the SD card onto {best.name} ({best.kind()}), the best drive plugged in",
+            f"moving the brain off the SD card onto {self._words(best)}",
         )
         self.save(st, persist=True)
         with self.helper._locked():
@@ -591,7 +607,7 @@ class DriveRoles:
             for d in drives:
                 d.home = d.id == best.id
             self._assign(st, drives, best)
-            st.decision = f"the brain is on {best.name} ({best.kind()}), the best drive plugged in"
+            st.decision = f"the brain is on {self._words(best)}"
         else:
             st.next_move = now + RETRY_MOVE_S
             self._event(st, "move_failed", f"{res.detail}; tried again in {RETRY_MOVE_S / 3600:.0f} h")

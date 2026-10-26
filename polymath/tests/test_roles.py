@@ -174,6 +174,7 @@ def test_what_can_never_hold_the_brain(w):
 
 # ------------------------------------------------------------------ off the SD card: the best drive, not the first
 def test_with_several_drives_plugged_in_the_best_becomes_the_brain_and_another_keeps_the_backups(w):
+    w.config.storage.brain_prefer = "fastest"  # by speed first (the default, the largest: tested below)
     w.plug("stick", STICK, label="STICK", budget=1 * GB)
     w.plug("hdd", HDD, label="BIG HDD", budget=4 * GB)
     w.plug("ssd", SSD, label="T7", budget=3 * GB)
@@ -461,6 +462,7 @@ def test_disk_facts_reads_lsblk_and_sysfs(tmp_path):
 
 # ------------------------------------------------------------------ everyone sees the decision
 def test_the_cli_doctor_dashboard_and_inbox_show_the_roles(w, db, capsys, monkeypatch):
+    w.config.storage.brain_prefer = "fastest"
     from polymath.interface import cli, doctor
     from polymath.interface.dashboard import DashboardData
 
@@ -671,3 +673,54 @@ def test_clutter_from_every_computer_is_not_your_files(tmp_path):
     (brain / "backups").mkdir()
     (brain / "backups" / "b.xz").write_bytes(b"b")
     assert vols.own_files(brain) == ["backups/b.xz"] and len(vols.own_files(brain, limit=1)) == 1
+
+
+# ------------------------------------------------------------------ v0.11.3: the largest drive gets the brain
+def test_the_largest_drive_gets_the_brain_and_one_about_as_large_wins_on_speed(w):
+    w.plug("hdd", HDD, label="BIG HDD", budget=500 * GB)  # 1000 GB
+    w.plug("ssd", SSD, label="T7", budget=250 * GB)  # 500 GB, faster
+    w.plug("ssd2", {**SSD, "disk": "sdd"}, label="T7 2", budget=450 * GB)  # 900 GB: about as large as the HDD
+    for _ in range(3):
+        w.tick()  # each drive's read speed is measured, one a minute
+    out = w.tick(11)
+    assert out["moved"] and w.helper.moves == [("home", "ssd2")]  # as large as the HDD (within a quarter), an SSD
+    assert w.public()["decision"] == "the brain is on T7 2 (USB 3 SSD, 900 GB), the largest drive plugged in"
+    assert w.public()["backup"] in {"hdd", "ssd"}  # another drive than the brain's
+
+
+def test_a_quarter_larger_drive_takes_the_brain_at_night_a_slightly_larger_one_does_not(w):
+    w.helper.on_sd, w.helper.mounted = False, True
+    w.plug("ssd", SSD, label="T7", home=True, budget=250 * GB)  # 500 GB
+    w.plug("ssd2", {**SSD, "disk": "sdd"}, label="T7 2", budget=300 * GB)  # 600 GB: larger, but not by a quarter
+    w.tick()
+    w.tick(11)
+    assert "the brain is on T7 (USB 3 SSD, 500 GB), the largest drive" in w.public()["decision"]
+    w.plug("big", {**SSD, "disk": "sde"}, label="BIG", budget=1000 * GB)  # 2000 GB
+    w.tick()
+    out = w.tick(11)
+    assert "the brain moves onto BIG tonight" in out["decision"] and "the larger drive" in out["decision"]
+    w.clock.t = NIGHT
+    out = w.tick()
+    assert w.helper.moves == [("between", "ssd", "big")] and out["moved"]
+    moving = next(e for e in w.public()["events"] if e["event"] == "moving")
+    assert "BIG is the larger drive (USB 3 SSD, 2000 GB against 500 GB)" in moving["detail"]
+
+
+def test_with_the_largest_preferred_a_much_smaller_faster_drive_never_takes_the_brain(w):
+    w.helper.on_sd, w.helper.mounted = False, True
+    w.plug("hdd", HDD, label="BIG HDD", home=True, budget=1000 * GB)
+    w.plug("nvme", NVME, label="NVMe", budget=100 * GB)
+    w.tick()
+    w.clock.t = NIGHT
+    w.tick(11)
+    assert w.helper.moves == []
+    w.config.storage.brain_prefer = "fastest"
+    w.clock.t += 86400
+    w.tick()
+    assert w.helper.moves == [("between", "hdd", "nvme")]
+
+
+def test_brain_prefer_is_checked(config):
+    config.storage.brain_prefer = "biggest"
+    with pytest.raises(ConfigError, match="brain_prefer"):
+        config.validate()

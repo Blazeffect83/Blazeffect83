@@ -1258,6 +1258,28 @@ it. Nothing said so.
 
 **Not yet run on the Pi.**
 
+## 12y. The largest drive, the card's reserve, and a pause that says why (v0.11.4)
+
+**Why:** Christian, 2026-10-26: "It keeps pausing for cooling at 50c", and "have it prioritize the largest storage
+device". The pauses were disk pauses (the SD card held to a drive's 10 GB reserve after `keep-sd-brain`), labelled
+"cooling down" by the feed's fallback.
+
+**Tests** (development container):
+- `tests/test_roles.py` (4 more): the largest drive gets the brain, and of two drives about as large the SSD; a
+  quarter larger drive takes it at night (the event says "the larger drive (…, 2000 GB against 500 GB)"), a slightly
+  larger one does not; a much smaller NVMe never does with "largest", and does with "fastest"; `brain_prefer` is
+  validated. Two older tests now set "fastest", which is what they test.
+- `tests/test_body.py` (1 more): a disk pause records its reason, holds at 1.9 GB with "resumes at 2.2 GB" (reserve
+  3 GB), turns into light work at 2.3 GB, and 1.9 GB after that is light work, not a pause.
+- `tests/test_feed.py` (1 more): a pause the loop has not recorded yet shows the body's reason; with none it says
+  "why: polymath doctor", never "cooling down".
+- `tests/test_sdcard.py` (1 more): `root_is_sd_card` (a Pi's mounts, a PC's, none); `apply_brain_on_sd` lowers the
+  reserve to 3 GB only on an SD-card root and outside SD-card mode; `load_config` applies it.
+
+**Result:** 854 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath` and mypy over the tests and scripts are clean (no shell script changed).
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

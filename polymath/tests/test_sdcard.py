@@ -389,3 +389,29 @@ def test_the_installer_in_sd_card_mode_leaves_the_ssd_alone(tmp_path):
     assert not (stage / "srv" / "polymath").exists()  # the SSD's mount point is not touched
     conf = (stage / "etc" / "polymath" / "polymath.toml").read_text()
     assert "require_separate_mount = true" in conf  # polymath.toml is not edited: the drop-in does it all
+
+
+# ------------------------------------------------------------------ v0.11.3: the brain on the SD card, SD-card mode over
+def test_the_brain_on_the_sd_card_keeps_the_cards_threshold_outside_sd_card_mode(config, tmp_path, monkeypatch):
+    from polymath.core import config as cfgmod
+
+    pi = tmp_path / "mounts-pi"
+    pi.write_text("/dev/mmcblk0p2 / ext4 rw,noatime 0 0\n/dev/sda1 /mnt/polymath/x ext4 rw 0 0\n")
+    pc = tmp_path / "mounts-pc"
+    pc.write_text("overlay / overlay rw 0 0\n")
+    assert cfgmod.root_is_sd_card(pi) and not cfgmod.root_is_sd_card(pc)
+    assert not cfgmod.root_is_sd_card(tmp_path / "missing")
+    config.paths.data_dir = Path("/srv/polymath-test-not-there")  # on the root filesystem (it does not exist yet)
+    config.body.disk_min_free_gb = 10.0
+    assert not cfgmod.apply_brain_on_sd(config, mounts=pc) and config.body.disk_min_free_gb == 10.0
+    config.storage.sd_only = True
+    assert not cfgmod.apply_brain_on_sd(config, mounts=pi)  # SD-card mode sets it itself
+    config.storage.sd_only = False
+    assert cfgmod.apply_brain_on_sd(config, mounts=pi) and config.body.disk_min_free_gb == 3.0
+    # load_config applies it (here: a Pi running from its SD card, the brain in /srv/polymath on it)
+    monkeypatch.setattr(cfgmod, "root_is_sd_card", lambda mounts=None: True)
+    cfg_file = tmp_path / "pi.toml"
+    cfg_file.write_text('[paths]\ndata_dir = "/srv/polymath-test-not-there"\nrequire_separate_mount = false\n')
+    assert load_config(cfg_file, env={}).body.disk_min_free_gb == 3.0
+    monkeypatch.setattr(cfgmod, "root_is_sd_card", lambda mounts=None: False)
+    assert load_config(cfg_file, env={}).body.disk_min_free_gb == 10.0
