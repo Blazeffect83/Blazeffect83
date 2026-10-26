@@ -230,10 +230,22 @@ class KnowledgeGraph:
             tid = int(row["id"])
             if row["status"] == "inferred" and status == "sourced":
                 self.db.execute("UPDATE triples SET status='sourced', updated=? WHERE id=?", (now, tid))
+        from polymath.core import trace
+
         cur = self.db.execute(
-            "INSERT OR IGNORE INTO provenance(triple_id, kind, doc_id, source, detail, weight, created) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (tid, kind, doc_id or 0, source, detail[:500], weight, now),
+            "INSERT OR IGNORE INTO provenance(triple_id, kind, doc_id, source, detail, weight, created, job_id, "
+            "agent_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                tid,
+                kind,
+                doc_id or 0,
+                source,
+                detail[:500],
+                weight,
+                now,
+                trace.current_job.get(),
+                trace.current_agent.get(),
+            ),
         )
         added = bool(cur.rowcount)
         if added:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from polymath.core.jobs import JobContext, JobOutcome
@@ -101,6 +102,43 @@ def _claims_to_triples(graph: KnowledgeGraph, eid: int, claims: dict[str, Any]) 
     return n
 
 
+DISTILL_BATCH = 2000
+
+
+def distill_job(ctx: JobContext) -> JobOutcome:
+    """Job ``memory.distill`` (v0.13.0): a Wikidata entity whose claims are in the graph (entities, aliases, triples,
+    each fact with its source in ``provenance``) keeps only the fingerprint of its claims, not the claims themselves:
+    the raw JSON is the largest thing in a brain that read the dump, and nothing reads it after linking. A changed
+    entity in a later dump still shows (``wikidata.store_entity`` compares the fingerprint) and is linked again."""
+    from polymath.senses.wikidata import claims_hash
+
+    stats = {"entities": 0, "bytes": 0}
+    first = True
+    while first or not ctx.should_stop():
+        first = False
+        rows = ctx.db.query(
+            "SELECT qid, claims FROM wd_entities WHERE state = 'linked' AND claims != '{}' LIMIT ?", (DISTILL_BATCH,)
+        )
+        if not rows:
+            break
+        for r in rows:
+            text = str(r["claims"])
+            ctx.db.execute(
+                "UPDATE wd_entities SET claims = '{}', claims_hash = ?, state = 'distilled' WHERE qid = ?",
+                (claims_hash(text), r["qid"]),
+            )
+            stats["entities"] += 1
+            stats["bytes"] += len(text.encode("utf-8"))
+        ctx.tick()
+    left = int(ctx.db.scalar("SELECT COUNT(*) FROM wd_entities WHERE state = 'linked' AND claims != '{}'", default=0))
+    if stats["entities"]:
+        total = dict(ctx.db.kv_get("distilled") or {})
+        total["entities"] = int(total.get("entities", 0)) + stats["entities"]
+        total["bytes"] = int(total.get("bytes", 0)) + stats["bytes"]
+        ctx.db.kv_set("distilled", {**total, "at": time.time()})
+    return JobOutcome(done=left == 0, value=0.01 * min(stats["entities"], 100) / 100, result={**stats, "left": left})
+
+
 def build_graph(ctx: JobContext) -> JobOutcome:
     """Job ``memory.graph``: Wikidata entities → entities, aliases, predicates, sourced triples; redirects → aliases."""
     graph = KnowledgeGraph(ctx.db)
@@ -180,3 +218,4 @@ def planner(agent: Any) -> None:
     if db.scalar("SELECT 1 FROM wd_entities WHERE state='new' LIMIT 1"):
         s.ensure_recurring("memory.graph", 30, priority=2.4)
     s.ensure_recurring("memory.topics", 3600, priority=0.5)
+    s.ensure_recurring("memory.distill", 3600, priority=0.6)

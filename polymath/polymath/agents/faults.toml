@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.12.0"
+updated_for = "0.13.0"
 updated = "2026-10-26"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -45,7 +45,8 @@ waiting_on = [
     "2026-10-26: Christian asked for the brain to go on the largest storage device (0.11.4: storage.brain_prefer = largest)",
     "2026-10-26: Christian approved all eight storage and safety ideas (0.12.0): split brain, SMART drive health, test-restored backups, update rollback, the needs-you list, the hourly mirror, texts kept as pointers and read again, heat-aware scheduling",
     "2026-10-26: Christian sent his own list for the next big update (0.13.0): a dream cycle, agents that invent tools, a scientist agent, a breeding society, a red team, distilled offline knowledge, explainable why, a curiosity engine, staying up offline",
-    "install v0.12.0: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (it also installs smartmontools; from now on a new version that keeps failing is rolled back by itself after 10 minutes)",
+    "2026-10-26: v0.13.0 builds Christian's list: the dream cycle, invented tools (procedures), the scientist, breeding with crossover, the red team, distilled Wikidata, why-traces, the curiosity engine, a clock guard for power cuts without the internet",
+    "install v0.12.0 (or v0.13.0, which includes it): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (it also installs smartmontools; from now on a new version that keeps failing is rolled back by itself after 10 minutes)",
     "then Christian moves the SSD to a blue USB 3 port (USB 3 cable, no USB 2 hub); drive care reformats it to ext4 after 10 minutes and the brain moves onto it right after (polymath storage roles shows brain on it, doctor clean)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
@@ -58,6 +59,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.13.0"
+date = "2026-10-26"
+changes = """Christian's list ('game changers, fully offline'). DREAM CYCLE (drive/dream.py, job dream.night, daily at backup_hour+2, in phases across slices): a fixed set of held-out questions scored before; replay (contradictions, sanity, rule audit, inference); consolidate (sourced facts with 2+ independent sources → noisy-OR confidence, ≤ 0.99); prune (inferred facts < 30 % confidence, > 14 days old, never backed by a source → withdrawn kind 'dream' and deleted); plan (a world model from bandit values by day, last day's CPU shares and the heat model; alternatives simulated; the best nudges the bandit for a day, at most ±0.25 prior SD: kv dream_plan); the same questions after; the morning report in dreams, the feed ('dreamt') and polymath dream. INVENTED TOOLS (agents/procedures.py): runs of 2–3 actions that earned clearly more than an agent's other turns (≥ 5 times, margin 0.2 and 2 SE) become named procedures for its kind; agents choose them like actions (proc:<name>); a fixed interpreter runs them (only skills.ACTIONS, ≤ 4 steps, whitelisted bounded settings restored after); retired after 20 uses with a negative mean; found with agents.evolve. BREEDING: an agent's genes now include prefs (a bias per action/procedure, ±1); children mix two strong parents of the same kind half the time (crossover: genes from either, weights and prefs averaged) and mutate prefs too. SCIENTIST (agents/scientist.py, job science.step daily): text-read facts Wikidata can judge, split by a fixed hash of (subject, relation) into train/test; hypotheses source_reliable and relation_reliable proposed on train (≥ 30 checks, effect ≥ 0.15), tested one-sided binomial on test (p < 0.05 supported, opposite refuted, else inconclusive), retested after 30 days; supported ones nudge the confidence of the facts that source/relation alone backs (+0.1 or ×0.9); polymath science; feed 'discovered'. RED TEAM (agents/redteam.py, job redteam.step daily): seeds + 12 mutations a day against url (inward addresses, rebinding, schemes, credentials), path (traversal), page_text and screen (terminal escapes, bidi, entities), inbox (forged requests) and poison (impossible facts in a scratch brain); an attack that gets through is saved (redteam_cases), reported agents/redteam:<defense>, replayed daily forever; fixed ones agents/redteam:fixed:<id>; the test suite replays the campaign. It found the inbox accepting any kind at any priority with any payload: now kinds must look like job names, payloads ≤ 64 KB, keys ≤ 200 chars, priority clamped to [-5, 3] (core/inbox.py well_formed/bounded_priority). DISTILLED KNOWLEDGE (memory.distill, hourly): linked Wikidata entities keep a blake2b fingerprint of their claims (claims_hash) instead of the claims JSON, state 'distilled'; a later dump compares fingerprints; facts and their provenance stay. WHY (interface/explain.py): provenance now records job_id and agent_id (core/trace.py context vars set by the loop and the society); polymath why --fact ID and /api/why trace a fact through its evidence, documents, the job, the decision that chose it (kept a year when traced) and the agent, premises of inferred facts recursively. CURIOSITY (drive/curiosity.py, job drive.curiosity daily): topic uncertainty = ½ expected error + ½ Beta posterior spread; priority × (1 + ½ uncertainty); when a topic's uncertainty shrinks, the agent tasks about it in that period share a reward (5 × the drop). OFFLINE: core/clockguard.py moves queued jobs back when the clock goes back > 5 min (a Pi without a real-time clock after a power cut, offline), inbox clock/backwards; polymath needs lists an outage over 6 h."""
+
 [[update]]
 version = "0.12.0"
 date = "2026-10-26"
@@ -669,6 +675,52 @@ steps = [
 ]
 since = "0.11.2"
 updated = "0.11.3"
+
+[[fault]]
+id = "redteam-breach"
+title = "The red team got an attack through one of Polymath's defenses"
+area = "agents"
+codes = ["agents/redteam:*"]
+patterns = ["red team:", "got through the", "now stops an attack"]
+symptoms = ["the inbox: 'red team: an attack got through the <defense> defense (saved as a regression case, replayed daily)'", "polymath redteam: a ✗ case 'GETS THROUGH'"]
+causes = [
+    { cause = "a change weakened a defense (a regression the daily replay caught)", prior = 0.5 },
+    { cause = "a mutated attack found a gap no one had tried before", prior = 0.4 },
+    { cause = "the defense depends on something on this Pi (Python or SQLite version) that behaves differently", prior = 0.1 },
+]
+checks = ["polymath redteam", "polymath redteam --json", "journalctl -u polymath | grep -i redteam"]
+self_healing = [
+    "the attack is saved and replayed every day; when a fix stops it, it is marked passing and that is said",
+    "nothing it does touches the network or another device: every attack runs in-process against throw-away data",
+]
+steps = [
+    { needs = "you", do = "send the case so the defense can be fixed in the code (Polymath never changes its own code)", command = "polymath redteam --json" },
+]
+since = "0.13.0"
+updated = "0.13.0"
+
+[[fault]]
+id = "clock-backwards"
+title = "The clock went back (no real-time clock, a power cut, no internet)"
+area = "clock"
+codes = ["clock/backwards"]
+patterns = ["the clock went back"]
+symptoms = ["the inbox: 'the clock went back N h …; M waiting jobs were moved back with it'", "times in the feed are wrong until the internet is back"]
+causes = [
+    { cause = "a power cut: the Pi 4 has no battery-backed clock and booted with the time saved at the last shutdown", prior = 0.8 },
+    { cause = "someone set the clock by hand, or NTP corrected a clock that ran fast", prior = 0.2 },
+]
+checks = ["timedatectl", "journalctl -u systemd-timesyncd -n 20"]
+self_healing = [
+    "queued jobs move back with the clock, so nothing waits for a time that is suddenly far away",
+    "when the internet returns, NTP sets the clock and the jobs simply come due",
+]
+steps = [
+    { needs = "auto", do = "nothing: it keeps working through it" },
+    { needs = "you", do = "if it happens often, an RTC battery (the Pi 5 has a connector; for a Pi 4, an RTC add-on board) keeps the time through power cuts" },
+]
+since = "0.13.0"
+updated = "0.13.0"
 
 [[fault]]
 id = "backup-broken"

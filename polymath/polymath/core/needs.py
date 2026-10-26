@@ -78,10 +78,27 @@ def _inbox(db: Any, now: float) -> list[dict[str, str]]:
     return out
 
 
+OFFLINE_SAY_S = 6 * 3600.0  # no internet this long: worth a look at the router
+
+
+def _offline(db: Any, now: float) -> list[dict[str, str]]:
+    try:
+        raw = db.kv_get("net")
+    except Exception:
+        return []
+    if not isinstance(raw, dict) or raw.get("online", True) or not raw.get("since"):
+        return []
+    hours = (now - float(raw["since"])) / 3600
+    if hours * 3600 < OFFLINE_SAY_S:
+        return []
+    return [{"what": f"no internet for {hours:.0f} h: check the router and the Pi's Wi-Fi or cable (Polymath keeps "
+             "studying what it has meanwhile)", "source": "network"}]  # fmt: skip
+
+
 def needs(db: Any, run_dir: Path | None, *, now: float | None = None) -> list[dict[str, str]]:
     """Everything that waits on Christian, most pressing first, without repeats (``run_dir``: /run/polymath)."""
     now = time.time() if now is None else now
-    items = _roles(run_dir) + (_escalated(db) + _inbox(db, now) if db is not None else [])
+    items = _roles(run_dir) + (_escalated(db) + _inbox(db, now) + _offline(db, now) if db is not None else [])
     seen: set[str] = set()
     out = []
     for it in items:

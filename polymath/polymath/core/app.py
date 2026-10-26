@@ -224,6 +224,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     netreg("crawl.step", crawler.crawl_job, "Polite crawl of the frontier", action="crawl")
     reg("memory.index", memjobs.index_documents, "Index passages, near-duplicates and topics", action="memorize")
     reg("memory.graph", memjobs.build_graph, "Build the knowledge graph from Wikidata", action="memorize")
+    reg("memory.distill", memjobs.distill_job, "Keep linked Wikidata as facts, not raw claims", action="memorize")
     reg("memory.topics", memjobs.maintain_topics, "Maintain the hierarchical topic map", action="memorize")
     reg("memory.snapshot", knowledge_map.snapshot_job, "Record the knowledge map's day", action="memorize")
     reg("perception.anchors", pjobs.anchor_job, "Harvest Wikipedia links, profiles, infoboxes", action="perceive")
@@ -260,6 +261,14 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("agents.verify", society.verify_job, "Agent society: settle and reward verified tasks", action="agents")
     reg("agents.evolve", society.evolve_job, "Agent society: fork strong agents, retire weak ones", action="agents")
     reg("agents.command", society.command_job, "Agent society: apply your commands", action="agents")
+    from polymath.agents import redteam, scientist
+    from polymath.drive import curiosity, dream
+
+    reg("redteam.step", redteam.redteam_job, "The red team: attack its own defenses", action="maintain")
+    reg("science.step", scientist.science_job, "The scientist: test hypotheses on held-out evidence", action="reason")
+
+    reg("drive.curiosity", curiosity.curiosity_job, "Reward becoming surer about topics", action="plan")
+    reg("dream.night", dream.dream_job, "The dream cycle: replay, consolidate, prune, plan the day", action="reason")
     reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
     reg("body.verify_backup", maintenance.verify_backup_job, "Test-restore the newest backup", action="maintain")
     reg("body.housekeeping", maintenance.housekeeping_job, "Prune old job and cycle records", action="maintain")
@@ -314,6 +323,10 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
             (300.0, djobs.planner),
             (300.0, vjobs.planner),
             (600.0, maintenance.planner),
+            (600.0, dream.planner),
+            (600.0, curiosity.planner),
+            (600.0, scientist.planner),
+            (600.0, redteam.planner),
             (600.0, inventory.planner),
             (300.0, openweb.planner),
             (600.0, predictions.planner),

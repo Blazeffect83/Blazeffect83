@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -23,6 +24,30 @@ from polymath.core.scheduler import Scheduler
 log = get_logger("inbox")
 MAX_PER_CYCLE = 50
 KINDS = {"enqueue", "learn"}
+
+
+KIND_RE = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*")
+MAX_PRIORITY = 3.0  # a request from the inbox never outranks the agent's own urgent work (eviction: 3.5)
+MAX_PAYLOAD = 64 * 1024
+
+
+def well_formed(req: dict[str, Any]) -> bool:
+    """An enqueue request the agent accepts: a job kind's name, a small JSON object, a short key (v0.13.0: the red
+    team showed a forged request could enqueue anything at any priority)."""
+    kind, payload, key = req.get("kind"), req.get("payload") or {}, req.get("key")
+    if not isinstance(kind, str) or len(kind) > 64 or not KIND_RE.fullmatch(kind):
+        return False
+    if not isinstance(payload, dict) or len(json.dumps(payload, default=str)) > MAX_PAYLOAD:
+        return False
+    return key is None or (isinstance(key, str) and len(key) <= 200)
+
+
+def bounded_priority(req: dict[str, Any]) -> float:
+    try:
+        p = float(req.get("priority", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if p != p else max(-5.0, min(MAX_PRIORITY, p))  # NaN → 0
 
 
 def inbox_dir(data_dir: Path) -> Path:
@@ -58,9 +83,9 @@ def ingest(db: Database, scheduler: Scheduler, data_dir: Path) -> int:
                 log.warning("dropping unreadable inbox file", extra={"file": path.name})
                 applied.append(path)
                 continue
-            if req.get("type") == "enqueue" and isinstance(req.get("kind"), str):
+            if req.get("type") == "enqueue" and well_formed(req):
                 scheduler.enqueue(
-                    req["kind"], req.get("payload") or {}, key=req.get("key"), priority=float(req.get("priority", 0.0))
+                    req["kind"], req.get("payload") or {}, key=req.get("key"), priority=bounded_priority(req)
                 )
             elif req.get("type") == "learn" and str(req.get("query", "")).strip():
                 q = str(req["query"]).strip()

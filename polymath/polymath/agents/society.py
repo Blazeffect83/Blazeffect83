@@ -129,14 +129,21 @@ def choose_agent(db: Any, agents: list[Agent], rng: random.Random) -> Agent | No
 
 
 def choose_action(db: Any, agent: Agent, rng: random.Random) -> str:
+    """Thompson sampling over its repertoire and the procedures agents of its kind invented (``agents.procedures``),
+    each shifted by the agent's inherited preference for it (its genes: ``params.prefs``)."""
+    from polymath.agents.procedures import PREFIX, available
+
     explore = float(agent.params.get("explore", 1.0))
+    prefs = agent.params.get("prefs") or {}
     scores = {}
-    for action in skills.REPERTOIRE[agent.kind]:
+    actions: list[str] = [*skills.REPERTOIRE[agent.kind], *(PREFIX + str(p["name"]) for p in available(db, agent.kind))]
+    for action in actions:
         arm = store.arm(db, agent.id, "", action)
         if arm.n == 0:
             scores[action] = rng.gauss(1.0, 1.0) + 1.0  # untried: optimistic
         else:
             scores[action] = rng.gauss(arm.mean, explore * math.sqrt(arm.var / (arm.n + 1)))
+        scores[action] += float(prefs.get(action, 0.0))
     return max(scores, key=lambda k: scores[k])
 
 
@@ -147,7 +154,20 @@ def run_agent(ctx: JobContext, agent: Agent, rng: random.Random) -> dict[str, An
     rt = skills.Runtime(ctx.db, ctx.scheduler, ctx.config, ctx.services, agent, rng, tick=ctx.tick)
     answered = skills.answer_pending(rt)
     action = choose_action(ctx.db, agent, rng)
-    res = skills.ACTIONS[action](rt)
+    from polymath.core import trace
+
+    acting = trace.current_agent.set(agent.id)  # facts it records name it (interface.explain)
+    try:
+        if action.startswith("proc:"):  # a procedure an agent invented: the fixed interpreter runs it
+            from polymath.agents import procedures
+
+            proc = next((p for p in procedures.available(ctx.db, agent.kind) if f"proc:{p['name']}" == action), None)
+            res = procedures.run(rt, proc) if proc is not None else skills.StepResult(action=action)
+            store.learn(ctx.db, agent.id, "", action, res.reward)
+        else:
+            res = skills.ACTIONS[action](rt)
+    finally:
+        trace.current_agent.reset(acting)
     if res.tasks == 0:  # nothing to do with this action right now: a (small) negative experience for it
         store.learn(ctx.db, agent.id, "", action, -0.05)
     cpu = time.process_time() - t0
@@ -279,7 +299,21 @@ MUTATIONS = {
 }
 
 
-def mutate(params: dict[str, Any], rng: random.Random) -> dict[str, Any]:
+def crossover(a: dict[str, Any], b: dict[str, Any], rng: random.Random) -> dict[str, Any]:
+    """A child of two strong agents: each gene from one parent or the other; weights and preferences blended."""
+    child = {k: (a if rng.random() < 0.5 else b).get(k, a.get(k)) for k in {*a, *b} if k not in {"cursor", "weights",
+             "prefs"}}  # fmt: skip
+    wa, wb = a.get("weights") or {}, b.get("weights") or {}
+    if wa or wb:
+        child["weights"] = {m: round((wa.get(m, wb.get(m, 0.0)) + wb.get(m, wa.get(m, 0.0))) / 2, 4)
+                            for m in {*wa, *wb}}  # fmt: skip
+    pa, pb = a.get("prefs") or {}, b.get("prefs") or {}
+    if pa or pb:
+        child["prefs"] = {k: round((pa.get(k, 0.0) + pb.get(k, 0.0)) / 2, 3) for k in {*pa, *pb}}
+    return child
+
+
+def mutate(params: dict[str, Any], rng: random.Random, actions: list[str] | None = None) -> dict[str, Any]:
     child = dict(params)
     for key, (lo, hi, step, how) in MUTATIONS.items():
         v = float(child.get(key, store.DEFAULT_PARAMS[key]))
@@ -288,8 +322,17 @@ def mutate(params: dict[str, Any], rng: random.Random) -> dict[str, Any]:
         child[key] = round(v) if key == "batch" else round(v, 3)
     if child.get("weights"):
         child["weights"] = {m: round(max(0.0, w * math.exp(rng.gauss(0, 0.2))), 4) for m, w in child["weights"].items()}
+    # its strategy is in its genes too: how much it leans towards each action (and invented procedure)
+    prefs = dict(child.get("prefs") or {})
+    for action in actions or list(prefs):
+        prefs[action] = round(min(PREF_LIMIT, max(-PREF_LIMIT, float(prefs.get(action, 0.0)) + rng.gauss(0, 0.15))), 3)
+    if prefs:
+        child["prefs"] = prefs
     child.pop("cursor", None)
     return child
+
+
+PREF_LIMIT = 1.0  # an inherited preference shifts an action's sampled score by at most this
 
 
 def _judged(a: Agent) -> int:
@@ -324,6 +367,9 @@ def evolve_job(ctx: JobContext) -> JobOutcome:
                 store.set_status(ctx.db, parent.id, "retired", f"out-performed by {child.name}")
                 out["retired"].append(parent.name)
     if cfg.evolve:
+        from polymath.agents.procedures import PREFIX, available, discover
+
+        out["procedures"] = discover(ctx.db)["found"]  # runs of actions that keep working become tools
         agents = store.active(ctx.db)
         living_children = {a.parent for a in agents if a.origin == "evolved"}
         for a in sorted(agents, key=lambda x: -x.reward_total):
@@ -332,9 +378,14 @@ def evolve_job(ctx: JobContext) -> JobOutcome:
             rate, _sd, _n = reward_rate(ctx.db, a)
             if a.id in living_children or _judged(a) < need or rate <= 0:
                 continue
+            # a mate: another strong agent of its kind (its genes are mixed in half the time)
+            mates = [b for b in agents if b.id != a.id and b.kind == a.kind and _judged(b) >= need
+                     and reward_rate(ctx.db, b)[0] > 0]  # fmt: skip
+            genes = crossover(a.params, mates[0].params, rng) if mates and rng.random() < 0.5 else a.params
+            actions = [*skills.REPERTOIRE[a.kind], *(PREFIX + p["name"] for p in available(ctx.db, a.kind))]
             kid = store.create(
                 ctx.db, kind=a.kind, directive=a.directive, subject=a.subject, scope=a.scope,
-                name=f"{a.name}-g{a.generation + 1}", params=mutate(a.params, rng), parent=a.id,
+                name=f"{a.name}-g{a.generation + 1}", params=mutate(genes, rng, actions), parent=a.id,
                 generation=a.generation + 1, origin="evolved",
             )  # fmt: skip
             forked = store.get(ctx.db, kid)

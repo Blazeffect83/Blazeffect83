@@ -640,6 +640,29 @@ alone. A drive drive care reformatted takes the brain right after (it already se
 quarter of that size, the fastest. Later it moves at night onto a drive a quarter larger (or, about as large, a class
 faster), never onto a much smaller one. `[storage] brain_prefer = "fastest"` goes by speed first, as before.
 
+### <a id="v013"></a>The mind: dreams, tools, science, a red team, why (v0.13.0)
+
+- **`polymath dream`**: last night's morning report.
+  - It shows the hidden-question score before and after, what the replay found, how many facts became surer, and how many weak beliefs were pruned.
+  - It also shows the plan it chose for today.
+  - It dreams two hours after the backup.
+  - A plan only nudges the next day's choices; it never orders them.
+- **`polymath science`**: hypotheses such as "facts from site X agree with Wikidata less often than reading in general".
+  - Each line gives the training and held-out counts and the p-value.
+  - It also says what changed because of the hypothesis: only supported ones change anything.
+- **`polymath redteam`**: the attacks that once got through, and whether they are stopped now.
+  - An empty list means every defense stopped every attack.
+  - A ✗ goes to the caretaker and `polymath needs`.
+  - Send `polymath redteam --json`: Polymath never changes its own code.
+- **`polymath why --fact N`** (or `polymath why Paris country`, or `/api/why?q=…`): the chain behind a fact.
+  - It shows its sources and documents, the job that found it, the decision that chose that job, the agent that acted, and the premises of an inferred fact.
+  - Facts recorded before v0.13.0 have no job or agent.
+- **Procedures**: `polymath agents show <name>` lists the arms an agent uses; invented procedures appear as `proc:<kind>:<a>+<b>`.
+- **Distilling** runs hourly in the background. Linked Wikidata keeps only a fingerprint of its raw claims (the facts stay), so a brain that read the dump shrinks.
+- **The clock**: after a power cut without the internet, the Pi's clock can be days behind.
+  - Polymath moves its waiting jobs back with it, so it keeps working, and the inbox says so.
+  - An outage of more than 6 hours appears in `polymath needs`.
+
 ### <a id="v012"></a>Safer storage, safe updates, what needs you (v0.12.0)
 
 - **`polymath needs`**: what only you can do (move a drive to a blue port, replace a failing drive, add a powered

@@ -610,6 +610,47 @@ Run by `polymath storage heal` (root, every minute) after the drive helper and t
   and records `kv body_reason` on every mode change; `Feed.paused_reason` falls back to it while the loop's
   `paused_reason` is not there yet.
 
+## The mind (v0.13.0)
+
+- **Dream** (`drive/dream.py`, job `dream.night`): checkpointed phases.
+  - `before`: `question_set` (seeded by the dream id, held-out `questionable_sql`); `score` uses `predictor_for` and is not recorded.
+  - `replay`: contradictions, sanity, rule audit and inference, each guarded.
+  - `consolidate`: noisy-OR of provenance weights × 0.9 for sourced facts with ≥ 2 distinct source:doc.
+  - `prune`: weak, old, unbacked inferred facts → `withdrawn` (kind `dream`), then deleted.
+  - `plan`: `world_model` from bandit day arms, 24 h cycle CPU shares and `kv heat` per kind via cycles×jobs. `simulate` scores value with a throttle penalty; alternatives are "as now", more of the top 3 and less of the hottest. The result goes to `kv dream_plan` nudges (log ratio, ±0.25), added × PRIOR_SD to `BanditPolicy` samples for 24 h.
+  - `after`; then `dreams` row, event `dream`, `polymath dream`.
+- **Procedures** (`agents/procedures.py`, table `procedures`):
+  - `discover`: per-agent action n-grams (2–3, not all the same) over 30 days, support ≥ 5, mean ≥ base + 0.2 and > base + 2 SE.
+  - `valid` / `run`: the interpreter. Ops ∈ `skills.ACTIONS`, ≤ 4 steps, `ARGS` whitelist with bounds, params restored, `uses`/`wins` updated.
+  - `choose_action` adds `proc:<name>` arms and `params.prefs` biases. `run_agent` interprets `proc:` actions and teaches the arm.
+  - Retire after 20 uses with a negative mean.
+- **Breeding**:
+  - `crossover`: a uniform per-gene pick; weights and prefs averaged.
+  - `mutate(..., actions)`: prefs get N(0, 0.15), clamped ±1.
+  - `evolve_job` mates two strong agents of the same kind half the time and runs `discover`.
+- **Scientist** (`agents/scientist.py`, table `hypotheses`):
+  - `checks`: pattern/infobox facts on (s, p) that Wikidata covers; agrees = also Wikidata provenance.
+  - `half`: CRC32 of s:p.
+  - Families `source_reliable`/`relation_reliable`. Proposed if the train rate is ≥ 0.15 from base with ≥ 30 per half; tested with `binomial_p` (exact ≤ 1000, normal beyond).
+  - States supported/refuted/inconclusive; retest after 30 days.
+  - `_apply` nudges single-source non-Wikidata facts (+0.1 ≤ 0.95, or × 0.9). Event `science`.
+- **Red team** (`agents/redteam.py`, table `redteam_cases`):
+  - `SEEDS` and `mutate` per defense: `url` (HttpClient.validate + `_resolve_public` with a stub resolver), `path` (`StoragePool._safe`), `page_text` (`html_text.extract`), `screen` (`Screen.paint`), `inbox` (ingest into a scratch DB; priority ≤ `MAX_PRIORITY`, payload bound, `well_formed`), `poison` (sanity on a scratch DB).
+  - `attack`: an exception means not stopped. `step` replays saved cases (passing/fixed/broke again), runs the campaign, saves breaches, and reports `agents/redteam:<defense>`.
+  - Inbox hardening: `KIND_RE`, `MAX_PAYLOAD` 64 KB, key ≤ 200, `bounded_priority` [-5, 3], NaN → 0.
+- **Distill** (`memjobs.distill_job`, `memory.distill` hourly): linked → `claims='{}'`, `claims_hash` (blake2b-128), state `distilled`. `store_entity` compares the hash for distilled rows and resets the hash when re-linking.
+- **Trace / explain** (`core/trace.py`, `interface/explain.py`):
+  - `current_job` is set around each slice in `Agent.cycle`; `current_agent` around each agent action. Both go into `provenance.job_id`/`agent_id` (partial index on job_id).
+  - `explain_fact` covers evidence, document, job (cycles + jobs), decision (`decisions.job_id`, kept 365 days when traced), agent, rule premises (depth 2), sanity and withdrawn.
+  - `find_facts` takes `#id` or the longest alias prefix plus a relation word.
+  - Shown by `polymath why --fact` and `/api/why`.
+- **Curiosity** (`drive/curiosity.py`, `drive.curiosity` daily):
+  - `uncertainty(c, n)` = min(1, expected error/0.5 × ½ + Beta std/√(1/12) × ½); 1 if never quizzed.
+  - Priority × (1 + 0.5 U), shown in `evidence.uncertainty` and the formula.
+  - A daily `topic_uncertainty` snapshot. Drops reward the agent tasks since the last run whose `payload.s` is in the topic (5 × drop, shared), via `store.reward`.
+- **Clock guard** (`core/clockguard.py`): `Agent._clock_check` at each cycle. `kv clock_high` is written with each heartbeat. More than 5 min behind it → queued `not_before` shifted back, `clock/backwards`.
+- `needs._offline` lists an outage > 6 h.
+
 ## Safer storage, safe updates, needs, heat (v0.12.0)
 
 - **Test restore** (`maintenance.verify_backup_job`, job `body.verify_backup`, daily at `backup_hour + 1`): the

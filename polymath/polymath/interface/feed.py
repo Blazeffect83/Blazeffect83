@@ -100,6 +100,11 @@ ACTIVITY: dict[str, str] = {
     "crawl.step": "crawling the web politely",
     "memory.index": "indexing what it read",
     "memory.graph": "building the knowledge graph",
+    "memory.distill": "distilling what it knows into a compact graph",
+    "dream.night": "dreaming: going over the day",
+    "drive.curiosity": "measuring how unsure it is, topic by topic",
+    "science.step": "testing its hypotheses on evidence it set aside",
+    "redteam.step": "attacking its own defenses (red team)",
     "memory.topics": "organising topics",
     "memory.snapshot": "drawing today's knowledge map",
     "perception.anchors": "harvesting Wikipedia links and infoboxes",
@@ -1177,6 +1182,8 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "issue": "red" if status == "bad" else "yellow",
             "standby": "bgreen" if status == "folded" else "byellow",
             "caretaker": {"resolved": "bgreen", "tell": "byellow", "acting": "bcyan"}.get(str(status), "cyan"),
+            "dream": "bmagenta",
+            "science": "bcyan",
         }.get(str(what), "")
         tag = {
             "site": "site",
@@ -1192,6 +1199,8 @@ def render_event(e: dict[str, Any], *, narrow: bool = False) -> list[Seg]:
             "issue": "problem",
             "standby": "standby",
             "caretaker": "Orin ✓" if status == "resolved" else "Orin",
+            "dream": "dreamt",
+            "science": "discovered",
         }.get(str(what), str(what))
         return [*head, _tag(tag, style), (str(e["text"]), "bold" if what in {"didyouknow", "home"} else "")]
     if k == "recap":

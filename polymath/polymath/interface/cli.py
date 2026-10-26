@@ -492,13 +492,19 @@ def why_dict(db: Database, query: str, n: int) -> dict[str, Any]:
 
 
 def cmd_why(config: Config, args: argparse.Namespace) -> int:
+    from polymath.interface import explain
+
     db = _db(config, readonly=True)
     try:
         query = " ".join(args.query).strip()
         out = why_dict(db, query, args.n)
-        if query and "topic" not in out and "jobs" not in out:
+        if getattr(args, "fact", None):
+            out["trace"] = [t for t in [explain.explain_fact(db, int(args.fact))] if t is not None]
+        elif query and "topic" not in out and "jobs" not in out:
             ans = _answerer(config, db).ask(query)  # a fact question: show its provenance
             out["answer"] = ans.to_dict()
+            ids = explain.find_facts(db, f"{ans.subject} {ans.relation or ''}" if ans.subject else query)
+            out["trace"] = [t for i in ids if (t := explain.explain_fact(db, i)) is not None]
     finally:
         db.close()
     if args.json:
@@ -530,7 +536,11 @@ def cmd_why(config: Config, args: argparse.Namespace) -> int:
                 a["note"],
             ).render()
         )
-    if out["decisions"]:
+    for t in out.get("trace") or []:  # the whole chain: evidence, the job, the decision, the agent (interface.explain)
+        print("\n".join(explain.render(t)))
+    if getattr(args, "fact", None) and not out.get("trace"):
+        print(f"no fact #{args.fact}")
+    if out["decisions"] and not getattr(args, "fact", None):
         print("Recent decisions:")
         for d in out["decisions"]:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(d["at"]))
@@ -1110,6 +1120,65 @@ def cmd_doctor(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(c.level == doctor.BAD for c in checks) else 0
 
 
+def cmd_redteam(config: Config, args: argparse.Namespace) -> int:
+    """The red team's regression cases (``agents.redteam``)."""
+    db = _db(config, readonly=True)
+    try:
+        rows = [dict(r) for r in db.query("SELECT * FROM redteam_cases ORDER BY passing, found DESC LIMIT 100")]
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no attack has got through yet: every defense stopped every attack so far")
+        return 0
+    for r in rows:
+        state = "stopped now" if r["passing"] else "GETS THROUGH"
+        print(f"{'✓' if r['passing'] else '✗'} {r['defense']:<10} {state}: {r['payload'][:100]}")
+    return 1 if any(not r["passing"] for r in rows) else 0
+
+
+def cmd_science(config: Config, args: argparse.Namespace) -> int:
+    """The scientist's hypotheses (``agents.scientist``), newest decisions first."""
+    db = _db(config, readonly=True)
+    try:
+        rows = [dict(r) for r in db.query("SELECT * FROM hypotheses ORDER BY decided DESC, id DESC LIMIT 50")]
+    finally:
+        db.close()
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no hypotheses yet: the scientist needs facts it read that Wikidata can check")
+    mark = {"supported": "✓", "refuted": "✗", "inconclusive": "?", "proposed": "…"}
+    for h in rows:
+        print(f"{mark.get(h['state'], '·')} {h['claim']}")
+        print(f"    train {h['train_k']}/{h['train_n']}, held-out {h['test_k']}/{h['test_n']}, p = {h['p_value']:.4f}"
+              + (f"; {h['applied']}" if h["applied"] else ""))  # fmt: skip
+    return 0
+
+
+def cmd_dream(config: Config, args: argparse.Namespace) -> int:
+    """The latest dream's morning report (``drive.dream``)."""
+    from polymath.drive.dream import latest
+
+    db = _db(config, readonly=True)
+    try:
+        d = latest(db)
+    finally:
+        db.close()
+    if d is None:
+        print("no dream yet: Polymath dreams each night, two hours after its backup")
+        return 0
+    if args.json:
+        print(json.dumps(d, indent=2, default=str))
+        return 0
+    print(f"dreamt {time.strftime('%Y-%m-%d %H:%M', time.localtime(float(d['started'])))}:")
+    print("\n".join(f"  {line}" for line in str(d["report"]).splitlines()))
+    return 0
+
+
 def cmd_needs(config: Config, args: argparse.Namespace) -> int:
     """What only you can do (``core.needs``): from the agent's live snapshot, else from the brain itself."""
     from pathlib import Path
@@ -1517,6 +1586,18 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--json", action="store_true")
     dr.set_defaults(func=cmd_doctor)
 
+    rt = sub.add_parser("redteam", help="the red team's saved attacks and whether the defenses stop them now")
+    rt.add_argument("--json", action="store_true")
+    rt.set_defaults(func=cmd_redteam)
+
+    sc = sub.add_parser("science", help="the scientist's hypotheses: tested on held-out evidence, kept if they held")
+    sc.add_argument("--json", action="store_true")
+    sc.set_defaults(func=cmd_science)
+
+    dm = sub.add_parser("dream", help="the morning report: what last night's dream changed")
+    dm.add_argument("--json", action="store_true")
+    dm.set_defaults(func=cmd_dream)
+
     nd = sub.add_parser("needs", help="what only you can do (a plug, a cable, a decision); Polymath does the rest")
     nd.add_argument("--json", action="store_true")
     nd.set_defaults(func=cmd_needs)
@@ -1552,6 +1633,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("why", help="explain a topic's priority, a fact's provenance, or recent decisions")
     w.add_argument("query", nargs="*")
     w.add_argument("-n", type=int, default=10)
+    w.add_argument("--fact", type=int, help="trace one fact (its id) back through evidence, jobs, decisions, agents")
     w.add_argument("--json", action="store_true")
     w.set_defaults(func=cmd_why)
 

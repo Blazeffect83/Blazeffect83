@@ -107,12 +107,15 @@ class BanditPolicy:
         backlog = bool(self.db.scalar("SELECT 1 FROM documents WHERE stage < 2 AND state != 'duplicate' LIMIT 1"))
         context = self.context_of(obs, backlog)
         samples: dict[str, float] = {}
+        from polymath.drive.dream import nudge
+
         for action in groups:
             a = self._arm(context, action)
             if a.n == 0:
                 samples[action] = self.rng.gauss(PRIOR_MEAN, PRIOR_SD) + 1.0  # optimism: try unseen arms soon
             else:
                 samples[action] = self.rng.gauss(a.mean, math.sqrt(a.var / (a.n + 1)))
+            samples[action] += nudge(self.db, action, obs.now) * PRIOR_SD  # last night's plan (drive.dream)
         chosen = max(samples, key=lambda k: samples[k])
         reason = f"Thompson sample {samples[chosen]:.3f} highest of {len(samples)} in context {context}"
         cur = self.db.execute(
@@ -140,7 +143,13 @@ class BanditPolicy:
             from polymath.drive.priority import record_effort
 
             record_effort(self.db, int(topic), cpu)
-        self.db.execute("DELETE FROM decisions WHERE at < ?", (time.time() - 30 * 86400,))
+        # a month of decisions, and a year of those a fact traces back to (interface.explain)
+        now = time.time()
+        self.db.execute(
+            "DELETE FROM decisions WHERE at < ? AND (at < ? OR job_id IS NULL OR NOT EXISTS "
+            "(SELECT 1 FROM provenance p WHERE p.job_id = decisions.job_id))",
+            (now - 30 * 86400, now - 365 * 86400),
+        )
 
     def arms(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.query("SELECT * FROM bandit_arms ORDER BY context, mean DESC")]

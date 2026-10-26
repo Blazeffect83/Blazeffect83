@@ -8,6 +8,7 @@ resume instantly after any interruption.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -166,24 +167,33 @@ def parse_entity(line: bytes) -> dict[str, Any] | None:
     }
 
 
+def claims_hash(text: str) -> str:
+    """The fingerprint a distilled entity keeps of its claims (``memory.distill``)."""
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=16).hexdigest()
+
+
 def store_entity(ctx: JobContext, ent: dict[str, Any]) -> bool:
     claims = ent["claims"]
     if ent["type"] == "property":
         claims = {"_datatype": [ent.get("datatype")], **claims}
+    text = json.dumps(claims, ensure_ascii=False, separators=(",", ":"))
+    # a distilled entity (memory.distill) keeps only the hash of its claims: changed means a different hash
     cur = ctx.db.execute(
         "INSERT INTO wd_entities(qid, label, description, aliases, enwiki, claims, state, fetched) "
         "VALUES(?,?,?,?,?,?, 'new', ?) ON CONFLICT(qid) DO UPDATE SET label=excluded.label, "
         "description=excluded.description, aliases=excluded.aliases, enwiki=excluded.enwiki, "
-        "claims=excluded.claims, state='new', fetched=excluded.fetched "
-        "WHERE wd_entities.claims != excluded.claims OR wd_entities.label != excluded.label",
+        "claims=excluded.claims, claims_hash=NULL, state='new', fetched=excluded.fetched "
+        "WHERE (CASE WHEN wd_entities.state = 'distilled' THEN COALESCE(wd_entities.claims_hash, '') != ? "
+        "ELSE wd_entities.claims != excluded.claims END) OR wd_entities.label != excluded.label",
         (
             ent["qid"],
             ent["label"],
             ent["description"],
             json.dumps(ent["aliases"], ensure_ascii=False),
             ent["enwiki"],
-            json.dumps(claims, ensure_ascii=False, separators=(",", ":")),
+            text,
             time.time(),
+            claims_hash(text),
         ),
     )
     for lang, title in (claims.get("_sitelinks") or {}).items():

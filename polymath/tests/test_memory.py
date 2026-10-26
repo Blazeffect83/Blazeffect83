@@ -351,7 +351,8 @@ def test_memory_planner_and_registration(config, db):
     DocumentStore(db).add(Document("web", "1", "t", prose(1), "x"))
     db.execute("INSERT INTO wd_entities(qid,label,claims,state,fetched) VALUES('Q1','x','{}','new',0)")
     mj.planner(agent)
-    assert {r["kind"] for r in db.query("SELECT kind FROM jobs")} == {"memory.index", "memory.graph", "memory.topics"}
+    assert {r["kind"] for r in db.query("SELECT kind FROM jobs")} == {"memory.index", "memory.graph", "memory.topics",
+                                                                      "memory.distill"}  # fmt: skip
 
 
 def test_query_planning_prunes_common_and_rejects_vague(db):

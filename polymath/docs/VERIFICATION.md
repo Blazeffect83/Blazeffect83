@@ -1317,6 +1317,58 @@ updates, the needs-you list, the hourly mirror, texts kept as pointers, heat-awa
 
 **Not yet run on the Pi.**
 
+## 12aa. The mind: dreams, tools, science, a red team, why, curiosity (v0.13.0)
+
+**Why:** Christian, 2026-10-26: "Here are the ideas I think would be game changers, fully offline, on the Pi 4". He
+asked for a dream cycle, agents that invent tools, a scientist, a breeding society, a red team, distilled offline
+knowledge, explainable everything, a curiosity engine, and staying online when disconnected.
+
+**Tests** (development container), `tests/test_mind.py` (21) plus updates:
+- **Distill:** linked Wikidata keeps a fingerprint; every fact keeps its source; an unchanged later dump changes nothing; a changed one links again.
+- **Why:**
+  - A read fact traces to its document, job, decision and agent.
+  - An inferred fact traces to both premises.
+  - The text chain is checked; `find_facts` handles an id, a missing id, "Paris country", "Paris" and an unknown name; sanity checks are shown.
+  - `polymath why --fact`, a missing fact, and `/api/why` on a live dashboard all work.
+  - The loop stamps each fact with its job and resets afterwards.
+- **Dream:**
+  - On a small knowledge base with held-out facts, it scores the same questions before and after.
+  - It raises a two-source fact to exactly 0.8964, prunes a weak 30-day-old unbacked inference (logged in withdrawn), records the replay steps, and plans among simulated alternatives (bounded nudges, gone after a day).
+  - It writes the report and feed event.
+  - The world model refuses a day that would overheat even though it is worth more.
+  - A long dream carries on in the next slice; one failing replay part never spoils the night.
+  - `polymath dream` works with and without a report.
+- **Curiosity:**
+  - Uncertainty falls with more questions and with right answers.
+  - A topic whose uncertainty shrank rewards its agent task once (the exact share).
+  - The snapshot is kept and the most uncertain topic is listed; the priority evidence carries the uncertainty.
+- **Procedures:**
+  - Only valid procedures run.
+  - A run of actions that pays (read+quiz) is found once.
+  - Another agent of its kind runs it through the interpreter: settings are bounded to their limits and restored, and uses are counted.
+  - An invalid one is refused.
+  - Inherited preferences steer the choice, a turn runs it, and its arm learns; it is retired after paying badly.
+- **Breeding:** two strong agents produce children with bounded preferences for every action; crossover mixes, averages, and leaves out absent genes.
+- **Scientist:**
+  - On synthetic sources (one 95 % right, one 15 % right, 160 checks each), both hypotheses are supported on held-out evidence with p < 0.05.
+  - The bad source's lone facts drop to 0.54; nothing is retested within a month.
+  - The job and `polymath science` work.
+  - It waits without evidence; the binomial tails are exact and the normal approximation is checked.
+- **Red team:**
+  - The full campaign (seeds + 20 mutations per defense) gets through no defense.
+  - A broken defense yields saved regression cases and one report. Fixed, they replay as fixed; a crashing defense counts as not stopping; breaking again is caught.
+  - `polymath redteam` works.
+  - The inbox refuses forged requests (priority clamp, bad kinds, giant payloads, non-numeric priority, NaN).
+- **Clock and offline:**
+  - A clock three days behind moves waiting jobs back; drift does not.
+  - The loop watches the clock and survives a broken check.
+  - An 8 h outage is listed in needs; a short one is not.
+- **Updated:** the topic priority test (the curiosity factor) and the memory planner test (`memory.distill`).
+
+**Result:** 905 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath` and mypy over the tests and scripts are clean (no shell script changed).
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

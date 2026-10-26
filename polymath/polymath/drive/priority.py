@@ -1,6 +1,6 @@
 """Curiosity: which topic should the agent learn about next?
 
-priority(t) = gap(t) × importance(t) × novelty(t) × (1 − recent_effort(t))
+priority(t) = gap(t) × importance(t) × novelty(t) × (1 − recent_effort(t)) × (1 + ½ uncertainty(t))
 
 * **gap** — how much the agent does *not* know: 1 − quiz accuracy when the
   topic has been quizzed (Laplace-smoothed), otherwise a structural proxy —
@@ -9,6 +9,8 @@ priority(t) = gap(t) × importance(t) × novelty(t) × (1 − recent_effort(t))
   by the most important topic.
 * **novelty** — 1 / (1 + recent pursuits), pursuits decaying with a 7-day half-life.
 * **recent effort** — share of the last 24 h of targeted CPU time spent on the topic.
+* **uncertainty** (v0.13.0, ``drive.curiosity``) — how unsure it is about the topic: it is drawn to what it knows
+  least about its own knowledge.
 
 Every factor and its inputs are stored with the priority so ``polymath why``
 can explain the choice.
@@ -58,6 +60,8 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
     from polymath.drive.learn import INTEREST_BOOST, interests
 
     wanted = interests(db)
+    from polymath.drive.curiosity import WEIGHT as CURIOSITY_WEIGHT
+    from polymath.drive.curiosity import uncertainty
     from polymath.drive.strategy import topic_factor
 
     yields = topic_factor(db)  # facts learned per CPU-second on a topic, against the median (drive.strategy)
@@ -94,7 +98,8 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
         gap, gap_ev = gaps[tid]
         boost = INTEREST_BOOST if tid in wanted else 1.0
         teaches = yields.get(tid, 1.0)
-        priority = gap * importance * novelty * (1.0 - eff) * boost * teaches
+        unsure = uncertainty(*quiz[tid]) if tid in quiz else 1.0  # the curiosity engine (drive.curiosity)
+        priority = gap * importance * novelty * (1.0 - eff) * boost * teaches * (1.0 + CURIOSITY_WEIGHT * unsure)
         evidence = {
             "gap": gap_ev,
             "importance_pagerank": round(raw_importance[tid], 3),
@@ -102,6 +107,7 @@ def compute_priorities(db: Database, *, limit_topics: int = 20_000) -> dict[str,
             "effort_share_24h": round(eff, 3),
             "user_interest_boost": boost,
             "yield_factor": teaches,
+            "uncertainty": unsure,
             "docs": int(t["n_total"]),
         }
         rows.append((tid, gap, importance, novelty, eff, priority, json.dumps(evidence), now))
@@ -175,6 +181,8 @@ def explain_topic(db: Database, topic_id: int) -> dict[str, Any] | None:
         f"priority {out['priority']:.4f} = gap {out['gap']:.3f} × importance {out['importance']:.3f} × "
         f"novelty {out['novelty']:.3f} × (1 − effort {out['effort']:.3f})"
     )
+    if "uncertainty" in out["evidence"]:  # the curiosity engine (drive.curiosity)
+        out["formula"] += f" × (1 + ½ uncertainty {float(out['evidence']['uncertainty']):.3f})"
     return out
 
 

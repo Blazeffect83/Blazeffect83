@@ -725,6 +725,12 @@ def make_handler(data: DashboardData, limiter: RateLimiter, gate: Gate | None = 
                     return self._json(200, data.agents())
                 if path == "/api/digest":
                     return self._json(200, data.digest())
+                if path == "/api/why":
+                    from polymath.interface import explain
+
+                    q = (parse_qs(url.query).get("q") or [""])[0][:200]
+                    traced = [t for i in explain.find_facts(data.db(), q) if (t := explain.explain_fact(data.db(), i))]
+                    return self._json(200, {"query": q, "trace": traced})
                 if path == "/api/needs":
                     from polymath.core.needs import needs
 

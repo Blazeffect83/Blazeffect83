@@ -95,6 +95,24 @@ implemented here and learns only from data the agent downloads itself.
   - **A wiped brain drive is no dead end** (v0.11.2): reformat the SSD and the SD card's brain takes over (or the brain
     is rebuilt from its newest backup on another drive), then moves onto the best drive by itself. Empty drives
     formatted for Windows/macOS are reformatted for Linux by themselves; a drive with your files never is.
+  - **A mind of its own, fully offline** (v0.13.0):
+    - **It dreams.** At night it replays the day, makes facts that several sources agree on surer, prunes weak
+      beliefs, and simulates tomorrow's plan against alternatives. It scores itself on hidden questions before and
+      after, and leaves a morning report (`polymath dream`).
+    - **Its agents invent tools.** A run of actions that keeps working becomes a named procedure other agents can
+      use. Procedures are data run by a fixed, sandboxed interpreter, never new code.
+    - **A scientist.** It forms hypotheses about which sources and relations it reads reliably, tests them on
+      evidence it set aside, and acts only on what holds up (`polymath science`).
+    - **A breeding society.** Strong agents have children that mix two parents' genes (settings and strategy) and
+      mutate them; the weak retire.
+    - **A red team.** One agent attacks the others every day (inward URLs, path tricks, terminal escapes, forged
+      requests, poisoned facts). Every attack that gets through becomes a regression case replayed forever
+      (`polymath redteam`). It found, and v0.13.0 closed, a way to flood the job queue through the inbox.
+    - **Distilled knowledge.** Linked Wikidata keeps only facts with their sources, not the raw claims.
+    - **Ask why.** `polymath why --fact N` traces a fact back through its evidence, the job, the decision that
+      chose it, and the agent that acted (`/api/why` too).
+    - **Curiosity.** It is drawn to topics it is unsure about, and agents earn rewards for making it surer.
+    - **Keeps going offline**, even when a power cut leaves the clock behind (the Pi has no clock of its own).
   - **Safer storage, by itself** (v0.12.0):
     - every backup is test-restored the next day;
     - the brain is mirrored to the backup drive every hour (only what changed);

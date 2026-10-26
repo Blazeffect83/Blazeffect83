@@ -183,6 +183,7 @@ class Agent:
         from polymath.body.heat import HeatModel
 
         self.heat = HeatModel(db)  # which jobs warm the Pi (body.heat): they wait while it is warm
+        self._clock_high = float(db.kv_get("clock_high") or 0.0)  # the latest time seen (core.clockguard)
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -301,6 +302,7 @@ class Agent:
 
     def _heartbeat(self, state: str) -> None:
         self._hb_at, self._hb_state = time.monotonic(), state
+        self.db.kv_set("clock_high", self._clock_high)  # the latest time seen (core.clockguard)
         self.db.kv_set(
             "heartbeat",
             {
@@ -340,6 +342,7 @@ class Agent:
     def cycle(self) -> CycleRecord:
         started = time.time()
         t0, c0 = time.monotonic(), time.process_time()
+        self._clock_check()
         obs = self.observe()  # OBSERVE
         self.services["observation"] = obs
         temp = obs.body.vitals.temp_c if obs.body.vitals is not None else None
@@ -387,6 +390,9 @@ class Agent:
             on_tick=self._tick,
             intensity=obs.body.intensity,
         )
+        from polymath.core import trace
+
+        traced = trace.current_job.set(job.id)  # every fact recorded in this slice remembers it (interface.explain)
         try:
             with self.db.transaction():
                 outcome = spec.handler(ctx)  # ACT
@@ -435,6 +441,8 @@ class Agent:
                     why = f"{job.kind} gave up after {job.attempts + 1} tries: {rec.error}"
                     issues.report(self.db, "jobs", f"dead:{job.kind}", why, severity="bad")
             log.exception("job slice failed", extra={"job": job.id, "kind": job.kind, "state": state})
+        finally:
+            trace.current_job.reset(traced)
         return self._finish(rec, started, t0, c0)
 
     def _responses(self) -> int:
@@ -459,6 +467,18 @@ class Agent:
         allowed = [k for k in kinds if k not in self.network_kinds]
         reason = f"{decision.reason}; offline: studying what it has" if decision.reason else "offline"
         return Decision(allowed, decision.action, reason, decision.context, decision.scores)
+
+    def _clock_check(self) -> None:
+        """A clock that went back (a Pi without a real-time clock, after a power cut, offline) never stalls the
+        queue: waiting jobs move back with it (``core.clockguard``)."""
+        from polymath.core import clockguard
+
+        try:
+            self._clock_high, back = clockguard.check(self.db, time.time(), self._clock_high)
+            if back:
+                log.warning("the clock went back", extra={"seconds": round(back)})
+        except Exception:  # never stops the loop
+            log.debug("clock check failed", exc_info=True)
 
     def _heat_step(self, temp: float | None, now_mono: float) -> None:
         try:

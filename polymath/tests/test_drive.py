@@ -117,7 +117,10 @@ def test_priorities_gap_importance_novelty_effort_and_boost(db):
     geo = some(explain_topic(db, kb.topics["Geography"]))
     assert geo["evidence"]["gap"]["source"] == "quiz" and abs(geo["gap"] - (1 - 4 / 6)) < 1e-9
     assert abs(geo["effort"] - 0.75) < 1e-9 and abs(geo["novelty"] - 0.5) < 1e-3
-    expect = geo["gap"] * geo["importance"] * geo["novelty"] * (1 - geo["effort"])
+    from polymath.drive.curiosity import WEIGHT, uncertainty
+
+    assert geo["evidence"]["uncertainty"] == uncertainty(3, 4) and "× (1 + ½ uncertainty" in geo["formula"]
+    expect = geo["gap"] * geo["importance"] * geo["novelty"] * (1 - geo["effort"]) * (1 + WEIGHT * uncertainty(3, 4))
     assert abs(geo["priority"] - expect) < 1e-9
     db.kv_set("user_interests", {str(kb.topics["Geography"]): time.time() + 60, "777": time.time() - 1})
     assert interests(db) == {kb.topics["Geography"]: db.kv_get("user_interests")[str(kb.topics["Geography"])]}
