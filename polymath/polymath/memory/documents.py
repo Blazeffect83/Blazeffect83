@@ -142,6 +142,18 @@ class DocumentStore:
                     (now, h, len(doc.text), self.codec, body, meta, row["id"]),
                 )
                 return int(row["id"]), "updated"
+            if row["codec"] == "evicted" and row["content_hash"] == h:
+                # evicted for room and read again (memory.inventory): the same text comes back, passages and all
+                from polymath.memory.text_index import TextIndex
+
+                self.db.execute(
+                    "UPDATE documents SET fetched=?, codec=?, body=?, meta=json_remove(meta, '$.evicted', '$.refetch') "
+                    "WHERE id=?",
+                    (now, self.codec, body, row["id"]),
+                )
+                title = self.db.scalar("SELECT title FROM documents WHERE id=?", (row["id"],))
+                TextIndex(self.db).index(int(row["id"]), str(title or doc.title), doc.text)
+                return int(row["id"]), "updated"
             if row["content_hash"] == h:
                 return int(row["id"]), "unchanged"
             if row["codec"] == "spilled" and not load_body(row)[1]:

@@ -127,6 +127,7 @@ ACTIVITY: dict[str, str] = {
     "agents.evolve": "evolving agents",
     "agents.command": "applying your agent commands",
     "body.backup": "backing up",
+    "body.verify_backup": "test-restoring the newest backup",
     "body.housekeeping": "housekeeping",
     "body.evict": "freeing disk space",
     "body.spill": "moving documents to a plugged-in drive",
@@ -682,6 +683,15 @@ class Feed:
             reason = self.db.kv_get("body_reason")
         return str(reason) if reason else None
 
+    def needs(self) -> list[dict[str, str]]:
+        """What only you can do (``core.needs``); never breaks the feed."""
+        from polymath.core.needs import needs
+
+        try:
+            return needs(self.db, Path(self.run_dir) if self.run_dir is not None else None)
+        except Exception:
+            return []
+
     def drive_roles(self) -> dict[str, Any] | None:
         """While the brain is on the SD card: what the drive roles see (``body.roles``), e.g. which drive cannot take
         it and why. None otherwise, or when there is no decision yet."""
@@ -758,6 +768,7 @@ class Feed:
             **({"sd_card": sd} if isinstance(sd := self.db.kv_get("sd_card"), dict) else {}),
             **({"caretaker": ct} if isinstance(ct := self.db.kv_get("caretaker"), dict) else {}),
             **({"drive_roles": dr} if (dr := self.drive_roles()) else {}),
+            "needs": self.needs(),
         }
 
     def focus(self, cycles: list[Any], now: float) -> dict[str, Any]:
@@ -1263,10 +1274,16 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
     if not st.get("online"):
         return [(" NOW ", "nowoff"), ("  not running", "red")]
     if st.get("state") == "paused" or st.get("mode") == "pause":
+        n = len(st.get("needs") or [])
         return [
             (" NOW ", "nowwarn"),
             ("  paused", "byellow"),
             (f" — {st.get('paused_reason') or 'why: polymath doctor'}", "yellow"),
+            *(
+                [(f"  ({n} thing{'s' if n != 1 else ''} need{'' if n != 1 else 's'} you: polymath needs)", "yellow")]
+                if n
+                else []
+            ),
         ]
     activity = str(st.get("activity") or "starting up")
     segs: list[Seg] = [(" NOW ", "now"), ("  " + activity[:1].upper() + activity[1:], "bright")]
@@ -1292,6 +1309,8 @@ def now_line(st: dict[str, Any]) -> list[Seg]:
         segs.append(
             ("  (slowed: " + ("running hot" if st.get("mode") == "throttle" else "low on disk") + ")", "yellow")
         )
+    if n := len(st.get("needs") or []):
+        segs.append((f"  ({n} thing{'s' if n != 1 else ''} need{'' if n != 1 else 's'} you: polymath needs)", "yellow"))
     return segs
 
 

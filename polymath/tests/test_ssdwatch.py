@@ -557,3 +557,28 @@ def test_the_brains_drive_back_as_it_was_is_never_taken_for_wiped(pi):
     pi.config.storage.sd_only = False
     pi.plug()  # the same filesystem: the drive helper mounts it, nothing is rebuilt
     assert pi.tick()["ssd"] == "home"
+
+
+def test_a_newer_hourly_mirror_is_preferred_over_the_nightly_backup(pi):
+    import os
+    import sqlite3
+
+    from polymath.body import mirror as mr
+
+    pi.config.storage.sd_only = False
+    pi.mount_works = False
+    drive = pi.home.storage.mount_root / "hdd" / "polymath-brain" / "backups"
+    make_backup(drive / "polymath-20261024-030000.sqlite3.xz", "nightly")
+    os.utime(drive / "polymath-20261024-030000.sqlite3.xz", (1000.0, 1000.0))
+    src = pi.home.paths.data_dir.parent / "live.sqlite3"
+    con = sqlite3.connect(str(src))
+    con.execute("CREATE TABLE events(text TEXT)")
+    con.execute("INSERT INTO events VALUES('hourly')")
+    con.commit()
+    con.close()
+    assert mr.copy_changed(src, drive / mr.MIRROR_DIR).ok
+    out = pi.watch().rebuild(pi.watch().load())
+    assert out["ssd"] == "rebuilt" and "from the hourly mirror on hdd" in out["detail"]
+    con = sqlite3.connect(str(pi.home.paths.data_dir / "db" / "polymath.sqlite3"))
+    assert con.execute("SELECT text FROM events").fetchone()[0] == "hourly"
+    con.close()

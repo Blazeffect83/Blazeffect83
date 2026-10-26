@@ -39,6 +39,7 @@ SLOW_REPORT_S = 300.0  # a slice this long is reported: nothing else ran meanwhi
 RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
 RESTART_WINDOW_S = 600.0
 RESTARTS_TOO_MANY = 4  # starts within RESTART_WINDOW_S that mean it keeps stopping
+ROLLBACK_FILE = "update-rolled-back.json"  # written by scripts/update-check.sh after it went back a version
 NET_RETRY_S = 60.0  # a network job that hit a dead connection waits this long (offline: until the probe succeeds)
 
 
@@ -176,6 +177,12 @@ class Agent:
         # proof of life during one long step (core.vigil): the feed never says offline while it works
         self.vigil = vigil.Vigil(ping=self.notifier.watchdog, pulse=self._pulse, run_dir=config.paths.run_dir)
         self.storage_lost = False  # set when the brain's drive stopped answering mid-run (see storage_lost)
+        from polymath.body.mirror import Mirror
+
+        self.mirror = Mirror(config, db)  # the hourly copy of the database on the backup drive (body.mirror)
+        from polymath.body.heat import HeatModel
+
+        self.heat = HeatModel(db)  # which jobs warm the Pi (body.heat): they wait while it is warm
 
     # --------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -196,12 +203,32 @@ class Agent:
             if recovered["requeued"] or recovered["dead"]:
                 issues.report(self.db, "agent", "unclean_stop", f"the last run ended without a clean stop "
                               f"(power cut, crash or kill): {recovered['requeued']} job(s) resumed")  # fmt: skip
+            self._report_rollback(now)
             self._heartbeat("starting")
         self.started = True
         self.vigil.start()
         self.notifier.ready(f"started at cycle {self.cycle_no}")
         log.info("agent started", extra={"cycle": self.cycle_no, "recovered": recovered})
         return recovered
+
+    def _report_rollback(self, now: float) -> None:
+        """``scripts/update-check.sh`` put the previous version back (the new one kept failing): say so, once."""
+        marker = Path(self.config.storage.standby_dir).parent / ROLLBACK_FILE
+        try:
+            info = json.loads(marker.read_text(encoding="utf-8"))
+            marker.replace(marker.with_name(f"{ROLLBACK_FILE}.reported-{int(now)}"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(info, dict):
+            return
+
+        def name(b: Any) -> str:
+            return f"v{b.get('version', '?')} ({b.get('commit') or '?'})" if isinstance(b, dict) else str(b)
+
+        issues.report(self.db, "update", "rolled_back", f"the update to {name(info.get('from'))} kept failing "
+                      f"({info.get('why', '?')}), so {name(info.get('to'))} was put back by itself. The failed "
+                      "code is in /opt/polymath/src.failed; journalctl -u polymath shows why it failed",
+                      severity="bad", now=now)  # fmt: skip
 
     def stop(self, *_: Any) -> None:
         self.stop_event.set()
@@ -315,6 +342,8 @@ class Agent:
         t0, c0 = time.monotonic(), time.process_time()
         obs = self.observe()  # OBSERVE
         self.services["observation"] = obs
+        temp = obs.body.vitals.temp_c if obs.body.vitals is not None else None
+        self._heat_step(temp, t0)
         if obs.body.mode == "pause":
             if not obs.body.allow or not self.scheduler.claimable(obs.body.allow):
                 return self._quiet_cycle("paused", obs, ", ".join(obs.body.reasons))
@@ -323,14 +352,17 @@ class Agent:
             decision = self.policy.decide(obs, self.registry)  # DECIDE
             decision = self._offline_filter(decision)
         decision = self._quarantine_filter(decision)
+        decision = self._heat_filter(decision, temp)
         self.vigil.enter("checkpoint")
         self._checkpoint_if_asked()
+        self._mirror_between_slices()
         self.vigil.enter("")
         responses, failed_mark = self._responses(), self._failed_mark()
         job = self.scheduler.claim(decision.kinds)
         if job is None:
             return self._quiet_cycle("idle", obs, decision.reason)
         spec = self.registry.get(job.kind)
+        self.heat.started(job.kind)
         self.vigil.enter(job.kind, job.id)
         self.cycle_no += 1
         self.services["cycle"] = self.cycle_no
@@ -428,6 +460,24 @@ class Agent:
         reason = f"{decision.reason}; offline: studying what it has" if decision.reason else "offline"
         return Decision(allowed, decision.action, reason, decision.context, decision.scores)
 
+    def _heat_step(self, temp: float | None, now_mono: float) -> None:
+        try:
+            self.heat.step("", temp, now_mono)
+            self.heat.save()
+        except Exception:  # learning the heat never stops the loop
+            log.debug("heat model step failed", exc_info=True)
+
+    def _heat_filter(self, decision: Decision, temp: float | None) -> Decision:
+        """While the Pi is warm, the job kinds that heat it most wait (``body.heat``); cooler work goes on."""
+        hot = self.heat.hot_kinds(temp, self.config.body.throttle_celsius)
+        if not hot or decision.kinds == []:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        reason = (
+            f"{decision.reason}; warm: the hottest work waits" if decision.reason else "warm: the hottest work waits"
+        )
+        return Decision([k for k in kinds if k not in hot], decision.action, reason, decision.context, decision.scores)
+
     def _quarantine_filter(self, decision: Decision) -> Decision:
         """Job kinds Orin the caretaker paused (a kind that kept failing the same way) are held back for a while."""
         from polymath.agents.caretaker import quarantined
@@ -452,6 +502,15 @@ class Agent:
             log.info("write-ahead log checkpoint", extra={"result": list(row) if row is not None else None})
         except Exception:  # not an issue: a checkpoint that cannot run now is asked for again by Orin
             log.debug("checkpoint skipped", exc_info=True)
+
+    def _mirror_between_slices(self) -> None:
+        """The hourly mirror starts here, with no transaction open on this connection (``body.mirror``)."""
+        try:
+            self.mirror.record()
+            self.mirror.maybe_start()
+        except Exception:  # the mirror never stops the loop; it is tried again in five minutes
+            self.mirror.next_at = time.time() + 300.0
+            log.exception("mirror step failed")
 
     def _network_down(self, job: Job, rec: CycleRecord, started: float, t0: float, c0: float) -> CycleRecord:
         """A slice died on a dead connection: the job keeps its attempts and checkpoint and waits; enough of these

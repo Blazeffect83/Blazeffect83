@@ -53,6 +53,7 @@ from pathlib import Path
 from typing import Any
 
 from polymath.body.heal import usb_device_dir
+from polymath.body.health import check as health_check
 from polymath.body.ssdwatch import read_check
 from polymath.core.config import MOVED_FILE, Config
 from polymath.core.logging import get_logger
@@ -105,6 +106,12 @@ class Drive:
     score: float = 0.0
     why_not: str = ""  # why it cannot hold the brain ("" when it can)
     role: str = "extra"
+    health: str = ""  # its SMART verdict (body.health): ok | watch | failing | unknown | "" (not looked yet)
+    health_why: str = ""
+
+    @property
+    def failing(self) -> bool:
+        return self.health == "failing"
 
     def kind(self) -> str:
         """In words: ``USB 3 SSD``, ``USB 2 hard disk``, ``NVMe SSD``…"""
@@ -170,7 +177,7 @@ def brain_score(d: Drive) -> float:
     ssd = 2.0 if d.rotational is False else 0.0
     speed = min(d.mbps / 150.0, 2.0)
     room = min(math.log2(d.free / 32e9 + 1.0) / 4.0, 1.0) if d.free > 0 else 0.0
-    return round(link + ssd + speed + room - d.drops, 2)
+    return round(link + ssd + speed + room - d.drops - (3.0 if d.failing else 0.0), 2)
 
 
 class DriveRoles:
@@ -182,6 +189,7 @@ class DriveRoles:
         pool: StoragePool | None = None,
         facts: Callable[[str], dict[str, Any]] | None = None,
         probe: Callable[[str], tuple[bool, float, str]] = read_check,
+        smart: Callable[[str, dict[str, Any] | None, float], dict[str, Any]] | None = None,
         heal_actions: Callable[[], list[dict[str, Any]]] = lambda: [],
         sys_root: Path = Path("/sys"),
         state_path: Path = STATE,
@@ -192,6 +200,7 @@ class DriveRoles:
         self.pool = pool or StoragePool(config)
         self.facts = facts or (lambda dev: disk_facts(helper.run, sys_root, dev))
         self.probe = probe
+        self.smart = smart or (lambda disk, last, now: health_check(disk, last, now))
         self.heal_actions = heal_actions
         self.state_path = state_path
         self.clock = clock
@@ -262,6 +271,8 @@ class DriveRoles:
                 mbps=float(seen.get("mbps") or 0.0),
                 drops=drops,
                 plugged_s=now - float(seen.get("since") or now),
+                health=str((seen.get("health") or {}).get("status") or ""),
+                health_why=str((seen.get("health") or {}).get("why") or ""),
             )
             out.append(d)
         present = {d.id for d in out}
@@ -308,6 +319,8 @@ class DriveRoles:
         """``T7 (USB 3 SSD, 1000 GB), the largest drive plugged in`` (or ``…, the best drive plugged in``)."""
         if self.config.storage.brain_prefer == "largest":
             return f"{d.name} ({d.kind()}, {d.size / 1e9:.0f} GB), the largest drive plugged in"
+        if self.config.storage.brain_prefer == "split":
+            return f"{d.name} ({d.kind()}), the fastest drive plugged in (document texts go on the largest)"
         return f"{d.name} ({d.kind()}), the best drive plugged in"
 
     def reasons(self, d: Drive, need: int) -> list[tuple[str, str]]:
@@ -320,6 +333,8 @@ class DriveRoles:
             out.append(("files", "it holds your files"))
         if d.tran == "usb" and d.speed and d.speed < 5000 and not st.brain_allow_usb2:
             out.append(("usb2", "on USB 2 (move it to a blue USB 3 port)"))
+        if d.failing:
+            out.append(("failing", f"failing ({d.health_why})"))
         if d.drops >= FLAKY_DROPS:
             out.append(("flaky", f"dropped out {d.drops} times this week"))
         if not d.home and d.free < need:
@@ -354,7 +369,7 @@ class DriveRoles:
     def _blocked(self, d: Drive, need: int, on_sd: bool) -> str:
         """Why ``d`` cannot take the brain off the SD card, every reason, in words for the feed."""
         out = []
-        first = {"usb2": 0, "files": 1, "small": 2, "flaky": 3, "foreign": 4}  # what only you can fix comes first
+        first = {"failing": 0, "usb2": 1, "files": 2, "small": 3, "flaky": 4, "foreign": 5}  # yours to fix first
         for kind, words in sorted(self.reasons(d, need), key=lambda r: first.get(r[0], 9)):
             if kind == "settling" or (kind == "files" and d.fstype in FOREIGN):
                 continue
@@ -389,6 +404,27 @@ class DriveRoles:
             d.drops += 1
             self._event(st, "read_failed", f"{d.name} failed its read check ({why})")
 
+    def _health(self, st: RolesState, drives: list[Drive]) -> None:
+        """One drive's SMART report a run, each drive once a day (``body.health``); a change is said once."""
+        now = self.clock()
+        due = [d for d in drives if d.disk and now - float((st.seen[d.id].get("health") or {}).get("at") or 0) >= 86400]
+        if not due:
+            return
+        d = sorted(due, key=lambda x: (not x.home, x.id))[0]
+        seen = st.seen[d.id]
+        last = seen.get("health") if isinstance(seen.get("health"), dict) else None
+        res = self.smart(d.disk, last, now)
+        seen["health"] = res
+        d.health, d.health_why = str(res.get("status") or ""), str(res.get("why") or "")
+        before = str((last or {}).get("status") or "")
+        if d.health != before and d.health in {"failing", "watch"}:
+            what = "is failing" if d.failing else "is worth watching"
+            todo = (": copy anything of yours off it and replace it; Polymath moves its brain and backups away"
+                    if d.failing else "")  # fmt: skip
+            self._event(st, "health", f"{d.name} {what} (SMART: {d.health_why}){todo}")
+        elif before in {"failing", "watch"} and d.health == "ok":
+            self._event(st, "health", f"{d.name} looks healthy again (SMART)")
+
     def _where(self, drives: list[Drive]) -> tuple[str, Drive | None]:
         """Where the brain is now: ("drive", its drive) | ("sd", None) | ("missing", None) | ("own", None)."""
         data = Path(self.config.paths.data_dir)
@@ -420,6 +456,7 @@ class DriveRoles:
         before = self._stable(st)
         drives = self.drives(st)
         self._measure(st, drives)
+        self._health(st, drives)
         out = self._decide(st, drives)
         if not out.get("moved"):
             self._care(st, drives)
@@ -469,22 +506,24 @@ class DriveRoles:
                 self._event(st, "blocked", decision)
             st.blocked = sig if not waiting else st.blocked
         elif where == "drive" and home is not None:
-            flaky = home.drops >= FLAKY_DROPS
+            flaky = home.drops >= FLAKY_DROPS or home.failing
             better = self._better(best, home) if best is not None else ""
             if (
                 best is not None
                 and now >= st.next_move
                 and (flaky or (better and self._night(now) and now - st.last_move >= MOVE_EVERY_S))
             ):
-                return self._move_between(st, drives, home, best, "it keeps dropping out" if flaky else better)
+                why = "it is failing" if home.failing else "it keeps dropping out"
+                return self._move_between(st, drives, home, best, why if flaky else better)
             if best is not None and better:
                 decision = (
                     f"the brain moves onto {best.name} tonight, after "
                     f"{(self.config.body.backup_hour + 1) % 24:02d}:00: {better}"
                 )
             elif flaky:
+                trouble = "is failing (SMART)" if home.failing else f"dropped out {home.drops} times this week"
                 decision = (
-                    f"the brain's drive {home.name} dropped out {home.drops} times this week; plug in "
+                    f"the brain's drive {home.name} {trouble}; plug in "
                     "another SSD of Polymath's own and the brain moves onto it"
                 )
             else:
@@ -513,7 +552,7 @@ class DriveRoles:
         for d in drives:
             d.role = "brain" if home is not None and d.id == home.id else "pending" if d.id in st.pending else "extra"
         other_disk = [d for d in drives if d.role == "extra" and (home is None or not d.disk or d.disk != home.disk)]
-        steady = [d for d in other_disk if d.drops < FLAKY_DROPS and d.room > 0 and d.room >= need]
+        steady = [d for d in other_disk if d.drops < FLAKY_DROPS and not d.failing and d.room > 0 and d.room >= need]
         pick = max(steady, key=lambda d: (-d.drops, d.room, d.id)) if steady else None
         if pick is not None:
             pick.role = "backup"
@@ -550,6 +589,9 @@ class DriveRoles:
             if d.fstype == "vfat" and not self._empty(d):
                 out.append(f"{d.name} is FAT32 and holds your files: no file over 4 GB fits on it, so backups and "
                            "big downloads go elsewhere (it is never reformatted while it holds files)")  # fmt: skip
+        for d in drives:
+            if d.failing:
+                out.append(f"{d.name} is failing (SMART: {d.health_why}): copy anything of yours off it and replace it")
         if home is not None and home.why_not.startswith("on USB 2"):
             out.append(f"the brain's drive {home.name} is on USB 2: move it to a blue USB 3 port")
         return out
@@ -571,6 +613,8 @@ class DriveRoles:
             "dedicated": d.dedicated,
             "speed": d.speed,
             "plugged_min": round(d.plugged_s / 60, 1),
+            "health": d.health,
+            "health_why": d.health_why,
         }
 
     # ---------------------------------------------------------------- moving the brain

@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import lzma
 import os
+import shutil
 import sqlite3
 import threading
 import time
 from collections import namedtuple
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -338,3 +340,117 @@ def test_a_disk_pause_holds_until_room_is_back_and_says_why(config, db):
     assert st.mode == "yield" and db.kv_get("body_reason") == "only 2.3 GB free on the data disk"
     state["free"] = 1.9  # below the resume point but above the pause point: light work, not a pause
     assert g.observe().mode == "yield"
+
+
+# ------------------------------------------------------------------ v0.12.0: every backup is test-restored
+def test_every_backup_is_test_restored_and_a_broken_one_is_replaced(config, db):
+    store = DocumentStore(db)
+    store.add(Document("wikipedia", "1", "Mars", "Mars is a planet. " * 40, "CC"))
+    with db.transaction():
+        ctx, _ = ctx_for(config, db, "body.backup")
+        first = mt.backup_job(ctx).result["path"]
+    counts = json.loads(db.scalar("SELECT counts FROM backups WHERE path = ?", (first,)))
+    assert counts["documents"] == 1 and counts["db_bytes"] > 0
+    ctx, ticks = ctx_for(config, db, "body.verify_backup")
+    out = mt.verify_backup_job(ctx)
+    assert out.result["ok"] == 1 and "restored and checked: quick_check ok; 1 documents" in out.result["detail"]
+    assert ticks and not list(config.paths.backup_dir.glob(".verify-*"))  # the scratch copy is gone
+    assert mt.verify_backup_job(ctx_for(config, db, "body.verify_backup")[0]).result == {"tested": 0}
+    # a backup that lost rows on the way (or whose file is damaged) fails, is deleted and taken again
+    time.sleep(1.05)
+    with db.transaction():
+        second = mt.backup_job(ctx_for(config, db, "body.backup")[0]).result["path"]
+    db.execute("UPDATE backups SET counts = json_set(counts, '$.documents', 2) WHERE path = ?", (second,))
+    ctx, _ = ctx_for(config, db, "body.verify_backup")
+    out = mt.verify_backup_job(ctx)
+    assert out.result["ok"] == 0 and "rows are missing: documents 1 instead of 2" in out.result["detail"]
+    assert not Path(second).exists() and Path(first).exists()
+    assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind = 'body.backup' AND key LIKE 'verify:rebackup:%'") == 1
+    issue = db.one("SELECT text, detail FROM events WHERE kind = 'issue' AND text LIKE '%failed its test restore%'")
+    assert "a new backup is being taken now" in issue["text"] and "backup_broken" in issue["detail"]
+    damaged = config.paths.backup_dir / "polymath-29990101-000000.sqlite3.xz"
+    damaged.write_bytes(b"not xz at all")
+    ok, why = mt.trial_restore(damaged, config.paths.backup_dir / ".verify-x", {})
+    assert not ok and "does not restore" in why and not (config.paths.backup_dir / ".verify-x").exists()
+
+
+def test_a_backup_is_not_tested_without_room_on_the_sd_card_or_when_gone(config, db, monkeypatch):
+    with db.transaction():
+        path = Path(mt.backup_job(ctx_for(config, db, "body.backup")[0]).result["path"])
+    usage = namedtuple("usage", "total used free")
+    real = shutil.disk_usage
+    monkeypatch.setattr("shutil.disk_usage", lambda _p: usage(100, 99, 1))
+    out = mt.verify_backup_job(ctx_for(config, db, "body.verify_backup")[0])
+    assert out.result["ok"] is None and "not tested: 0.0 GB free" in out.result["detail"]
+    monkeypatch.setattr("shutil.disk_usage", real)
+    db.execute("UPDATE backups SET verified = NULL")
+    monkeypatch.setattr("polymath.core.config.brain_on_sd_card", lambda cfg, **k: True)
+    out = mt.verify_backup_job(ctx_for(config, db, "body.verify_backup")[0])
+    assert "not tested on the SD card itself" in out.result["detail"]
+    db.execute("UPDATE backups SET verified = NULL")
+    path.unlink()
+    out = mt.verify_backup_job(ctx_for(config, db, "body.verify_backup")[0])
+    assert out.result["ok"] is None and "gone before it was tested" in out.result["detail"]
+    agent = SimpleNamespace(config=config, scheduler=Scheduler(db))
+    before = db.scalar("SELECT COUNT(*) FROM jobs WHERE kind = 'body.verify_backup'")
+    mt.planner(agent)
+    assert db.scalar("SELECT COUNT(*) FROM jobs WHERE kind = 'body.verify_backup'") == before + 1  # daily
+
+
+# ------------------------------------------------------------------ v0.12.0: texts kept as pointers, read again
+def test_articles_holding_up_facts_go_last_as_pointers_and_come_back_whole(config, db):
+    from polymath.memory import inventory
+
+    store = DocumentStore(db)
+    text = TextIndex(db, store)
+    g = KnowledgeGraph(db)
+    body = "The quokka lives on Rottnest Island. " * 60
+    did, _ = store.add(Document("wikipedia", "Quokka", "Quokka", body, "CC BY-SA"))
+    text.index(did, "Quokka", body)
+    e, f = g.upsert_entity("Q1", "Quokka"), g.upsert_entity("Q2", "Rottnest Island")
+    g.add_triple(e, g.predicate("P1"), o=f, kind="pattern", source="text", doc_id=did)  # it holds up a fact
+    config.body.disk_budget_gb = 1e-9
+    res = mt.evict_job(ctx_for(config, db, "body.evict")[0]).result
+    assert res["documents_evicted"] == 0 and res["kept_as_pointers"] == 1
+    meta = json.loads(db.scalar("SELECT meta FROM documents WHERE id = ?", (did,)))
+    assert meta["refetch"] == "wikipedia" and not text.search("quokka")
+    assert db.scalar("SELECT COUNT(*) FROM provenance WHERE doc_id = ?", (did,)) == 1  # the fact stays
+    # room again (the brain moved onto a big drive): it joins the relearning queue, the most facts first
+    config.body.disk_budget_gb = 1e6
+    config.body.disk_min_free_gb = 0.000001
+    monkeypatch_free = inventory.REFILL_ROOM_GB
+    inventory.REFILL_ROOM_GB = 0.000001
+    try:
+        assert inventory.refill(db, config, time.time()) == 1
+        assert inventory.refill(db, config, time.time()) == 0  # once
+    finally:
+        inventory.REFILL_ROOM_GB = monkeypatch_free
+    row = db.one("SELECT volume_id, how, priority, state FROM relearn WHERE doc_id = ?", (did,))
+    assert row["volume_id"] == "evicted" and row["how"] == "wikipedia" and row["priority"] >= 10
+    # read again (wikipedia.titles stores the same article): its text and passages are back
+    _id, status = store.add(Document("wikipedia", "Quokka", "Quokka", body, "CC BY-SA"))
+    assert status == "updated" and some(store.get(did)).text == body and text.search("quokka")
+    assert "refetch" not in json.loads(db.scalar("SELECT meta FROM documents WHERE id = ?", (did,)))
+
+
+def test_no_room_no_refill(config, db, monkeypatch):
+    from polymath.memory import inventory
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr("shutil.disk_usage", lambda _p: usage(100, 99, 1))
+    assert not inventory.room_to_refill(config) and inventory.refill(db, config, time.time()) == 0
+    monkeypatch.setattr("shutil.disk_usage", lambda _p: (_ for _ in ()).throw(OSError("gone")))
+    assert not inventory.room_to_refill(config)
+
+
+def test_backup_list_shows_each_test_restore(config, db, capsys):
+    import argparse
+
+    from polymath.interface import cli
+
+    with db.transaction():
+        path = mt.backup_job(ctx_for(config, db, "body.backup")[0]).result["path"]
+    mt.verify_backup_job(ctx_for(config, db, "body.verify_backup")[0])
+    assert cli.cmd_backup(config, argparse.Namespace(list=True)) == 0
+    row = json.loads(capsys.readouterr().out.splitlines()[0])
+    assert row["path"] == path and row["tested"] == "ok" and "quick_check ok" in row["test"]

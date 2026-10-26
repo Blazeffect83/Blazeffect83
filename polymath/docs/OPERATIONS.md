@@ -640,6 +640,33 @@ alone. A drive drive care reformatted takes the brain right after (it already se
 quarter of that size, the fastest. Later it moves at night onto a drive a quarter larger (or, about as large, a class
 faster), never onto a much smaller one. `[storage] brain_prefer = "fastest"` goes by speed first, as before.
 
+### <a id="v012"></a>Safer storage, safe updates, what needs you (v0.12.0)
+
+- **`polymath needs`**: what only you can do (move a drive to a blue port, replace a failing drive, add a powered
+  hub, send a log after a rolled-back update). The same list tops `polymath doctor`, is on the dashboard
+  (`/api/needs`), and the feed's NOW line counts it. "nothing needs you" means Polymath has it in hand.
+- **Backups are test-restored**: an hour after the nightly backup, the newest one is restored beside itself and
+  checked (quick_check, and the rows in its main tables as when it was taken). A broken one is deleted and taken
+  again; you only hear about it if it happens again. Not tested on the SD card itself (it would write the whole brain
+  to it twice). `polymath backup list` shows each one's result.
+- **The hourly mirror**: the brain's database is copied to the backup drive's `polymath-brain/backups/mirror/`
+  every hour, writing only the parts that changed (a few MB an hour, not the whole brain). A wiped brain drive is
+  rebuilt from it when it is newer than the nightly backup. `[body] mirror_every_min` (60; 0 switches it off).
+- **Drive health (SMART)**: each drive's own report, once a day (`sudo smartctl -a /dev/sdX`; `-d sat` through a USB
+  enclosure). A failing drive never holds the brain or the backups, and the brain moves off it at once; "worth
+  watching" drives are said once. `install.sh` installs smartmontools; without it health shows as unknown.
+- **Texts as pointers**: when room is short, the very last thing to go are Wikipedia articles that facts rest on:
+  only their title stays. Once there is room again (a big drive), they and other evicted pages with an address are
+  read again, the ones most facts rest on first, and come back whole.
+- **Split brain**: `[storage] brain_prefer = "split"`: the brain (database and index) on the fastest drive, document
+  texts moved to the largest almost at once. The default stays `"largest"`.
+- **Safe updates**: `install.sh` keeps the version that ran before (`/opt/polymath/previous`). Ten minutes after a new
+  version starts, `scripts/update-check.sh` checks it: if the agent does not report in **and** it failed or
+  restarted 3 or more times, the previous version goes back by itself (the failed code stays in
+  `/opt/polymath/src.failed`) and the inbox says so. An agent that is only waiting (for its drive) is left alone.
+- **Heat**: it learns how much each kind of job warms the CPU. Within 6 °C of the 75 °C throttle point (10 °C in the
+  day's four warmest hours) the hottest third waits while cooler work goes on.
+
 **Paused, "cooling down", at 50 °C?** That was a disk pause with the wrong label (before v0.11.4): the thermal pause
 is at 82 °C. With the brain on the SD card outside SD-card mode (after `keep-sd-brain`) the card was held to a
 drive's 10 GB reserve. Now it keeps the card's 3 GB (`sd_keep_free_gb`), a disk pause holds until 2.2 GB are free
@@ -855,6 +882,9 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | a paired browser is sent back to pairing | its key was removed (`polymath access log` says when), cookies were cleared, or 400 days passed: pair again |
 | a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
 | the feed: `DRIVES  the brain stays on the SD card: X cannot hold it (on USB 2 …)` | move X to a blue USB 3 port (USB 3 cable, no USB 2 hub). A "formatted for Windows/macOS" reason with none of your files on it fixes itself: it is reformatted for Linux after 10 minutes ([§8](#wiped)) |
+| `polymath needs` lists something | do it: it is the short list of what only you can do (a port, a cable, a drive to replace, a log to send) ([§v0.12](#v012)) |
+| the inbox: `the update to v… kept failing …, so v… was put back by itself` | the new version crashed on the Pi; the old one runs again. Send `journalctl -u polymath -n 80 --since -1h` |
+| `… is failing (SMART: …)` | copy anything of yours off that drive and replace it; the brain and backups have already left it |
 | `polymath storage roles` says a drive is `not the brain: …` | the reason it gives: on USB 2 (move it to a blue port), holds your files or is formatted for Windows/macOS (only a Polymath drive holds the brain), too small, still settling (10 min), or dropped out this week. It is used for backups or extra room meanwhile |
 | doctor: `the drives ask for … mA, more than the 1200 mA a Pi 4 gives` | too many bus-powered drives for the Pi's ports: a powered USB 3 hub, or drives with their own power supply; otherwise they drop out |
 | `SSD: a drive is plugged in (/dev/sda), but it does not hold Polymath's brain` | the brain's SSD was reformatted (its brain is gone) or another drive is plugged in. If you reformatted it: `sudo polymath storage keep-sd-brain` (the SD card's brain becomes the brain and moves onto the SSD by itself); v0.11.2 also does this by itself when it recognises the drive ([§8](#wiped)) |

@@ -725,6 +725,10 @@ def make_handler(data: DashboardData, limiter: RateLimiter, gate: Gate | None = 
                     return self._json(200, data.agents())
                 if path == "/api/digest":
                     return self._json(200, data.digest())
+                if path == "/api/needs":
+                    from polymath.core.needs import needs
+
+                    return self._json(200, {"needs": needs(data.db(), Path(data.config.paths.run_dir))})
                 if path == "/api/insights":
                     return self._json(200, data.insights())
                 if path == "/api/map":

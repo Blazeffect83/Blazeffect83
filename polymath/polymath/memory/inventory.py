@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,9 @@ PER_RUN = 300  # documents sent to be relearned per run
 PER_DAY = 3000  # and at most this many a day (it keeps learning new things too)
 WIKI_BATCH = 100  # titles per wikipedia.titles job (it reads at most 200)
 QUEUED_STALE_S = 2 * 86400.0  # queued and still lost after this: it comes back later (with its source)
+EVICTED = "evicted"  # the relearning queue's "drive" for texts evicted for room (v0.12.0)
+REFILL_BACKLOG = 1000  # evicted texts waiting to be read again: more are added once fewer wait
+REFILL_ROOM_GB = 10.0  # room (on the brain's disk or the drives) before evicted texts are read again
 WEB_SOURCES = ("web", "feed")
 
 
@@ -240,7 +244,9 @@ def _queue(ctx: JobContext, now: float) -> dict[str, int]:
                 {
                     "titles": [t for _id, t in batch],
                     "lang": lang,
-                    "about": f"relearning what was on {names.get(vol, vol[:8])}",
+                    "about": "reading again what was evicted for room"
+                    if vol == EVICTED
+                    else f"relearning what was on {names.get(vol, vol[:8])}",
                 },
                 key=f"relearn:wiki:{batch[0][0]}:{len(batch)}:{int(now)}",
                 priority=2.6,
@@ -256,6 +262,40 @@ def _queue(ctx: JobContext, now: float) -> dict[str, int]:
         q = ",".join("?" * len(sent))
         db.execute(f"UPDATE relearn SET state = 'queued', queued = ? WHERE doc_id IN ({q})", (now, *sent))
     return {"wikipedia": sum(len(v) for v in by_lang.values()), "web": len(web) if crawler is not None else 0}
+
+
+def room_to_refill(cfg: Any) -> bool:
+    """Whether there is room to read evicted texts again: the brain's disk well above its reserve, or a drive with
+    room for document bodies (they spill there)."""
+    try:
+        free_gb = shutil.disk_usage(cfg.paths.data_dir).free / 1e9
+    except OSError:
+        return False
+    if free_gb >= max(3 * cfg.body.disk_min_free_gb, REFILL_ROOM_GB):
+        return True
+    pool = storage_pool.for_config(cfg)
+    return pool is not None and pool.choose(int(REFILL_ROOM_GB * 1e9)) is not None
+
+
+def refill(db: Any, cfg: Any, now: float) -> int:
+    """Texts evicted for room (Wikipedia articles, web pages with an address) join the relearning queue once there is
+    room again, the ones most facts rest on first. Returns how many were added."""
+    waiting = int(db.scalar("SELECT COUNT(*) FROM relearn WHERE volume_id = ? AND state IN ('waiting', 'queued')",
+                            (EVICTED,), 0) or 0)  # fmt: skip
+    if waiting >= REFILL_BACKLOG or not room_to_refill(cfg):
+        return 0
+    web = ",".join(f"'{s}'" for s in WEB_SOURCES)
+    cur = db.execute(
+        "INSERT OR REPLACE INTO relearn(doc_id, volume_id, priority, how, state, added) "
+        "SELECT d.id, ?, 10.0 * (SELECT COUNT(*) FROM provenance p WHERE p.doc_id = d.id) + "
+        "MIN(d.nchars, 200000) / 100000.0, CASE WHEN d.source = 'wikipedia' THEN 'wikipedia' ELSE 'web' END, "
+        "'waiting', ? FROM documents d WHERE d.codec = 'evicted' AND d.state != 'duplicate' AND "
+        f"((d.source = 'wikipedia' AND COALESCE(d.title, '') != '') OR (d.source IN ({web}) AND d.url LIKE 'http%')) "
+        "AND NOT EXISTS (SELECT 1 FROM relearn r WHERE r.doc_id = d.id AND r.state IN ('waiting', 'queued')) "
+        "ORDER BY (SELECT COUNT(*) FROM provenance p WHERE p.doc_id = d.id) DESC, d.id LIMIT ?",
+        (EVICTED, now, REFILL_BACKLOG - waiting),
+    )
+    return int(cur.rowcount or 0)
 
 
 def recover_job(ctx: JobContext) -> JobOutcome:
@@ -331,12 +371,14 @@ def recover_job(ctx: JobContext) -> JobOutcome:
         ):
             ctx.scheduler.enqueue("body.backup", {}, key=f"relearn:backup:{vid}:{int(now)}", priority=3.0)
         ctx.scheduler.enqueue("sources.plan", {}, key=f"relearn:plan:{vid}:{int(now)}", priority=2.0)
-    # what has been read again (a stored body replaced the lost one), and what waits too long
+    # what has been read again (a stored body replaced the lost or evicted one), and what waits too long
     db.execute(
         "UPDATE relearn SET state = 'done', done = ? WHERE state IN ('waiting', 'queued') AND doc_id IN "
-        "(SELECT id FROM documents WHERE codec != 'spilled' OR json_extract(meta, '$.lost') IS NULL)",
+        "(SELECT id FROM documents WHERE codec NOT IN ('spilled', 'evicted') "
+        "OR (codec = 'spilled' AND json_extract(meta, '$.lost') IS NULL))",
         (now,),
     )
+    result["refill"] = refill(db, cfg, now)
     db.execute(
         "UPDATE relearn SET how = 'later', state = 'waiting' WHERE state = 'queued' AND queued < ?",
         (now - QUEUED_STALE_S,),

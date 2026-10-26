@@ -739,7 +739,23 @@ class SSDWatch:
             os.replace(data / MOVED_FILE, data / f"{MOVED_FILE}.replaced-{stamp}")
         how = ""
         db = data / "db" / "polymath.sqlite3"
-        for backup in self.backups_on_drives():
+        from polymath.body.mirror import mirrors_on, restore_mirror
+
+        newest_backup = max((b.stat().st_mtime for b in self.backups_on_drives() if b.exists()), default=0.0)
+        for at, out in mirrors_on(Path(self.home.storage.mount_root)):
+            if at <= newest_backup:
+                break
+            try:
+                db.parent.mkdir(parents=True, exist_ok=True)
+                restore_mirror(out, db)
+            except (OSError, RuntimeError, sqlite3.Error) as exc:
+                self._event(st, "backup_damaged", f"the mirror on {out.parent.parent.parent.name} could not be "
+                            f"restored ({exc})")  # fmt: skip
+                continue
+            how = (f"from the hourly mirror on {out.parent.parent.parent.name} (what the standby brain learned "
+                   "since is added by itself)")  # fmt: skip
+            break
+        for backup in [] if how else self.backups_on_drives():
             try:
                 db.parent.mkdir(parents=True, exist_ok=True)
                 restore(backup, db)

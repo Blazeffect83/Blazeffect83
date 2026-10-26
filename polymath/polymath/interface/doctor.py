@@ -145,6 +145,8 @@ def run_checks(
     checks.append(brain_check(data))
     # the agent, through its own snapshot (needs nothing but /run)
     st, age = snapshot.read_status(snapshot.path_for(config))
+    for item in (st or {}).get("needs") or []:  # what only you can do (core.needs), first
+        checks.append(Check("needs you", WARN, str(item.get("what") or ""), f"(from {item.get('source', '?')})"))
     if config.storage.sd_only:  # SD-card mode (core.sdcard): chosen, but the SSD is out of use until it is switched off
         checks.append(sd_card_check(config, st))
 

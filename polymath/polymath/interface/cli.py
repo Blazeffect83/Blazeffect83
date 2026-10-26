@@ -1110,6 +1110,29 @@ def cmd_doctor(config: Config, args: argparse.Namespace) -> int:
     return 1 if any(c.level == doctor.BAD for c in checks) else 0
 
 
+def cmd_needs(config: Config, args: argparse.Namespace) -> int:
+    """What only you can do (``core.needs``): from the agent's live snapshot, else from the brain itself."""
+    from pathlib import Path
+
+    from polymath.core.needs import lines, needs
+    from polymath.interface import snapshot
+
+    st, _age = snapshot.read_status(snapshot.path_for(config))
+    items = (st or {}).get("needs")
+    if not isinstance(items, list):
+        try:
+            db = Database(config.paths.db_path, readonly=True)
+        except Exception:  # not readable as you, or not there: what the drives say still counts
+            items = needs(None, Path(config.paths.run_dir))
+        else:
+            try:
+                items = needs(db, Path(config.paths.run_dir))
+            finally:
+                db.close()
+    print(json.dumps(items, indent=2) if args.json else "\n".join(lines(items)))
+    return 1 if items else 0
+
+
 def _local_dashboard(config: Config, method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Ask the dashboard's loopback listener (the Pi itself needs no sign-in). Raises RuntimeError with a hint."""
     import urllib.error
@@ -1246,9 +1269,20 @@ def cmd_backup(config: Config, args: argparse.Namespace) -> int:
     """Take a verified backup now (or list the existing ones)."""
     from polymath.body import maintenance
 
-    if args.list:
-        for b in maintenance.backups(config.paths.backup_dir):
-            print(json.dumps({"path": str(b), "bytes": b.stat().st_size}))
+    if args.list:  # on the main disk and the drives, with each one's test restore (body.verify_backup)
+        from polymath.memory.pool import StoragePool
+
+        tested: dict[str, Any] = {}
+        with contextlib.suppress(Exception):
+            db = Database(config.paths.db_path, readonly=True)
+            try:
+                for r in db.query("SELECT path, verify_ok, verify_detail FROM backups WHERE path != ''"):
+                    tested[str(r["path"])] = {"tested": {1: "ok", 0: "broken"}.get(r["verify_ok"], "not tested"),
+                                              "test": r["verify_detail"] or ""}  # fmt: skip
+            finally:
+                db.close()
+        for b in maintenance.backups(StoragePool(config).backup_dirs()):
+            print(json.dumps({"path": str(b), "bytes": b.stat().st_size, **tested.get(str(b), {})}))
         return 0
     if agent_running(config):
         path = inbox.submit(
@@ -1482,6 +1516,10 @@ def build_parser() -> argparse.ArgumentParser:
     dr.add_argument("--url", help="dashboard URL (default: this machine's)")
     dr.add_argument("--json", action="store_true")
     dr.set_defaults(func=cmd_doctor)
+
+    nd = sub.add_parser("needs", help="what only you can do (a plug, a cable, a decision); Polymath does the rest")
+    nd.add_argument("--json", action="store_true")
+    nd.set_defaults(func=cmd_needs)
 
     ct = sub.add_parser("caretaker", help="Orin the caretaker: the situation, its incidents, known problems, fixes")
     ct.add_argument("op", nargs="?", default="brief", choices=["brief", "known", "show", "history", "incidents"])

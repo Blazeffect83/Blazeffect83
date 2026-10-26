@@ -6,6 +6,12 @@ steps), ``PRAGMA quick_check`` verifies the copy, it is compressed with lzma
 (``.sqlite3.xz``), fsynced, and only the newest ``body.backup_keep`` (7) are kept.
 A backup is skipped — loudly — when the disk could not hold it.
 
+**Test restore** (``body.verify_backup``, daily an hour after the backup, v0.12.0): the newest untested backup is
+decompressed next to itself into a scratch file, ``PRAGMA quick_check`` runs on it and the rows in its main tables
+must match what the backup recorded when it was taken. A broken one is deleted, reported (``body/backup_broken``)
+and a new backup is taken at once. Not on the SD card itself (it would write the whole brain to it again), and not
+without the room for it.
+
 **Spill** (``body.spill``, requested by the guard once the main disk passes
 ``storage.spill_at`` of its budget): moves document bodies — least valuable first,
 the same order as eviction — to plugged-in drives (:mod:`polymath.memory.pool`).
@@ -26,6 +32,9 @@ disk has room again:
    before books, papers and encyclopedia articles, never one that is the
    evidence for a fact. Metadata, license and the facts learned stay; the
    passages leave the full-text index.
+6. last (v0.12.0): Wikipedia articles that *are* evidence for facts, oldest first: only a pointer stays (the
+   title; ``meta.refetch``), and they are read again by title once there is room
+   (``memory.inventory``: the relearning queue, drive ``evicted``).
 
 Freed SQLite pages are reused by later writes, so the database stops growing
 (the guard's size accounting excludes free pages).
@@ -55,7 +64,8 @@ EVICTION_ORDER = ("feed", "web", "stackexchange", "gutenberg", "pubmed", "openal
 EVICT_BATCH = 200
 RAW_GRACE = 7 * 86400.0
 SPILL_BATCH = 200
-SPILL_DOWN_TO = 0.6  # a spill run moves bodies until the main disk is at this share of its budget
+COUNT_TABLES = ("documents", "entities", "triples", "provenance")  # recorded with each backup, checked on restore
+VERIFY_SPARE = 1e9  # a test restore leaves this much free on the backup's drive
 
 
 # ---------------------------------------------------------------- backups
@@ -118,6 +128,7 @@ def backup_job(ctx: JobContext) -> JobOutcome:
         try:
             reader.backup(dst, pages=4096, progress=lambda *_a: ctx.tick())
             check = dst.execute("PRAGMA quick_check").fetchone()[0]
+            counts = table_counts(dst) | {"db_bytes": tmp.stat().st_size}
         finally:
             dst.close()
             reader.close()
@@ -136,11 +147,102 @@ def backup_job(ctx: JobContext) -> JobOutcome:
     removed = rotate(backup_dirs(cfg), cfg.body.backup_keep)
     detail = f"quick_check ok; {db_size / 1e6:.1f} MB → {size / 1e6:.1f} MB in {time.monotonic() - t0:.1f} s"
     ctx.db.execute(
-        "INSERT INTO backups(created, path, bytes, ok, detail) VALUES(?,?,?,?,?)",
-        (time.time(), str(final), size, 1, detail),
+        "INSERT INTO backups(created, path, bytes, ok, detail, counts) VALUES(?,?,?,?,?,?)",
+        (time.time(), str(final), size, 1, detail, json.dumps(counts)),
     )
     ctx.db.execute("DELETE FROM backups WHERE created < ?", (time.time() - 90 * 86400,))
     return JobOutcome(done=True, value=0.1, result={"ok": True, "path": str(final), "bytes": size, "removed": removed})
+
+
+def table_counts(con: sqlite3.Connection) -> dict[str, int]:
+    """Rows in the main tables (a table this database does not have is left out)."""
+    out = {}
+    for table in COUNT_TABLES:
+        try:
+            out[table] = int(con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        except sqlite3.DatabaseError:
+            continue
+    return out
+
+
+def _same_disk(a: Path, b: Path) -> bool:
+    try:
+        return os.stat(a).st_dev == os.stat(b).st_dev
+    except OSError:
+        return False
+
+
+def trial_restore(backup: Path, scratch: Path, counts: dict[str, Any], tick: Any = lambda: None) -> tuple[bool, str]:
+    """Decompress ``backup`` into ``scratch``, check it, and compare its rows with ``counts`` (as taken).
+    Returns (ok, what was found). ``scratch`` is always removed."""
+    try:
+        with lzma.open(backup, "rb") as src, scratch.open("wb") as dst:
+            while chunk := src.read(8 << 20):
+                dst.write(chunk)
+                tick()
+        con = sqlite3.connect(f"file:{scratch}?mode=ro&immutable=1", uri=True)  # no -wal/-shm beside it
+        try:
+            check = str(con.execute("PRAGMA quick_check").fetchone()[0])
+            got = table_counts(con)
+        finally:
+            con.close()
+    except (lzma.LZMAError, EOFError, OSError, sqlite3.DatabaseError) as exc:
+        return False, f"it does not restore: {exc}"
+    finally:
+        for leftover in (scratch, Path(f"{scratch}-wal"), Path(f"{scratch}-shm")):
+            leftover.unlink(missing_ok=True)
+    if check != "ok":
+        return False, f"restored, but quick_check says: {check[:200]}"
+    wrong = [f"{t} {got.get(t)} instead of {n}" for t, n in counts.items() if t in COUNT_TABLES and got.get(t) != n]
+    if wrong:
+        return False, "restored, but rows are missing: " + ", ".join(wrong)
+    shown = ", ".join(f"{got[t]:,} {t}" for t in COUNT_TABLES if t in got)
+    return True, f"restored and checked: quick_check ok; {shown}" + (" as when taken" if counts else "")
+
+
+def verify_backup_job(ctx: JobContext) -> JobOutcome:
+    """Job ``body.verify_backup``: prove the newest untested backup restores (see the module's docstring)."""
+    from polymath.core import issues
+    from polymath.core.config import brain_on_sd_card
+
+    cfg, db, now = ctx.config, ctx.db, time.time()
+    row = db.one(
+        "SELECT id, path, bytes, counts FROM backups WHERE ok = 1 AND path != '' AND verified IS NULL "
+        "ORDER BY created DESC LIMIT 1"
+    )
+    if row is None:
+        return JobOutcome(done=True, result={"tested": 0})
+    path = Path(str(row["path"]))
+    counts: dict[str, Any] = json.loads(row["counts"]) if row["counts"] else {}
+
+    def mark(ok: int | None, detail: str) -> JobOutcome:
+        db.execute(
+            "UPDATE backups SET verified = ?, verify_ok = ?, verify_detail = ? WHERE id = ?",
+            (now, ok, detail, row["id"]),
+        )
+        db.execute("UPDATE backups SET verified = ?, verify_detail = 'a newer one was tested' "
+                   "WHERE verified IS NULL AND ok = 1 AND id < ?", (now, row["id"]))  # fmt: skip
+        return JobOutcome(done=True, value=0.05 if ok else 0.0, result={"tested": int(ok is not None), "ok": ok,
+                                                                        "detail": detail})  # fmt: skip
+
+    if not path.is_file():
+        return mark(None, "gone before it was tested (rotated or its drive is unplugged)")
+    if brain_on_sd_card(cfg) and _same_disk(path.parent, cfg.paths.data_dir):
+        return mark(None, "not tested on the SD card itself: it would write the whole brain to the card again")
+    need = float(counts.get("db_bytes") or 8 * int(row["bytes"])) * 1.05 + VERIFY_SPARE
+    free = shutil.disk_usage(path.parent).free
+    if free < need:
+        return mark(None, f"not tested: {free / 1e9:.1f} GB free next to it, it needs {need / 1e9:.1f} GB")
+    t0 = time.monotonic()
+    ok, detail = trial_restore(path, path.parent / f".verify-{path.stem}", counts, ctx.tick)
+    detail += f" ({time.monotonic() - t0:.0f} s)"
+    if ok:
+        return mark(1, detail)
+    path.unlink(missing_ok=True)  # useless, and the rebuild must never pick it
+    issues.report(db, "body", "backup_broken", f"the backup {path.name} failed its test restore: {detail}. It was "
+                  "deleted and a new backup is being taken now", severity="bad", now=now)  # fmt: skip
+    ctx.scheduler.enqueue("body.backup", {}, key=f"verify:rebackup:{row['id']}", priority=3.0)
+    return mark(0, detail)
 
 
 def restore(backup: Path, db_path: Path) -> Path:
@@ -261,6 +363,36 @@ def evict_job(ctx: JobContext) -> JobOutcome:
                     break
             ctx.tick()
     steps["documents_evicted"] = evicted
+    pointers = 0
+    if freed < need:  # last: articles that hold up facts, but can be read again by title when there is room
+        store = DocumentStore(ctx.db)
+        text = TextIndex(ctx.db, store)
+        first = True
+        while freed < need and (first or not ctx.should_stop()):
+            first = False
+            rows = ctx.db.query(
+                "SELECT id, title, LENGTH(body) AS b FROM documents WHERE codec NOT IN ('evicted','spilled') "
+                "AND state != 'duplicate' AND source = 'wikipedia' AND COALESCE(title, '') != '' "
+                "ORDER BY fetched LIMIT ?",
+                (EVICT_BATCH,),
+            )
+            if not rows:
+                break
+            for r in rows:
+                doc = store.get(int(r["id"]))
+                if doc is not None and doc.text:
+                    text.unindex(doc.id, doc.title, doc.text)
+                ctx.db.execute(
+                    "UPDATE documents SET body=NULL, codec='evicted', "
+                    "meta=json_set(meta, '$.evicted', ?, '$.refetch', 'wikipedia') WHERE id=?",
+                    (time.time(), r["id"]),
+                )
+                freed += float(r["b"] or 0)
+                pointers += 1
+                if freed >= need:
+                    break
+            ctx.tick()
+    steps["kept_as_pointers"] = pointers
     result = {"need_mb": round(need / 1e6, 1), "freed_mb": round(freed / 1e6, 1), "freed_bytes": int(freed), **steps}
     if freed < need:
         log.warning("eviction could not free enough space", extra=result)
@@ -307,12 +439,12 @@ def spill_bodies(ctx: JobContext, need: float) -> tuple[int, int]:
 
 
 def spill_job(ctx: JobContext) -> JobOutcome:
-    """Job ``body.spill``: bring the main disk down to ``SPILL_DOWN_TO`` of its budget by moving bodies to drives."""
+    """Job ``body.spill``: bring the main disk down to its mark (``pool.spill_marks``) by moving bodies to drives."""
     from polymath.body.guard import data_bytes
 
     cfg = ctx.config
     data = data_bytes(ctx.db, cfg.paths.data_dir)
-    need = data - SPILL_DOWN_TO * cfg.body.disk_budget_gb * 1e9
+    need = data - storage_pool.spill_marks(cfg)[1] * cfg.body.disk_budget_gb * 1e9
     if need <= 0:
         return JobOutcome(done=True, result={"moved": 0, "data_gb": round(data / 1e9, 2)})
     moved, moved_bytes = spill_bodies(ctx, need)
@@ -415,3 +547,6 @@ def planner(agent: Any) -> None:
         agent.scheduler.ensure_recurring("body.backup", backup_every_s(agent.config), priority=3.0,
                                          phase=local_phase(hour))  # fmt: skip
     agent.scheduler.ensure_recurring("body.housekeeping", 86400, priority=3.0, phase=local_phase((hour + 2) % 24))
+    if not getattr(agent.config, "standby", False):
+        agent.scheduler.ensure_recurring("body.verify_backup", 86400, priority=2.0,
+                                         phase=local_phase((hour + 1) % 24))  # fmt: skip

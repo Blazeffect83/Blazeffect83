@@ -24,6 +24,7 @@ disk_budget_gb = 200.0              # total bytes Polymath may use under data_di
 disk_min_free_gb = 10.0
 backup_keep = 7
 backup_hour = 3
+mirror_every_min = 60.0            # the database mirrored onto the backup drive this often (0: off)
 
 [senses]
 user_agent = "PolymathBot/0.1 (+https://github.com/Blazeffect83; self-hosted learning agent)"
@@ -123,6 +124,6 @@ sd_auto_fallback = true
 auto_roles = true
 brain_settle_min = 10.0             # a drive must stay plugged in this long before the brain moves onto it
 brain_allow_usb2 = false            # USB 2 drives are used for backups and extra room, never the brain
-brain_prefer = "largest"            # the brain goes on the largest drive that may hold it ("fastest": by speed first)
+brain_prefer = "largest"            # the brain on the largest drive; "fastest"; "split": the brain on the fastest, texts on the largest
 relearn_after_h = 2.0               # a drive gone this long counts as lost: what it held is relearned, most important first
 care_format_empty = true             # a Windows/macOS drive with none of YOUR files is reformatted for Linux; never one with files

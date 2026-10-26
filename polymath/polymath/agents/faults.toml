@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.11.4"
+updated_for = "0.12.0"
 updated = "2026-10-26"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -43,6 +43,9 @@ waiting_on = [
     "install v0.11.3: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh",
     "2026-10-26: Christian: 'It keeps pausing for cooling at 50c'. Not heat (the pause is at 82 °C): after keep-sd-brain ended SD-card mode the SD card was held to the drive's 10 GB reserve (pause below 5 GB) with ~2 GB free, eviction freed a little, it resumed, paused again, and the feed labelled every pause 'cooling down' because the reason had not been recorded yet (fixed in 0.11.4)",
     "2026-10-26: Christian asked for the brain to go on the largest storage device (0.11.4: storage.brain_prefer = largest)",
+    "2026-10-26: Christian approved all eight storage and safety ideas (0.12.0): split brain, SMART drive health, test-restored backups, update rollback, the needs-you list, the hourly mirror, texts kept as pointers and read again, heat-aware scheduling",
+    "2026-10-26: Christian sent his own list for the next big update (0.13.0): a dream cycle, agents that invent tools, a scientist agent, a breeding society, a red team, distilled offline knowledge, explainable why, a curiosity engine, staying up offline",
+    "install v0.12.0: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (it also installs smartmontools; from now on a new version that keeps failing is rolled back by itself after 10 minutes)",
     "then Christian moves the SSD to a blue USB 3 port (USB 3 cable, no USB 2 hub); drive care reformats it to ext4 after 10 minutes and the brain moves onto it right after (polymath storage roles shows brain on it, doctor clean)",
 ]
 on_hold = ["sd-card-mode"]  # an expected state, not a problem to escalate: the SSD watch (v0.10.0) ends it by itself
@@ -55,6 +58,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.12.0"
+date = "2026-10-26"
+changes = """Eight storage and safety features. (1) SPLIT BRAIN: storage.brain_prefer = "split" puts the brain on the fastest drive and moves document texts to the largest almost at once (pool.spill_marks: spill at 10 % of the budget, down to 5 %). (2) DRIVE HEALTH (body/health.py, roles._health): each drive's SMART report once a day (smartctl -j -a, through a USB bridge with -d sat; install.sh installs smartmontools when apt works); failing = the drive says so, an NVMe critical warning or no spare blocks, or pending/unreadable/reported-error/media-error counts grew, or 10+ sectors remapped in a week; a failing drive never holds the brain or the backups and the brain leaves it at once (as for a drive that keeps dropping out); watch = remapped sectors not growing, 90 % write life used, 60 °C; said once (storage/roles:health:<time>). (3) TEST-RESTORED BACKUPS (body.verify_backup, daily an hour after the backup): the newest backup is decompressed beside itself, quick_check, and its rows must match those recorded when it was taken (backups.counts); a broken one is deleted, reported (body/backup_broken) and a new backup taken; not on the SD card itself, not without room. (4) SAFE UPDATES: install.sh keeps the previous version (/opt/polymath/previous: code, build.json, the venv's polymath package) and schedules scripts/update-check.sh 10 minutes after a new version starts; if the agent does not report in AND it failed or restarted 3+ times since the install, the previous version is put back, both services restart, and the agent reports update/rolled_back (the failed code stays in /opt/polymath/src.failed); an agent that only waits (for its drive) is left alone. (5) THE NEEDS-YOU LIST (core/needs.py): what only Christian can do, from the drive roles (a drive on USB 2 while the brain is on the SD card, a failing drive, too little USB power, backups with nowhere else), Orin's escalated incidents and the last two days' rolled-back/backup-broken/mirror-failed issues; polymath needs, the top of doctor, /api/needs, and a count in the feed's NOW line. (6) THE HOURLY MIRROR (body/mirror.py, between job slices): the database copied to the backup drive (backups/mirror/) chunk by chunk, only changed 1 MiB chunks written; consistent because the log is truncated first and a read transaction holds an empty-log snapshot while a thread reads the file; marked incomplete until flushed; never on the database's own disk, not in SD-card mode or on standby; body.mirror_every_min (60, 0 off); the rebuild of a wiped brain uses it when newer than the newest backup; failures report body/mirror_failed once a day. (7) TEXTS AS POINTERS: eviction's last step drops Wikipedia articles that hold up facts (only the title stays, meta.refetch); once there is room again (10 GB on the brain's disk or a drive with room) evicted Wikipedia articles and web pages join the relearning queue (drive 'evicted', most facts first, 1000 at a time, within the 3000-a-day limit) and come back whole, passages included (DocumentStore.add). (8) HEAT-AWARE SCHEDULING (body/heat.py): per job kind the °C/min it adds while it runs, and the usual temperature of each hour; within 6 °C of the throttle point (10 °C in the four warmest hours) the hottest third of the learned kinds waits, maintenance and the caretaker never (kv heat)."""
+
 [[update]]
 version = "0.11.4"
 date = "2026-10-26"
@@ -572,6 +580,7 @@ self_healing = [
     "keeps the old brain drive's copy for a week, then removes it if the new drive has been steady",
     "while the brain is on the SD card, says which drive cannot take it and why (once, and in the feed's DRIVES line)",
     "reformats a Windows/macOS drive with none of Christian's files for Linux after it settles, keeping data off it until then (Polymath's own data on it goes only while the brain is stuck on the SD card)",
+    "0.11.4/0.12.0: the brain on the largest drive (brain_prefer), or split (brain on the fastest, texts on the largest); a drive whose SMART report says failing is treated as one that keeps dropping out",
 ]
 steps = [
     { needs = "auto", do = "nothing to do: Polymath picks the brain, backup and extra drives by itself" },
@@ -581,7 +590,7 @@ steps = [
     { needs = "approval", do = "to stop the automatic choices: [storage] auto_roles = false in /etc/polymath/polymath.toml, then restart", command = "sudo systemctl restart polymath polymath-dashboard" },
 ]
 since = "0.11.0"
-updated = "0.11.3"
+updated = "0.12.0"
 
 [[fault]]
 id = "drive-lost-relearn"
@@ -660,6 +669,100 @@ steps = [
 ]
 since = "0.11.2"
 updated = "0.11.3"
+
+[[fault]]
+id = "backup-broken"
+title = "A backup failed its test restore"
+area = "body"
+codes = ["body/backup_broken"]
+patterns = ["failed its test restore", "does not restore", "rows are missing"]
+symptoms = ["the inbox: 'the backup … failed its test restore: …. It was deleted and a new backup is being taken now'", "polymath needs: 'a backup failed its test restore'"]
+causes = [
+    { cause = "the backup drive corrupted the file (a failing drive, a bad cable, a drop-out while writing)", prior = 0.6 },
+    { cause = "the backup was cut short (power loss) after it was recorded", prior = 0.25 },
+    { cause = "the database changed in a way the counts did not expect (a bug)", prior = 0.15 },
+]
+checks = ["polymath storage roles   (the backup drive's health line)", "polymath backup list", "journalctl -u polymath | grep -i verify"]
+self_healing = [
+    "the broken backup is deleted (the rebuild never picks it) and a new backup is taken at once",
+    "the next day's test restore checks the new one",
+]
+steps = [
+    { needs = "auto", do = "nothing, if it happens once: the new backup is tested tomorrow" },
+    { needs = "you", do = "if it happens again: look at the backup drive's health (polymath storage roles) and its cable; replace the drive if it is failing" },
+]
+since = "0.12.0"
+updated = "0.12.0"
+
+[[fault]]
+id = "mirror-failed"
+title = "The hourly mirror of the brain could not be written"
+area = "body"
+codes = ["body/mirror_failed"]
+patterns = ["the mirror failed", "no room for the mirror"]
+symptoms = ["the inbox: 'the mirror failed: …' or 'no room for the mirror on …'", "polymath needs: 'the hourly mirror keeps failing'"]
+causes = [
+    { cause = "the backup drive is full", prior = 0.5 },
+    { cause = "the backup drive dropped out or is read-only (disk errors)", prior = 0.4 },
+    { cause = "another program held the database's log so it never got a moment to start", prior = 0.1 },
+]
+checks = ["polymath storage roles", "df -h /mnt/polymath/*", "polymath storage list"]
+self_healing = [
+    "it tries again at the next hour; a mirror cut short is marked incomplete and never used for a rebuild",
+    "the nightly backup still runs, and is test-restored",
+]
+steps = [
+    { needs = "you", do = "if the backup drive is full or failing: plug in a larger drive; the roles move the backups and the mirror there by themselves" },
+    { needs = "approval", do = "to switch the mirror off: [body] mirror_every_min = 0 in /etc/polymath/polymath.toml", command = "sudo systemctl restart polymath" },
+]
+since = "0.12.0"
+updated = "0.12.0"
+
+[[fault]]
+id = "update-rolled-back"
+title = "A new version kept failing and the previous one was put back"
+area = "update"
+codes = ["update/rolled_back"]
+patterns = ["kept failing", "was put back by itself", "src.failed"]
+symptoms = ["the inbox: 'the update to v… kept failing (…), so v… was put back by itself'", "polymath needs: 'an update kept failing and the previous version was put back'"]
+causes = [
+    { cause = "a bug in the new version that only shows on the Pi (Python 3.13, Debian packages, the real brain)", prior = 0.7 },
+    { cause = "the new version needs something the Pi does not have yet (a package, a permission)", prior = 0.3 },
+]
+checks = ["journalctl -u polymath -n 80 --since -1h", "cat /var/lib/polymath/update-rolled-back.json.reported-*", "ls /opt/polymath/src.failed"]
+self_healing = [
+    "scripts/update-check.sh put the previous version back 10 minutes after the install and restarted both services",
+    "an agent that only waits (for its drive) is never rolled back: it is not crashing",
+]
+steps = [
+    { needs = "you", do = "send the log so the update can be fixed", command = "journalctl -u polymath -n 80 --since -1h" },
+    { needs = "auto", do = "install the fixed version as usual; the check runs again after it" },
+]
+since = "0.12.0"
+updated = "0.12.0"
+
+[[fault]]
+id = "drive-failing"
+title = "A drive reports itself failing (SMART)"
+area = "storage"
+codes = []
+patterns = ["is failing (SMART", "SMART:", "looks healthy again"]
+symptoms = ["the feed and doctor: '… is failing (SMART: …): copy anything of yours off it and replace it'", "polymath storage roles: why_not 'failing (…)'"]
+causes = [
+    { cause = "the drive is wearing out (sectors waiting to be remapped, read errors growing)", prior = 0.6 },
+    { cause = "it overheats or gets too little power in its enclosure, which shows as errors", prior = 0.25 },
+    { cause = "a USB bridge reports garbage SMART values", prior = 0.15 },
+]
+checks = ["sudo smartctl -a /dev/sdX   (add -d sat for a USB enclosure)", "polymath storage roles", "dmesg | grep -iE 'I/O error|reset'"]
+self_healing = [
+    "a failing drive never holds the brain or the backups; the brain moves off it at once when another drive can hold it",
+    "said once; 'looks healthy again' if the report recovers",
+]
+steps = [
+    { needs = "you", do = "copy anything of yours off the drive and replace it; plug the new one in and the roles use it by themselves" },
+]
+since = "0.12.0"
+updated = "0.12.0"
 
 [[fault]]
 id = "agent-memory-high"
@@ -1104,6 +1207,7 @@ self_healing = [
     "SD-card mode keeps one backup, taken weekly; older backups are deleted before any document text (v0.9.0)",
     "Orin opens a disk incident early when the forecast says the reserve is reached within 3 days (v0.9.0)",
     "the brain on the SD card outside SD-card mode keeps the card's 3 GB reserve too; a disk pause holds until 3/4 of the reserve is free (v0.11.4)",
+    "last of all, Wikipedia articles that hold up facts are kept as pointers (their title) and read again once there is room (v0.12.0)",
 ]
 steps = [
     { needs = "you", do = "plug in another drive: it becomes extra brain space by itself (not in SD-card mode)" },
@@ -1111,7 +1215,7 @@ steps = [
     { needs = "you", do = "see where Polymath's room goes and when it would run out", command = "polymath storage usage --detail" },
 ]
 since = "0.5.2"
-updated = "0.11.4"
+updated = "0.12.0"
 
 [[fault]]
 id = "body-read-only"

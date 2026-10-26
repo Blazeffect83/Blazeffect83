@@ -129,6 +129,11 @@ if [ "$SYSTEM" = 1 ]; then
         say "installing uhubctl (lets Polymath replug its drive by itself)"
         run apt-get install -y uhubctl || warn "could not install uhubctl: Polymath still resets its drive, but cannot cut the USB power. Later: sudo dpkg --configure -a && sudo apt-get install uhubctl"
     fi
+    # optional: lets the drive roles read each drive's own health report (SMART) and move off one that is failing
+    if ! dpkg -s smartmontools >/dev/null 2>&1; then
+        say "installing smartmontools (lets Polymath see a drive failing before it dies)"
+        run apt-get install -y --no-install-recommends smartmontools || warn "could not install smartmontools: drive health shows as unknown. Later: sudo dpkg --configure -a && sudo apt-get install smartmontools"
+    fi
 fi
 
 # ------------------------------------------------------------------ code and virtual environment
@@ -138,6 +143,17 @@ say "installing polymath v$(sed -n 's/^version = "\(.*\)"$/\1/p' "$SRC/pyproject
 say "installing code to $OPT/src"
 run mkdir -p "$OPT/src"
 code_changed=0
+# (v0.12.0) the version installed now is kept until the new one proves healthy (scripts/update-check.sh)
+if [ "$SYSTEM" = 1 ] && [ "$DRY" = 0 ] && [ -d "$OPT/src" ]; then
+    rm -rf "$OPT/previous.new"
+    mkdir -p "$OPT/previous.new/site"
+    cp -a "$OPT/src" "$OPT/previous.new/src"
+    [ ! -f "$OPT/build.json" ] || cp -a "$OPT/build.json" "$OPT/previous.new/build.json"
+    for site in "$OPT"/venv/lib/python3*/site-packages; do
+        [ -d "$site/polymath" ] || continue
+        cp -a "$site/polymath" "$site"/polymath-*.dist-info "$OPT/previous.new/site/" 2>/dev/null || true
+    done
+fi
 if [ "$DRY" = 0 ]; then
     stamp_before="$(find "$OPT/src" -type f \( -name '*.py' -o -name '*.sql' -o -name '*.js' -o -name '*.css' \
         -o -name '*.html' -o -name '*.sh' -o -name '*.toml' \) -exec md5sum {} + 2>/dev/null | sort -k2 | md5sum)"
@@ -170,6 +186,13 @@ if [ "$VENV" = 1 ]; then
         say "installing polymath and numpy into the venv"
         run "$OPT/venv/bin/pip" install --quiet --upgrade pip
         run "$OPT/venv/bin/pip" install --quiet "$OPT/src"
+    fi
+fi
+if [ -d "$OPT/previous.new" ]; then
+    if [ "$code_changed" = 1 ]; then
+        rm -rf "$OPT/previous" && mv "$OPT/previous.new" "$OPT/previous"
+    else
+        rm -rf "$OPT/previous.new"
     fi
 fi
 # written after the code is installed: a feed that sees the new stamp reloads straight into the new code
@@ -263,7 +286,7 @@ done
 udev_changed="$(install_file "$SRC/deploy/90-polymath-storage.rules" "$ROOT/etc/udev/rules.d/90-polymath-storage.rules" 0644)"
 run mkdir -p "$ROOT$MOUNT_ROOT"
 run chmod 0755 "$ROOT$MOUNT_ROOT"
-run chmod 0755 "$OPT/src/scripts/open-dashboard.sh" "$OPT/src/scripts/open-feed.sh"
+run chmod 0755 "$OPT/src/scripts/open-dashboard.sh" "$OPT/src/scripts/open-feed.sh" "$OPT/src/scripts/update-check.sh"
 install_file "$SRC/deploy/polymath-cli" "$ROOT/usr/local/bin/polymath" 0755 >/dev/null  # `polymath …` for every user
 
 # ------------------------------------------------------------------ desktop: autologin + live feed on screen
@@ -341,7 +364,17 @@ if [ "$SYSTEM" = 1 ]; then
     fi
     # --no-block: an agent stuck on a frozen drive can take minutes to stop; the health wait below follows it
     if [ "$code_changed" = 1 ] || [ "$units_changed" = 1 ]; then
+        restarts_before="$(systemctl show polymath.service -p NRestarts --value 2>/dev/null || echo 0)"
         run systemctl restart --no-block polymath.service polymath-dashboard.service
+        if [ "$code_changed" = 1 ] && [ -d "$OPT/previous/src" ]; then
+            # in 10 minutes: healthy, or back to the previous version by itself (scripts/update-check.sh)
+            say "the previous version is kept: if the new one keeps failing, it is put back by itself in 10 minutes"
+            systemctl stop polymath-update-check.timer polymath-update-check.service 2>/dev/null || true
+            systemctl reset-failed polymath-update-check.service 2>/dev/null || true
+            run systemd-run --quiet --unit=polymath-update-check --on-active=10min \
+                "$OPT/src/scripts/update-check.sh" "${restarts_before:-0}" \
+                || warn "could not schedule the update check: if Polymath keeps failing, polymath doctor says what to do"
+        fi
     else
         run systemctl start --no-block polymath.service polymath-dashboard.service
     fi

@@ -103,6 +103,7 @@ class World:
         self.probe_result: tuple[bool, float, str] = (True, 300.0, "")
         self.heal: list[dict[str, Any]] = []
         self.state = tmp / "drive-roles.json"
+        self.health: dict[str, dict[str, Any]] = {}  # disk → what its SMART report says
 
     def plug(self, vol: str, facts: dict[str, Any], **manifest: Any) -> Path:
         dev = f"/dev/{facts['disk']}1"
@@ -113,7 +114,10 @@ class World:
         pool = storage_pool.StoragePool(self.config, ismount=lambda p: p in self.drives.mounted)
         return rl.DriveRoles(self.config, self.helper, pool=pool, facts=lambda d: self.facts.get(d, {}),
                              probe=self.probe, heal_actions=lambda: self.heal, state_path=self.state,
-                             clock=self.clock)  # fmt: skip
+                             clock=self.clock, smart=self.smart)  # fmt: skip
+
+    def smart(self, disk: str, last: dict[str, Any] | None, now: float) -> dict[str, Any]:
+        return {**self.health.get(disk, {"status": "unknown", "why": "no SMART report"}), "at": now}
 
     def probe(self, dev: str) -> tuple[bool, float, str]:
         self.probes.append(dev)
@@ -724,3 +728,51 @@ def test_brain_prefer_is_checked(config):
     config.storage.brain_prefer = "biggest"
     with pytest.raises(ConfigError, match="brain_prefer"):
         config.validate()
+
+
+# ------------------------------------------------------------------ v0.12.0: a failing drive (SMART)
+def test_a_failing_drive_never_holds_the_brain_and_the_brain_leaves_it_at_once(w):
+    w.helper.on_sd, w.helper.mounted = False, True
+    w.plug("ssd", SSD, label="T7", home=True, budget=500 * GB)
+    w.plug("hdd", HDD, label="BIG HDD", budget=500 * GB)
+    w.tick()
+    w.tick(11)
+    assert w.helper.moves == [] and w.public()["drives"][0]["health"] == "unknown"
+    w.health["sda"] = {"status": "failing", "why": "sectors waiting to be remapped went from 0 to 8"}
+    w.clock.t += 86400
+    out = w.tick()  # the next daily look finds it; the brain moves off at once, whatever the hour
+    assert w.helper.moves == [("between", "ssd", "hdd")] and out["moved"]
+    events = {e["event"]: e["detail"] for e in w.public()["events"]}
+    assert "T7 is failing (SMART: sectors waiting to be remapped went from 0 to 8): copy anything" in events["health"]
+    assert "it is failing" in events["moving"]
+    w.tick()
+    assert any("T7 is failing" in x for x in w.public()["warnings"])
+    assert w.public()["backup"] != "ssd"  # nor the backups
+    assert "failing (sectors waiting" in next(d["why_not"] for d in w.public()["drives"] if d["id"] == "ssd")
+
+
+def test_a_drive_worth_watching_is_said_once_and_healthy_again_too(w):
+    w.plug("hdd", HDD, label="BIG HDD", budget=500 * GB)
+    w.health["sdb"] = {"status": "watch", "why": "4 remapped and 0 waiting sectors (not growing)"}
+    w.tick()
+    w.clock.t += 86400
+    w.tick()
+    assert [e["event"] for e in w.public()["events"]].count("health") == 1
+    w.health["sdb"] = {"status": "ok", "why": ""}
+    w.clock.t += 86400
+    w.tick()
+    assert w.public()["events"][-1]["detail"] == "BIG HDD looks healthy again (SMART)"
+
+
+def test_the_split_brain_puts_the_brain_on_the_fastest_and_the_texts_on_the_largest(w):
+    w.config.storage.brain_prefer = "split"
+    w.plug("hdd", HDD, label="BIG HDD", budget=2000 * GB)
+    w.plug("ssd", SSD, label="T7", budget=250 * GB)
+    for _ in range(2):
+        w.tick()
+    out = w.tick(11)
+    assert out["moved"] and w.helper.moves == [("home", "ssd")]
+    assert "the fastest drive plugged in (document texts go on the largest)" in w.public()["decision"]
+    assert storage_pool.spill_marks(w.config) == (storage_pool.SPLIT_SPILL_AT, storage_pool.SPLIT_DOWN_TO)
+    w.config.storage.brain_prefer = "largest"
+    assert storage_pool.spill_marks(w.config) == (w.config.storage.spill_at, 0.6)

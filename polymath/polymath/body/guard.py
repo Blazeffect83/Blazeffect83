@@ -223,7 +223,8 @@ class Guard:
         self._storage_at = now
         storage_pool.sync(self.db, pool)
         self.db.kv_set("disk_budget_bytes", int(self.config.body.disk_budget_gb * 1e9))
-        if data_gb > self.config.storage.spill_at * self.config.body.disk_budget_gb and pool.choose(1 << 20):
+        spill_at = storage_pool.spill_marks(self.config)[0]
+        if data_gb > spill_at * self.config.body.disk_budget_gb and pool.choose(1 << 20):
             from polymath.core.scheduler import Scheduler
 
             Scheduler(self.db).enqueue(

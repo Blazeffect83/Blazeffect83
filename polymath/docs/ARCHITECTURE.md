@@ -610,6 +610,51 @@ Run by `polymath storage heal` (root, every minute) after the drive helper and t
   and records `kv body_reason` on every mode change; `Feed.paused_reason` falls back to it while the loop's
   `paused_reason` is not there yet.
 
+## Safer storage, safe updates, needs, heat (v0.12.0)
+
+- **Test restore** (`maintenance.verify_backup_job`, job `body.verify_backup`, daily at `backup_hour + 1`): the
+  newest backup with `verified IS NULL`; `trial_restore` decompresses it next to itself into `.verify-<name>`
+  (opened `immutable=1`, so no `-wal`/`-shm`), `PRAGMA quick_check`, and `table_counts` (documents, entities,
+  triples, provenance) must equal `backups.counts` recorded by `backup_job`. Broken: deleted, `body/backup_broken`,
+  a new `body.backup`. Skipped (verify_ok NULL) when the file is gone, on the SD card itself (`brain_on_sd_card` and
+  the same device), or without `db_bytes × 1.05 + 1 GB` free. Migration 0020 adds the columns.
+- **Mirror** (`body/mirror.py`): `Agent._mirror_between_slices` (no transaction open) calls `Mirror.maybe_start`:
+  due every `mirror_every_min`, a target from `pool.backup_dir` that is not on the database's device, a database
+  that changed (size/mtime of the file and its log), room; then `PRAGMA wal_checkpoint(TRUNCATE)` (busy → retry in
+  5 min), a read-only connection `BEGIN` + read (the snapshot), and the log must still be empty; a thread runs
+  `copy_changed` (blake2b per 1 MiB chunk against `mirror.json`, changed chunks written in place, `complete: false`
+  before the first write, fsync, then the new hashes with `complete: true`). With the snapshot pinned at an empty
+  log, checkpoints cannot backfill later frames, so the file is frozen while it is read. `Mirror.record` writes
+  `kv mirror` and reports failures. `restore_mirror`/`mirrors_on` serve `SSDWatch.rebuild`, which prefers a mirror
+  newer than the newest backup.
+- **SMART** (`body/health.py`): `read_report` (`smartctl -j -a`, then `-d sat`; exit bits 0–1 mean no report),
+  `counts_of` (ATA 5/187/197/198 raw, wear from 177/231/233/202, NVMe log), `verdict` (failing / watch / ok against
+  the previous counts), `check` (a failing drive keeps its pre-failure baseline, so it stays failing).
+  `DriveRoles._health` checks one drive a run, each once a day; `Drive.health` → reason `failing` (first in the
+  words), −3 score, `flaky` for the between-drive move, never the backup, a warning, a `health` event on change.
+- **Pointers** (`evict_job` step 6): Wikipedia documents with provenance, oldest first, unindexed and
+  `meta.refetch = 'wikipedia'`. `inventory.refill` (in `recover_job`, when `room_to_refill`) inserts evicted
+  Wikipedia/web documents into `relearn` with `volume_id = 'evicted'`; `DocumentStore.add` restores an evicted
+  document with the same hash (body, codec, passages via `TextIndex.index`); `relearn` rows are done when the
+  document's codec is no longer `evicted`.
+- **Split brain**: `brain_prefer = "split"` orders candidates by score (like "fastest"); `pool.spill_marks` gives
+  (0.1, 0.05) instead of (`spill_at`, 0.6) for the guard's spill request and `spill_job`.
+- **Safe updates**: `install.sh` copies `$OPT/src`, `build.json` and the venv's `polymath` + dist-info to
+  `$OPT/previous.new` before installing, promotes it to `$OPT/previous` only when the code changed, records
+  `NRestarts`, and schedules `systemd-run --on-active=10min scripts/update-check.sh <restarts>` (unit
+  `polymath-update-check`). The script restores the previous version when `/health` fails and the service is
+  `failed` or restarted ≥ 3 times, writes `/var/lib/polymath/update-rolled-back.json`; `Agent.start` reports it
+  (`update/rolled_back`) and renames it `.reported-<time>`.
+- **Needs** (`core/needs.py`): `needs(db, run_dir)` from `drive-roles.json` (a USB 2 drive while the brain is on the
+  SD card, warnings about failing drives, power, USB 2, a second drive), escalated `incidents.advice`, and recent
+  inbox codes `rolled_back`/`backup_broken`/`mirror_failed`. `Feed.status()["needs"]` (so the snapshot carries it),
+  `now_line` counts it, doctor shows each as a `needs you` check, `polymath needs`, `/api/needs`.
+- **Heat** (`body/heat.py`): `Agent.cycle` calls `HeatModel.step` with the temperature at each cycle's start (the
+  change per minute is credited to the previous cycle's kind, EWMA 0.1) and `started(kind)` once a job is claimed;
+  per-hour EWMA temperatures; `hot_kinds` = the hottest third (≥ 5 samples, rate > 0, not `body.`/`caretaker.`/
+  `storage.`/`net.probe`) once within 6 °C of `throttle_celsius` (10 °C in the four warmest hours);
+  `Agent._heat_filter` removes them from the decision. `kv heat`, saved at most every 10 minutes.
+
 ## What each drive holds, and relearning (v0.11.0, `memory/inventory.py`)
 
 In the agent (`storage.inventory` hourly, `storage.recover` every 10 minutes; neither in SD-card mode nor on standby).

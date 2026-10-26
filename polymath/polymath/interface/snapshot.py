@@ -56,7 +56,7 @@ def planner(agent: Any) -> None:
             from polymath.interface.feed import Feed
 
             w.feed = Feed(agent.db, pulse=heartbeat_path(agent.config), stale=agent.config.loop.heartbeat_stale,
-                          heavy_counts=False)  # fmt: skip
+                          heavy_counts=False, run_dir=agent.config.paths.run_dir)  # fmt: skip
         data = w.feed.poll(w.cursor)
         approximate_counts(agent.db, data.get("status") or {})
         from polymath.core import issues

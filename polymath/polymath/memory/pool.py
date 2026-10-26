@@ -77,6 +77,18 @@ class Volume:
         return self.label or self.model or self.id[:8]
 
 
+SPLIT_SPILL_AT = 0.1  # with storage.brain_prefer = "split": texts leave the brain's drive this early (of its budget)
+SPLIT_DOWN_TO = 0.05  # …and a spill run moves them until the brain's drive is at this share
+
+
+def spill_marks(config: Config) -> tuple[float, float]:
+    """(spill when the brain's disk is this full, spill down to this share) of its budget. With the split brain the
+    texts go to the largest drive almost at once, keeping the fast drive for the database and its index."""
+    if config.storage.brain_prefer == "split":
+        return SPLIT_SPILL_AT, SPLIT_DOWN_TO
+    return config.storage.spill_at, 0.6
+
+
 def read_manifest(brain: Path) -> dict[str, Any] | None:
     try:
         data = json.loads((brain / MANIFEST).read_text(encoding="utf-8"))

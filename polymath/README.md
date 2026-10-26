@@ -95,6 +95,18 @@ implemented here and learns only from data the agent downloads itself.
   - **A wiped brain drive is no dead end** (v0.11.2): reformat the SSD and the SD card's brain takes over (or the brain
     is rebuilt from its newest backup on another drive), then moves onto the best drive by itself. Empty drives
     formatted for Windows/macOS are reformatted for Linux by themselves; a drive with your files never is.
+  - **Safer storage, by itself** (v0.12.0):
+    - every backup is test-restored the next day;
+    - the brain is mirrored to the backup drive every hour (only what changed);
+    - each drive's own health report (SMART) is read daily, and a failing drive loses the brain at once;
+    - texts it can fetch again are kept as pointers when room is short and come back when there is room;
+    - an optional split brain: the database on the fastest drive, texts on the largest.
+  - **Safe updates** (v0.12.0): a new version that keeps crashing is replaced by the previous one by itself, 10
+    minutes after the install.
+  - **One list of what needs you** (v0.12.0): `polymath needs` (also at the top of doctor, on the dashboard, and
+    counted in the feed): a cable, a port, a drive to replace. Everything else it does itself.
+  - **Learns what heats the Pi** (v0.12.0): while the Pi is warm, the jobs that heat it most wait and cooler work
+    goes on, so it rarely has to slow down.
   - **The brain goes on the largest drive** (v0.11.4): among the drives that may hold it, the largest wins, speed
     breaks ties between drives about as large (`[storage] brain_prefer = "fastest"` for the old order). A brain on
     the SD card keeps the card's 3 GB reserve, so it no longer pauses at 5 GB free; a pause always says its real

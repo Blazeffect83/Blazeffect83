@@ -1280,6 +1280,43 @@ device". The pauses were disk pauses (the SD card held to a drive's 10 GB reserv
 
 **Not yet run on the Pi.**
 
+## 12z. Safer storage, safe updates, needs, heat (v0.12.0)
+
+**Why:** Christian, 2026-10-26, approved all eight ideas: split brain, drive health, tested backups, rolled-back
+updates, the needs-you list, the hourly mirror, texts kept as pointers, heat-aware scheduling.
+
+**Tests** (development container):
+- `tests/test_body.py` (4 more): a backup records its counts and is test-restored (quick_check, the counts, the
+  scratch copy removed, nothing left to test after); a backup whose rows do not match is deleted, reported and taken
+  again; a damaged file does not restore; not tested without room, on the SD card itself or when gone; the daily
+  job is planned. An article that holds up a fact goes last, as a pointer (the fact stays), joins the relearning
+  queue once there is room (once, most facts first), and comes back whole with its passages; no room, no refill.
+- `tests/test_mirror.py` (7): only changed chunks are written, the copy is byte-identical, it shrinks with the
+  database; a mirror cut short (fsync fails) is marked incomplete, never restored or listed, and the next run
+  repairs it; a damaged mirror is refused. **The snapshot holds while another connection writes 2,000 rows and
+  tries a TRUNCATE checkpoint during the copy: the mirror has exactly the rows of the snapshot.** It waits while an
+  old reader pins the log, skips an unchanged database, needs a drive, can be switched off, says when there is no
+  room and reports a failure; where it goes (never beside the database, not in SD-card mode); the loop survives a
+  broken mirror. `tests/test_ssdwatch.py` (1 more): a rebuild prefers a newer mirror over the nightly backup.
+- `tests/test_health.py` (4) and `tests/test_roles.py` (3 more): smartctl through a USB bridge, no report is
+  unknown; failing (FAILED status, pending growth, 10+ remapped in days, NVMe warning or spare) versus watch (stable
+  remapped, wear, heat) versus ok; failing stays failing. A failing brain drive loses the brain at once (event,
+  warning, never the backup); a watched drive is said once and "healthy again" too; the split brain puts the brain
+  on the fastest drive and lowers the spill marks.
+- `tests/test_update_check.py` (5): a healthy update is left alone; an agent that waits without crashing is left
+  alone; a crash-looping one goes back (code, the venv's package and dist-info, build.json, the marker with
+  from/to/why, services restarted); no previous version is said; the agent reports the rollback once.
+- `tests/test_needs.py` (2): the list from the drives, Orin's escalations and the inbox, without repeats, inbox items
+  for two days; the feed counts it, doctor shows it, `polymath needs` from the snapshot or the brain, and the feed
+  survives a failure inside it.
+- `tests/test_heat.py` (3): heating and cooling kinds learned, the hottest third held back only when warm, never
+  maintenance; kept in the brain; the warmest hours widen the margin; the loop learns, filters and survives a broken
+  model.
+
+**Result:** 884 tests pass and 1 is skipped, at 94 % coverage. `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck (install.sh, scripts/update-check.sh) are clean.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

@@ -261,6 +261,7 @@ def build_components(config: Config, db: Database, *, planners: bool = True) -> 
     reg("agents.evolve", society.evolve_job, "Agent society: fork strong agents, retire weak ones", action="agents")
     reg("agents.command", society.command_job, "Agent society: apply your commands", action="agents")
     reg("body.backup", maintenance.backup_job, "Nightly verified, compressed database backup", action="maintain")
+    reg("body.verify_backup", maintenance.verify_backup_job, "Test-restore the newest backup", action="maintain")
     reg("body.housekeeping", maintenance.housekeeping_job, "Prune old job and cycle records", action="maintain")
     reg("body.evict", maintenance.evict_job, "Free disk space (least valuable data first)", action="maintain")
     reg("body.spill", maintenance.spill_job, "Move document bodies to plugged-in drives", action="maintain")

@@ -64,6 +64,7 @@ DROPPED_KINDS = frozenset({
     "stackexchange.ingest",
     "gutenberg.books",
     "body.backup",  # a temporary brain needs no nightly backup (and the SD card no extra writes)
+    "body.verify_backup",
     "body.spill",
     "body.recall",
 })  # fmt: skip

@@ -95,6 +95,7 @@ class BodyConfig:
     disk_min_free_gb: float = 10.0
     backup_keep: int = 7
     backup_hour: int = 3  # local hour for the nightly backup
+    mirror_every_min: float = 60.0  # the database mirrored onto the backup drive this often (0: off; body.mirror)
     # SD card wear guard (body.wear): an SD card wears out from writes. Its rated life is estimated as
     # capacity × sd_endurance_cycles full-card writes, divided by sd_write_amplification (the card's own
     # extra internal writes for small random writes). Writes are budgeted to last sd_target_years.
@@ -224,7 +225,7 @@ class StorageConfig:
     auto_roles: bool = True
     brain_settle_min: float = 10.0  # a drive must stay plugged in this long before the brain moves onto it
     brain_allow_usb2: bool = False  # USB 2 (480 Mbit/s) is too slow and froze before: never the brain unless allowed
-    brain_prefer: str = "largest"  # among the drives that may hold the brain: "largest" (most room) or "fastest"
+    brain_prefer: str = "largest"  # the brain's drive: "largest", "fastest", or "split" (fastest; texts to the largest)
     # Drive care (body.roles, v0.11.2): a plugged-in drive formatted for Windows/macOS (exFAT, NTFS, FAT32) that holds
     # nothing at all is reformatted for Linux (ext4), so it can hold the brain, backups over 4 GB and full extra room.
     # A drive with any file on it is never reformatted by itself.
@@ -274,6 +275,8 @@ class Config:
             raise ConfigError("senses.crawl_rate must be in (0, 1] requests per second")
         if self.body.pause_celsius <= self.body.throttle_celsius:
             raise ConfigError("body.pause_celsius must exceed body.throttle_celsius")
+        if not (self.body.mirror_every_min == 0 or 10 <= self.body.mirror_every_min <= 1440):
+            raise ConfigError("body.mirror_every_min must be 0 (off) or between 10 and 1440")
         if not 1 <= self.body.backup_keep <= 365:
             raise ConfigError("body.backup_keep must be between 1 and 365")
         if self.learning.embedding_dim not in range(16, 513):
@@ -317,8 +320,8 @@ class Config:
             raise ConfigError("storage.sd_keep_free_gb must be between 0.5 and 50")
         if not 0.1 <= self.storage.relearn_after_h <= 720:
             raise ConfigError("storage.relearn_after_h must be between 0.1 and 720 hours")
-        if self.storage.brain_prefer not in {"largest", "fastest"}:
-            raise ConfigError("storage.brain_prefer must be 'largest' or 'fastest'")
+        if self.storage.brain_prefer not in {"largest", "fastest", "split"}:
+            raise ConfigError("storage.brain_prefer must be 'largest', 'fastest' or 'split'")
         if not 1 <= self.storage.brain_settle_min <= 1440:
             raise ConfigError("storage.brain_settle_min must be between 1 and 1440 minutes")
         if not 1 <= self.storage.sd_return_stable_min <= 1440:
