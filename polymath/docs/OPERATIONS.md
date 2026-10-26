@@ -640,6 +640,11 @@ alone. A drive drive care reformatted takes the brain right after (it already se
 quarter of that size, the fastest. Later it moves at night onto a drive a quarter larger (or, about as large, a class
 faster), never onto a much smaller one. `[storage] brain_prefer = "fastest"` goes by speed first, as before.
 
+**Updating while the brain lives on the SD card** (v0.13.1): after `polymath storage keep-sd-brain` the brain is in
+`/srv/polymath` on the card on purpose. `sudo ./install.sh` (no flags) updates it as it is and changes nothing in
+its configuration. Do not add `--allow-sd-card` to an existing brain: since v0.13.1 it no longer cuts the brain's
+budget, but it is not needed.
+
 ### <a id="v013"></a>The mind: dreams, tools, science, a red team, why (v0.13.0)
 
 - **`polymath dream`**: last night's morning report.
@@ -905,6 +910,7 @@ Settings (`[storage]`; leave `sd_only` itself to the script): `sd_dir` (`/var/li
 | a paired browser is sent back to pairing | its key was removed (`polymath access log` says when), cookies were cleared, or 400 days passed: pair again |
 | a device you do not recognise in `polymath access devices` | `polymath access revoke <id>` (or `all`), then `polymath access log` to see when it paired |
 | the feed: `DRIVES  the brain stays on the SD card: X cannot hold it (on USB 2 …)` | move X to a blue USB 3 port (USB 3 cable, no USB 2 hub). A "formatted for Windows/macOS" reason with none of your files on it fixes itself: it is reformatted for Linux after 10 minutes ([§8](#wiped)) |
+| install.sh: `/srv/polymath is not a mounted filesystem` | before v0.13.1, with the brain on the SD card (after `keep-sd-brain`): pull v0.13.1 and run `sudo ./install.sh` again, no flags. On a fresh Pi: mount the drive, or `--allow-sd-card` |
 | `polymath needs` lists something | do it: it is the short list of what only you can do (a port, a cable, a drive to replace, a log to send) ([§v0.12](#v012)) |
 | the inbox: `the update to v… kept failing …, so v… was put back by itself` | the new version crashed on the Pi; the old one runs again. Send `journalctl -u polymath -n 80 --since -1h` |
 | `… is failing (SMART: …)` | copy anything of yours off that drive and replace it; the brain and backups have already left it |

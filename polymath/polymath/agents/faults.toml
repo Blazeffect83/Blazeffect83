@@ -15,7 +15,7 @@
 #                approval = changes the system (boot settings, packages, hardware): ask Christian first, always
 
 [meta]
-updated_for = "0.13.0"
+updated_for = "0.13.1"
 updated = "2026-10-26"
 pi = "Raspberry Pi 4 Model B 8 GB, Debian 13 (trixie), 64-bit, hostname piS, user christian"
 brain_drive = "1 TB SSD in a DockCase enclosure (USB 31db:9210), /dev/sda2 ext4, bus-powered from the Pi"
@@ -46,6 +46,8 @@ waiting_on = [
     "2026-10-26: Christian approved all eight storage and safety ideas (0.12.0): split brain, SMART drive health, test-restored backups, update rollback, the needs-you list, the hourly mirror, texts kept as pointers and read again, heat-aware scheduling",
     "2026-10-26: Christian sent his own list for the next big update (0.13.0): a dream cycle, agents that invent tools, a scientist agent, a breeding society, a red team, distilled offline knowledge, explainable why, a curiosity engine, staying up offline",
     "2026-10-26: v0.13.0 builds Christian's list: the dream cycle, invented tools (procedures), the scientist, breeding with crossover, the red team, distilled Wikidata, why-traces, the curiosity engine, a clock guard for power cuts without the internet",
+    "2026-10-26: Christian ran the install for v0.13.0: install.sh stopped with '/srv/polymath is not a mounted filesystem' (the brain lives on the SD card since keep-sd-brain; install.sh only knew SD-card mode and --allow-sd-card). Fixed in 0.13.1; --allow-sd-card would have cut the brain's budget to the card's free space, so it must not be used",
+    "install v0.13.1: cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (no flags)",
     "install v0.12.0 (or v0.13.0, which includes it): cd ~/polymath-src && git pull --ff-only origin claude/polymath-agent && cd polymath && sudo ./install.sh   (it also installs smartmontools; from now on a new version that keeps failing is rolled back by itself after 10 minutes)",
     "then Christian moves the SSD to a blue USB 3 port (USB 3 cable, no USB 2 hub); drive care reformats it to ext4 after 10 minutes and the brain moves onto it right after (polymath storage roles shows brain on it, doctor clean)",
 ]
@@ -59,6 +61,11 @@ recommended = [
 ]
 
 # ------------------------------------------------------------------------------------------------ updates
+[[update]]
+version = "0.13.1"
+date = "2026-10-26"
+changes = """From the Pi: sudo ./install.sh stopped with '/srv/polymath is not a mounted filesystem. Mount the NVMe drive there first, or pass --allow-sd-card'. Since keep-sd-brain the brain lives in /srv/polymath on the SD card on purpose, which the installer did not know (only SD-card mode or --allow-sd-card). install.sh now goes on when /srv/polymath holds a brain (db/polymath.sqlite3) and the configuration already says require_separate_mount = false (brain_on_sd): it says the brain lives on the SD card for now and changes nothing. And --allow-sd-card never cuts an existing brain's disk_budget_gb to what is free now (it would have set about 2 GB and evicted most of what it read)."""
+
 [[update]]
 version = "0.13.0"
 date = "2026-10-26"
@@ -1469,4 +1476,13 @@ what = "Christian: 'It keeps pausing for cooling at 50c'. The feed showed pauses
 cause = "not heat (the thermal pause is at 82 °C): with SD-card mode ended by keep-sd-brain, the brain on the SD card was held to the drive's 10 GB reserve, so ~2 GB free meant a disk pause; eviction freed a little and it flapped; the feed fell back to 'cooling down' when the loop had not recorded the reason yet"
 fault = "body-disk"
 fixed_in = "0.11.4"
+open = true
+
+[[history]]
+date = "2026-10-26"
+version = "0.13.0"
+what = "sudo ./install.sh stopped: '/srv/polymath is not a mounted filesystem. Mount the NVMe drive there first (see docs/OPERATIONS.md), or pass --allow-sd-card to start on the SD card and add drives later.' The update was not installed."
+cause = "since keep-sd-brain (0.11.2) the brain lives in /srv/polymath on the SD card on purpose; install.sh only accepted that in SD-card mode or with --allow-sd-card, which would also have cut the brain's budget to the card's free space"
+fault = "update-not-installed"
+fixed_in = "0.13.1"
 open = true

@@ -1369,6 +1369,24 @@ knowledge, explainable everything, a curiosity engine, and staying online when d
 
 **Not yet run on the Pi.**
 
+## 12ab. Updating a brain that lives on the SD card (v0.13.1)
+
+**Why:** Christian, 2026-10-26, installing v0.13.0 on the Pi: "error: /srv/polymath is not a mounted filesystem".
+The brain lives there on the SD card since `keep-sd-brain`. The suggested `--allow-sd-card` would have cut its budget to
+about 2 GB.
+
+**Tests:** `tests/test_deploy.py` (1 more). The installer's `brain_on_sd` check, run in bash against a staged root:
+- false with no brain;
+- true with a brain and `require_separate_mount = false`;
+- false when the configuration still requires a mount.
+
+The script takes that branch before the error, and keeps an existing brain's budget under `--allow-sd-card`.
+ShellCheck is clean on install.sh.
+
+**Result:** 906 tests pass and 1 is skipped. `ruff`, `ruff format`, `mypy --strict polymath`, mypy over the tests and scripts, and ShellCheck (install.sh) are clean.
+
+**Not yet run on the Pi.**
+
 ## 13. Raspberry Pi 4 on-device results
 
 The hardware was a **Raspberry Pi 4 Model B, 8 GB, on Debian 13 "trixie"** (aarch64, Python 3.13.5), with the

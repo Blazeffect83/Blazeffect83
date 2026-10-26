@@ -46,6 +46,12 @@ trap 'rc=$?; printf "\033[31merror:\033[0m the install stopped at line %s (exit 
 is_mounted() { awk -v m="$1" '$5 == m {f = 1} END {exit !f}' /proc/self/mountinfo 2>/dev/null; }
 # SD-card mode (scripts/sd-card-mode.sh wrote its drop-in): the brain is on the SD card, the SSD is not used
 sd_mode() { grep -qsE '^[[:space:]]*sd_only[[:space:]]*=[[:space:]]*true' "$ROOT/etc/polymath/polymath.d/"*.toml; }
+# (v0.13.1) the brain already lives on the SD card on purpose (made the brain by `polymath storage keep-sd-brain`, or
+# installed with --allow-sd-card before): an update leaves it, and its budget, exactly as they are
+brain_on_sd() {
+    [ -f "$ROOT$DATA/db/polymath.sqlite3" ] &&
+        grep -qsE '^[[:space:]]*require_separate_mount[[:space:]]*=[[:space:]]*false' "$ROOT/etc/polymath/polymath.toml"
+}
 SD_DIR=/var/lib/polymath/brain
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
@@ -99,10 +105,13 @@ if [ "$SYSTEM" = 1 ]; then
             warn "keeping the brain on the SD card ($DATA) with a small budget, as asked (--allow-sd-card);" \
                 "drives you plug in later are added to the brain automatically"
         fi
+    elif ! is_mounted "$DATA" && brain_on_sd; then
+        say "the brain lives on the SD card for now ($DATA): plug in a drive and it moves onto it by itself" \
+            "(polymath storage roles says which, and why)"
     elif ! is_mounted "$DATA"; then
         die "$DATA is not a mounted filesystem. Mount the NVMe drive there first (see docs/OPERATIONS.md), \
 or pass --allow-sd-card to start on the SD card and add drives later."
-    elif [ "$(stat -c %d "$DATA")" = "$(stat -c %d /)" ]; then
+    elif [ "$(stat -c %d "$DATA")" = "$(stat -c %d /)" ] && ! brain_on_sd; then
         die "$DATA is on the root (SD card) filesystem; mount the NVMe drive there, or pass --allow-sd-card"
     fi
 fi
@@ -237,6 +246,11 @@ elif [ "$ALLOW_SD" = 1 ] && [ "$DRY" = 0 ]; then
     changed=0
     grep -q '^require_separate_mount *= *true' "$CONF" && changed=1
     grep -q '^disk_budget_gb *= *200.0' "$CONF" && changed=1
+    if [ -f "$ROOT$DATA/db/polymath.sqlite3" ]; then
+        # an existing brain: its budget is never cut to what is free now (that would evict most of what it read)
+        budget="$(sed -n 's/^disk_budget_gb *= *\([0-9.]*\).*/\1/p' "$CONF" | head -n 1)"
+        budget="${budget:-200.0}"
+    fi
     if [ "$changed" = 1 ]; then
         say "SD-card mode: data on the root filesystem, brain budget $budget GB on the card (backup: $CONF.bak)"
         cp -p "$CONF" "$CONF.bak"

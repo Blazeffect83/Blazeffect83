@@ -334,3 +334,28 @@ def test_polymath_command_runs_as_the_polymath_user(tmp_path):
     assert run("status", uid="0", user="root") == f"runuser -u polymath -- {real} status"
     assert run("storage", "attach", "/dev/sda1", uid="0", user="root") == "polymath storage attach /dev/sda1"
     assert run("report", uid="999", user="polymath") == "polymath report"
+
+
+def test_an_update_accepts_a_brain_that_lives_on_the_sd_card_and_never_cuts_its_budget(tmp_path):
+    """v0.13.1: after `polymath storage keep-sd-brain` the brain is in /srv/polymath on the SD card (not a mount);
+    `sudo ./install.sh` must update it as it is, and --allow-sd-card must never shrink an existing brain's budget."""
+    script = (ROOT / "install.sh").read_text()
+    start = script.index("brain_on_sd() {")
+    func = script[start : script.index("\n}\n", start) + 3]
+    root = tmp_path / "root"
+    (root / "etc/polymath").mkdir(parents=True)
+    conf = root / "etc/polymath/polymath.toml"
+
+    def on_sd() -> bool:
+        cmd = f'ROOT="{root}"; DATA=/srv/polymath\n{func}\nbrain_on_sd'
+        return subprocess.run(["bash", "-c", cmd], check=False).returncode == 0
+
+    conf.write_text("[paths]\nrequire_separate_mount = false\n")
+    assert not on_sd()  # no brain there yet: a first install still needs the drive or --allow-sd-card
+    (root / "srv/polymath/db").mkdir(parents=True)
+    (root / "srv/polymath/db/polymath.sqlite3").write_bytes(b"brain")
+    assert on_sd()
+    conf.write_text("[paths]\nrequire_separate_mount = true\n")
+    assert not on_sd()  # the agent could not run there anyway: the installer says what to do
+    assert 'elif ! is_mounted "$DATA" && brain_on_sd; then' in script
+    assert "its budget is never cut to what is free now" in script
