@@ -676,7 +676,7 @@ budget, but it is not needed.
 - **Backups are test-restored**: an hour after the nightly backup, the newest one is restored beside itself and
   checked (quick_check, and the rows in its main tables as when it was taken). A broken one is deleted and taken
   again; you only hear about it if it happens again. Not tested on the SD card itself (it would write the whole brain
-  to it twice). `polymath backup list` shows each one's result.
+  to it twice). `polymath backup --list` shows each one's result.
 - **The hourly mirror**: the brain's database is copied to the backup drive's `polymath-brain/backups/mirror/`
   every hour, writing only the parts that changed (a few MB an hour, not the whole brain). A wiped brain drive is
   rebuilt from it when it is newer than the nightly backup. `[body] mirror_every_min` (60; 0 switches it off).
