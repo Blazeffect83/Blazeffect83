@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0f1419">
+<title>Pair with Polymath</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="pair-page">
+<main class="pair-main">
+  <section class="card pair-card">
+    <div class="brand"><img src="/static/icon.svg" alt="" width="32" height="32"><h1>Polymath</h1></div>
+    <h2 class="pair-title">Pair this browser</h2>
+    <p class="muted">Only browsers you pair can see Polymath, and only on your home network.</p>
+    <ol class="pair-steps">
+      <li>Get a code: the installer showed one, or run <code>polymath access pair</code> on the Pi (or over SSH).
+        A paired browser can also make one: the dashboard's <em>Who can see this</em> panel.</li>
+      <li>Type it here. The code works once and lasts 15 minutes.</li>
+    </ol>
+    <form id="pair-form" autocomplete="off">
+      <label for="code">Pairing code</label>
+      <input id="code" name="code" maxlength="12" placeholder="ABCD-EFGH" autocomplete="one-time-code"
+             spellcheck="false" autocapitalize="characters" required>
+      <label for="name">Name for this browser (optional)</label>
+      <input id="name" name="name" maxlength="40" placeholder="Chrome on my PC">
+      <button type="submit" id="pair-go">Pair</button>
+    </form>
+    <p id="pair-msg" class="pair-msg" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="card pair-card">
+    <h2>Remove Chrome's warning (optional, once)</h2>
+    <p class="muted">The connection is encrypted with a certificate the Pi made for itself. Chrome warns because it
+      does not know the Pi yet. To make Chrome trust it on Windows:</p>
+    <ol class="pair-steps">
+      <li><a href="/ca.crt" download>Download the Pi's certificate</a> and open the file.</li>
+      <li>Check that its thumbprint (Details tab) matches the one below.</li>
+      <li>Choose <em>Install Certificate…</em> → <em>Current User</em> → <em>Place all certificates in the following store</em>
+        → <em>Trusted Root Certification Authorities</em> → Finish, then restart Chrome.</li>
+    </ol>
+    <p class="small">SHA-1 thumbprint: <code id="fp-sha1">…</code><br>SHA-256: <code id="fp-sha256" class="wrap">…</code></p>
+    <p class="muted small">After that Chrome shows a padlock, and its menu offers <em>Install Polymath</em>: an app
+      window next to your work.</p>
+  </section>
+</main>
+<script src="/static/pair.js"></script>
+</body>
+</html>

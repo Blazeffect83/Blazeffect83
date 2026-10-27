@@ -1,0 +1,25 @@
+# Bring the brain's drive back if it is missing or dead, and in SD-card mode move the brain back onto the SSD once it
+# is plugged in and healthy (polymath storage heal: body/heal.py, body/ssdwatch.py). Run by polymath-heal.timer.
+[Unit]
+Description=Polymath storage: bring the brain's drive back if it is missing
+Documentation=file:///opt/polymath/src/docs/OPERATIONS.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+Environment=POLYMATH_CONFIG=/etc/polymath/polymath.toml
+ExecStart=/opt/polymath/venv/bin/polymath storage heal
+# a USB power cut waits heal_power_off_s (20 s) and the drive another few seconds; moving the brain back onto the
+# SSD (body/ssdwatch.py: stop the agent, mount the SSD, start it) up to about five minutes
+TimeoutStartSec=10min
+# Runs as root (it mounts drives, resets USB devices, writes sysfs), so no mount-namespace options here: those
+# would hide its mounts from the rest of the system. What it never needs is switched off (v0.9.0 security audit):
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+IPAddressDeny=any
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

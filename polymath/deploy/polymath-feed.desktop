@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Polymath live feed
+Comment=Watch what Polymath is learning, live, in a terminal
+Exec=/opt/polymath/src/scripts/open-feed.sh
+Icon=/opt/polymath/src/polymath/interface/static/icon.svg
+Terminal=false
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
+Categories=Science;Education;

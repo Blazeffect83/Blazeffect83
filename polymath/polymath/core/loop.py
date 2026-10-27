@@ -1,0 +1,644 @@
+"""The agent loop: OBSERVE → DECIDE → ACT → INTEGRATE → EVALUATE → LEARN.
+
+One cycle runs at most one bounded job slice. Everything a cycle changes in
+the database — the handler's writes, the job's new checkpoint/state, the cycle
+record, the heartbeat and the policy update — commits in ONE transaction, so a
+crash or power cut at any instant leaves the database as it was before the
+cycle (WAL guarantees no corruption) and the job resumes from its last
+checkpoint.
+"""
+
+from __future__ import annotations
+
+import json
+import signal
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import FrameType
+from typing import Any, Protocol
+
+from polymath.body.sensors import Vitals, read_vitals
+from polymath.body.systemd_notify import Notifier
+from polymath.core import inbox, issues, netstate, vigil
+from polymath.core.config import Config
+from polymath.core.db import Database
+from polymath.core.jobs import Interrupted, JobContext, JobOutcome, JobRegistry, PermanentError
+from polymath.core.logging import get_logger
+from polymath.core.scheduler import Job, QueueStats, Scheduler
+from polymath.version import read_build
+
+log = get_logger("loop")
+MAX_SLICE = 60.0  # seconds; a slice must end well within the systemd watchdog (WatchdogSec=120)
+PULSE_EVERY = 15.0  # seconds between touches of the pulse file (each is a small disk write)
+QUIET_HEARTBEAT_EVERY = 30.0  # idle cycles write the database heartbeat this often, not every 2 s
+SILENT_REPORT_S = 60.0  # a step this long without a sign of life is reported (the vigil vouched for it meanwhile)
+SLOW_REPORT_S = 300.0  # a slice this long is reported: nothing else ran meanwhile
+RUNNING_HEARTBEAT_EVERY = 10.0  # busy cycles: at most this often (a page saved on every short slice)
+RESTART_WINDOW_S = 600.0
+RESTARTS_TOO_MANY = 4  # starts within RESTART_WINDOW_S that mean it keeps stopping
+ROLLBACK_FILE = "update-rolled-back.json"  # written by scripts/update-check.sh after it went back a version
+NET_RETRY_S = 60.0  # a network job that hit a dead connection waits this long (offline: until the probe succeeds)
+
+
+@dataclass
+class BodyState:
+    mode: str = "normal"  # normal | throttle | yield | pause
+    intensity: float = 1.0
+    reasons: list[str] = field(default_factory=list)
+    vitals: Vitals | None = None
+    allow: list[str] = field(default_factory=list)  # job kinds that may still run while paused (maintenance)
+    slice_factor: float = 1.0  # > 1 saves disk writes: longer slices, fewer commits (SD card saver)
+
+
+class Body(Protocol):
+    def observe(self) -> BodyState: ...
+
+
+class BasicBody:
+    """Reads vitals only; the full guard (thermal, disk) lives in ``body.guard``."""
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    def observe(self) -> BodyState:
+        return BodyState(vitals=read_vitals(self.config.body.thermal_zone, self.config.paths.data_dir))
+
+
+@dataclass
+class Observation:
+    now: float
+    body: BodyState
+    queue: QueueStats
+    cycle: int
+
+
+@dataclass
+class Decision:
+    kinds: list[str] | None  # None → any ready job; [] → deliberately idle
+    action: str = "any"
+    reason: str = ""
+    context: str = ""
+    scores: dict[str, float] = field(default_factory=dict)
+
+
+class Policy(Protocol):
+    def decide(self, obs: Observation, registry: JobRegistry) -> Decision: ...
+
+    def learn(self, decision: Decision, job: Job, reward: float, cpu: float, value: float) -> None: ...
+
+
+class PriorityPolicy:
+    """Default policy: run the highest-priority ready job; heavy jobs wait while yielding."""
+
+    def decide(self, obs: Observation, registry: JobRegistry) -> Decision:
+        if obs.body.mode in {"yield", "throttle"}:
+            light = [s.kind for s in registry.specs() if not s.heavy]
+            return Decision(kinds=light, action="light-only", reason=f"body mode {obs.body.mode}")
+        return Decision(kinds=None, action="any", reason="highest priority ready job")
+
+    def learn(self, decision: Decision, job: Job, reward: float, cpu: float, value: float) -> None:
+        return None
+
+
+@dataclass
+class CycleRecord:
+    cycle: int
+    status: str
+    action: str | None = None
+    job_id: int | None = None
+    kind: str | None = None
+    cpu: float = 0.0
+    wall: float = 0.0
+    value: float = 0.0
+    reward: float = 0.0
+    error: str | None = None
+
+
+Planner = Callable[["Agent"], None]
+
+
+def storage_lost(exc: BaseException) -> bool:
+    """The brain's storage went away under a running agent (a drive drop-out): a disk I/O error from SQLite, or an
+    OS error of a dead mount. Retrying cannot help; restarting into ``wait_for_storage`` can."""
+    import errno
+    import sqlite3
+
+    if isinstance(exc, sqlite3.OperationalError):
+        return "disk i/o error" in str(exc).lower()
+    return isinstance(exc, OSError) and exc.errno in {errno.EIO, errno.ENOTCONN, errno.ESTALE, errno.ENODEV}
+
+
+def heartbeat_path(config: Config) -> Path:
+    return config.paths.data_dir / "heartbeat"
+
+
+class Agent:
+    def __init__(
+        self,
+        config: Config,
+        db: Database,
+        registry: JobRegistry,
+        *,
+        policy: Policy | None = None,
+        body: Body | None = None,
+        notifier: Notifier | None = None,
+        services: dict[str, Any] | None = None,
+        planners: list[tuple[float, Planner]] | None = None,
+    ) -> None:
+        self.config = config
+        self.db = db
+        self.registry = registry
+        self.scheduler = Scheduler(
+            db,
+            retry_base=config.loop.retry_base,
+            retry_cap=config.loop.retry_cap,
+            max_crashes=config.loop.max_crashes,
+        )
+        self.policy: Policy = policy or PriorityPolicy()
+        self.body: Body = body or BasicBody(config)
+        self.notifier = notifier or Notifier()
+        self.services: dict[str, Any] = services if services is not None else {}
+        self.planners: list[tuple[float, Planner]] = planners or []
+        self._planner_due: list[float] = [0.0] * len(self.planners)
+        self.stop_event = threading.Event()
+        self.cycle_no = int(db.scalar("SELECT MAX(id) FROM cycles", default=0))
+        self.started = False
+        self.last: CycleRecord | None = None
+        self._pulsed = -1e18
+        self._quiet_last: tuple[str, str] = ("", "")
+        self._quiet_at = -1e18
+        self._hb_at = -1e18
+        self._hb_state = ""
+        self.build = read_build()  # the code this process runs; the feed compares it with what is installed
+        self.network_kinds = registry.network_kinds()
+        # proof of life during one long step (core.vigil): the feed never says offline while it works
+        self.vigil = vigil.Vigil(ping=self.notifier.watchdog, pulse=self._pulse, run_dir=config.paths.run_dir)
+        self.storage_lost = False  # set when the brain's drive stopped answering mid-run (see storage_lost)
+        from polymath.body.mirror import Mirror
+
+        self.mirror = Mirror(config, db)  # the hourly copy of the database on the backup drive (body.mirror)
+        from polymath.body.heat import HeatModel
+
+        self.heat = HeatModel(db)  # which jobs warm the Pi (body.heat): they wait while it is warm
+        self._clock_high = float(db.kv_get("clock_high") or 0.0)  # the latest time seen (core.clockguard)
+
+    # --------------------------------------------------------------- lifecycle
+    def start(self) -> dict[str, int]:
+        recovered = self.scheduler.recover()
+        if recovered["requeued"] or recovered["dead"]:
+            log.warning("recovered jobs after unclean shutdown", extra={"recovered": recovered})
+        with self.db.transaction():
+            now = time.time()
+            self.db.kv_set("agent_started", now)
+            kept = [float(t) for t in self.db.kv_get("starts") or [] if now - float(t) < 3600][-19:]
+            starts = [*kept, now]
+            self.db.kv_set("starts", starts)
+            recent = sum(1 for t in starts if now - t < RESTART_WINDOW_S)
+            if recent >= RESTARTS_TOO_MANY:  # crash loop or watchdog kills: the caretaker's inbox
+                issues.report(self.db, "agent", "restarts", f"the agent started {recent} times in the last "
+                              f"{RESTART_WINDOW_S // 60:.0f} min: it keeps stopping (journalctl -u polymath -n 80)",
+                              severity="bad")  # fmt: skip
+            if recovered["requeued"] or recovered["dead"]:
+                issues.report(self.db, "agent", "unclean_stop", f"the last run ended without a clean stop "
+                              f"(power cut, crash or kill): {recovered['requeued']} job(s) resumed")  # fmt: skip
+            self._report_rollback(now)
+            self._heartbeat("starting")
+        self.started = True
+        self.vigil.start()
+        self.notifier.ready(f"started at cycle {self.cycle_no}")
+        log.info("agent started", extra={"cycle": self.cycle_no, "recovered": recovered})
+        return recovered
+
+    def _report_rollback(self, now: float) -> None:
+        """``scripts/update-check.sh`` put the previous version back (the new one kept failing): say so, once."""
+        marker = Path(self.config.storage.standby_dir).parent / ROLLBACK_FILE
+        try:
+            info = json.loads(marker.read_text(encoding="utf-8"))
+            marker.replace(marker.with_name(f"{ROLLBACK_FILE}.reported-{int(now)}"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(info, dict):
+            return
+
+        def name(b: Any) -> str:
+            return f"v{b.get('version', '?')} ({b.get('commit') or '?'})" if isinstance(b, dict) else str(b)
+
+        issues.report(self.db, "update", "rolled_back", f"the update to {name(info.get('from'))} kept failing "
+                      f"({info.get('why', '?')}), so {name(info.get('to'))} was put back by itself. The failed "
+                      "code is in /opt/polymath/src.failed; journalctl -u polymath shows why it failed",
+                      severity="bad", now=now)  # fmt: skip
+
+    def stop(self, *_: Any) -> None:
+        self.stop_event.set()
+
+    def install_signal_handlers(self) -> None:
+        def handler(signum: int, frame: FrameType | None) -> None:
+            log.info("signal received; finishing current slice", extra={"signal": signum})
+            self.stop()
+
+        signal.signal(signal.SIGTERM, handler)
+        signal.signal(signal.SIGINT, handler)
+
+    def run(self, max_cycles: int | None = None, *, until_idle: bool = False) -> int:
+        """Run cycles until stopped (or ``max_cycles`` job cycles / the queue drains)."""
+        if not self.started:
+            self.start()
+        ran = 0
+        try:
+            while not self.stop_event.is_set():
+                record = self.cycle()
+                if record.status not in {"idle", "paused"}:
+                    ran += 1
+                if max_cycles is not None and ran >= max_cycles:
+                    break
+                if until_idle and record.status == "idle":
+                    break
+                if record.status in {"idle", "paused"}:
+                    self._sleep_idle(record.status)
+        finally:
+            self.shutdown()
+        return ran
+
+    def shutdown(self) -> None:
+        self.vigil.stop()
+        self.notifier.stopping()
+        if self.db.is_open:
+            try:
+                with self.db.transaction():
+                    self._heartbeat("stopped")
+            except Exception:  # pragma: no cover - best effort on the way out
+                log.exception("could not write final heartbeat")
+        log.info("agent stopped", extra={"cycle": self.cycle_no})
+
+    def _sleep_idle(self, status: str) -> None:
+        wait = self.config.loop.idle_sleep
+        if status == "idle":
+            nxt = self.scheduler.next_wakeup()
+            if nxt is not None:
+                wait = min(wait, max(0.05, nxt - time.time()))
+        self.stop_event.wait(wait)
+
+    # ------------------------------------------------------------------- cycle
+    def _tick(self) -> None:
+        self.vigil.progress()
+        self.notifier.watchdog()
+        self._pulse()
+
+    def _pulse(self, *, force: bool = False) -> None:
+        """Touch ``<data_dir>/heartbeat``: proof of life that does not wait for the slice's transaction to commit
+        (a long backup or quiz holds one), so the dashboard's /health stays truthful during long work."""
+        now = time.monotonic()
+        if not force and now - self._pulsed < PULSE_EVERY:
+            return
+        self._pulsed = now
+        path = heartbeat_path(self.config)
+        try:
+            path.touch(exist_ok=True)
+        except OSError:  # pragma: no cover - data dir unwritable; the database heartbeat still works
+            return
+
+    def _heartbeat(self, state: str) -> None:
+        self._hb_at, self._hb_state = time.monotonic(), state
+        self.db.kv_set("clock_high", self._clock_high)  # the latest time seen (core.clockguard)
+        self.db.kv_set(
+            "heartbeat",
+            {
+                "ts": time.time(),
+                "cycle": self.cycle_no,
+                "state": state,
+                "version": self.build.label(),
+                "build": self.build.key,
+            },
+        )
+        self._pulse(force=True)
+
+    def observe(self) -> Observation:
+        now = time.time()
+        try:
+            n = inbox.ingest(self.db, self.scheduler, self.config.paths.data_dir)
+            if n:
+                log.info("inbox requests applied", extra={"count": n})
+        except Exception:
+            log.exception("inbox ingestion failed")
+        for i, (interval, planner) in enumerate(self.planners):
+            if now >= self._planner_due[i]:
+                self._planner_due[i] = now + interval
+                name = f"{getattr(planner, '__module__', '?')}.{getattr(planner, '__name__', '?')}"
+                self.vigil.enter(f"planner {name.removeprefix('polymath.')}")
+                try:
+                    planner(self)
+                except Exception:
+                    log.exception("planner failed", extra={"planner": getattr(planner, "__name__", "?")})
+        self.vigil.enter("")
+        kinds = self.registry.kinds()
+        if self.network_kinds and not netstate.get(self.db).online:
+            kinds = [k for k in kinds if k not in self.network_kinds]  # the policy chooses among offline work only
+        queue = self.scheduler.ready_stats(kinds)
+        return Observation(now=now, body=self.body.observe(), queue=queue, cycle=self.cycle_no)
+
+    def cycle(self) -> CycleRecord:
+        started = time.time()
+        t0, c0 = time.monotonic(), time.process_time()
+        self._clock_check()
+        obs = self.observe()  # OBSERVE
+        self.services["observation"] = obs
+        temp = obs.body.vitals.temp_c if obs.body.vitals is not None else None
+        self._heat_step(temp, t0)
+        if obs.body.mode == "pause":
+            if not obs.body.allow or not self.scheduler.claimable(obs.body.allow):
+                return self._quiet_cycle("paused", obs, ", ".join(obs.body.reasons))
+            decision = Decision(kinds=list(obs.body.allow), action="maintenance", reason="paused: maintenance only")
+        else:
+            decision = self.policy.decide(obs, self.registry)  # DECIDE
+            decision = self._offline_filter(decision)
+        decision = self._quarantine_filter(decision)
+        decision = self._heat_filter(decision, temp)
+        self.vigil.enter("checkpoint")
+        self._checkpoint_if_asked()
+        self._mirror_between_slices()
+        self.vigil.enter("")
+        responses, failed_mark = self._responses(), self._failed_mark()
+        job = self.scheduler.claim(decision.kinds)
+        if job is None:
+            return self._quiet_cycle("idle", obs, decision.reason)
+        spec = self.registry.get(job.kind)
+        self.heat.started(job.kind)
+        self.vigil.enter(job.kind, job.id)
+        self.cycle_no += 1
+        self.services["cycle"] = self.cycle_no
+        rec = CycleRecord(cycle=self.cycle_no, status="failed", action=decision.action, job_id=job.id, kind=job.kind)
+        if spec is None:
+            with self.db.transaction():
+                self.scheduler.fail(job, f"no handler registered for kind {job.kind!r}", retryable=False)
+            rec.error = "unknown kind"
+            return self._finish(rec, started, t0, c0)
+        budget = min(
+            self.config.loop.job_time_budget * max(0.2, obs.body.intensity) * max(1.0, obs.body.slice_factor),
+            MAX_SLICE,
+        )
+        ctx = JobContext(
+            config=self.config,
+            db=self.db,
+            scheduler=self.scheduler,
+            job=job,
+            deadline=time.monotonic() + budget,
+            stop_event=self.stop_event,
+            services=self.services,
+            on_tick=self._tick,
+            intensity=obs.body.intensity,
+        )
+        from polymath.core import trace
+
+        traced = trace.current_job.set(job.id)  # every fact recorded in this slice remembers it (interface.explain)
+        try:
+            with self.db.transaction():
+                outcome = spec.handler(ctx)  # ACT
+                if not isinstance(outcome, JobOutcome):
+                    raise TypeError(f"handler for {job.kind} returned {type(outcome).__name__}")
+                cpu = time.process_time() - c0
+                self._integrate(job, outcome, cpu)  # INTEGRATE
+                rec.status = "done" if outcome.done else "continue"
+                rec.value = outcome.value
+                rec.reward = self.evaluate(outcome, cpu)  # EVALUATE
+                rec.cpu = cpu
+                if self._responses() > responses:  # a server answered during this slice: the internet works
+                    netstate.succeeded(self.db, time.time())
+                elif len(hosts := self._failed_since(failed_mark)) >= 2:  # the job coped with its own errors,
+                    netstate.failed(self.db, time.time(), f"no connection to {', '.join(sorted(hosts)[:3])}")
+                self.policy.learn(decision, job, rec.reward, cpu, outcome.value)  # LEARN
+                self._record(rec, started, t0, json.dumps(outcome.result, default=str)[:4000])
+                if self._hb_state != "running" or time.monotonic() - self._hb_at >= RUNNING_HEARTBEAT_EVERY:
+                    self._heartbeat("running")  # the cycles row already records every slice
+                self._quiet_last = ("running", "")
+        except Interrupted:
+            with self.db.transaction():
+                self.scheduler.release(job)
+            rec.status = "interrupted"
+        except PermanentError as exc:
+            rec.error = str(exc)
+            with self.db.transaction():
+                self.scheduler.fail(job, f"permanent: {exc}", cpu=time.process_time() - c0, retryable=False)
+                self._record(rec, started, t0, json.dumps({"error": str(exc)}))
+                issues.report(self.db, "jobs", f"permanent:{job.kind}", f"{job.kind} cannot be done: {exc}")
+            log.warning("job failed permanently", extra={"job": job.id, "kind": job.kind, "error": str(exc)})
+        except Exception as exc:
+            rec.error = f"{type(exc).__name__}: {exc}"
+            if storage_lost(exc):  # the brain's drive stopped answering: nothing can be written; restart into waiting
+                log.critical("the brain's storage stopped answering; stopping so the agent restarts and waits for "
+                             "its drive", extra={"error": rec.error})  # fmt: skip
+                self.storage_lost = True
+                self.stop()
+                return self._finish(rec, started, t0, c0)
+            if netstate.is_network_error(exc) and self._responses() == responses:
+                return self._network_down(job, rec, started, t0, c0)
+            with self.db.transaction():
+                state = self.scheduler.fail(job, rec.error, cpu=time.process_time() - c0)
+                self._record(rec, started, t0, json.dumps({"error": rec.error, "state": state}))
+                if state == "dead":  # it gave up: the caretaker's inbox (core/issues)
+                    why = f"{job.kind} gave up after {job.attempts + 1} tries: {rec.error}"
+                    issues.report(self.db, "jobs", f"dead:{job.kind}", why, severity="bad")
+            log.exception("job slice failed", extra={"job": job.id, "kind": job.kind, "state": state})
+        finally:
+            trace.current_job.reset(traced)
+        return self._finish(rec, started, t0, c0)
+
+    def _responses(self) -> int:
+        """How many answers the HTTP client has had (0 without one): rising means the internet works."""
+        return int(getattr(self.services.get("http"), "responses", 0) or 0)
+
+    def _failed_mark(self) -> int:
+        return int(getattr(self.services.get("http"), "connection_failures", 0) or 0)
+
+    def _failed_since(self, mark: int) -> set[str]:
+        """Hosts whose connection failed during this slice (two or more different ones, with no server answering,
+        look like an outage; one dead site does not)."""
+        http = self.services.get("http")
+        return set(http.failed_since(mark)) if http is not None and hasattr(http, "failed_since") else set()
+
+    def _offline_filter(self, decision: Decision) -> Decision:
+        """Offline, network jobs are held back (not failed): everything else, which needs only what is already
+        on disk, keeps running. ``net.probe`` (not a network job here) finds out when the internet is back."""
+        if not self.network_kinds or decision.kinds == [] or netstate.get(self.db).online:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        allowed = [k for k in kinds if k not in self.network_kinds]
+        reason = f"{decision.reason}; offline: studying what it has" if decision.reason else "offline"
+        return Decision(allowed, decision.action, reason, decision.context, decision.scores)
+
+    def _clock_check(self) -> None:
+        """A clock that went back (a Pi without a real-time clock, after a power cut, offline) never stalls the
+        queue: waiting jobs move back with it (``core.clockguard``)."""
+        from polymath.core import clockguard
+
+        try:
+            self._clock_high, back = clockguard.check(self.db, time.time(), self._clock_high)
+            if back:
+                log.warning("the clock went back", extra={"seconds": round(back)})
+        except Exception:  # never stops the loop
+            log.debug("clock check failed", exc_info=True)
+
+    def _heat_step(self, temp: float | None, now_mono: float) -> None:
+        try:
+            self.heat.step("", temp, now_mono)
+            self.heat.save()
+        except Exception:  # learning the heat never stops the loop
+            log.debug("heat model step failed", exc_info=True)
+
+    def _heat_filter(self, decision: Decision, temp: float | None) -> Decision:
+        """While the Pi is warm, the job kinds that heat it most wait (``body.heat``); cooler work goes on."""
+        hot = self.heat.hot_kinds(temp, self.config.body.throttle_celsius)
+        if not hot or decision.kinds == []:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        reason = (
+            f"{decision.reason}; warm: the hottest work waits" if decision.reason else "warm: the hottest work waits"
+        )
+        return Decision([k for k in kinds if k not in hot], decision.action, reason, decision.context, decision.scores)
+
+    def _quarantine_filter(self, decision: Decision) -> Decision:
+        """Job kinds Orin the caretaker paused (a kind that kept failing the same way) are held back for a while."""
+        from polymath.agents.caretaker import quarantined
+
+        held = quarantined(self.db)
+        if not held or decision.kinds == []:
+            return decision
+        kinds = decision.kinds if decision.kinds is not None else self.registry.kinds()
+        return Decision([k for k in kinds if k not in held], decision.action, decision.reason, decision.context,
+                        decision.scores)  # fmt: skip
+
+    def _checkpoint_if_asked(self) -> None:
+        """Orin asked for a write-ahead log checkpoint (the WAL kept growing): run it between slices, when no
+        transaction is open on this connection."""
+        try:
+            asked = self.db.kv_get("caretaker_checkpoint")
+            if not asked:
+                return
+            row = self.db.one("PRAGMA wal_checkpoint(TRUNCATE)")
+            with self.db.transaction():
+                self.db.kv_set("caretaker_checkpoint", None)
+            log.info("write-ahead log checkpoint", extra={"result": list(row) if row is not None else None})
+        except Exception:  # not an issue: a checkpoint that cannot run now is asked for again by Orin
+            log.debug("checkpoint skipped", exc_info=True)
+
+    def _mirror_between_slices(self) -> None:
+        """The hourly mirror starts here, with no transaction open on this connection (``body.mirror``)."""
+        try:
+            self.mirror.record()
+            self.mirror.maybe_start()
+        except Exception:  # the mirror never stops the loop; it is tried again in five minutes
+            self.mirror.next_at = time.time() + 300.0
+            log.exception("mirror step failed")
+
+    def _network_down(self, job: Job, rec: CycleRecord, started: float, t0: float, c0: float) -> CycleRecord:
+        """A slice died on a dead connection: the job keeps its attempts and checkpoint and waits; enough of these
+        in a row and the agent calls itself offline (``core.netstate``)."""
+        rec.status = "interrupted"
+        now, error = time.time(), rec.error or "network error"
+        with self.db.transaction():
+            went = netstate.failed(self.db, now, error)
+            self.scheduler.defer(job, error, delay=NET_RETRY_S, cpu=time.process_time() - c0)
+            self._record(rec, started, t0, json.dumps({"error": error, "state": "deferred: no internet"}))
+        if went:
+            log.warning("the internet is gone: network jobs wait, studying what is on disk", extra={"error": rec.error})
+        else:
+            log.info("network job deferred", extra={"job": job.id, "kind": job.kind, "error": rec.error})
+        return self._finish(rec, started, t0, c0)
+
+    def _integrate(self, job: Job, outcome: JobOutcome, cpu: float) -> None:
+        if outcome.done:
+            self.scheduler.complete(job, result=outcome.result or None, cpu=cpu, value=outcome.value)
+        else:
+            self.scheduler.checkpoint(
+                job, outcome.checkpoint or job.checkpoint or {}, delay=outcome.delay, cpu=cpu, value=outcome.value
+            )
+
+    @staticmethod
+    def evaluate(outcome: JobOutcome, cpu: float) -> float:
+        """Reward = value produced per CPU-second (floored to avoid division blow-ups)."""
+        return outcome.value / max(cpu, 0.05)
+
+    def _record(self, rec: CycleRecord, started: float, t0: float, detail: str) -> None:
+        rec.wall = time.monotonic() - t0
+        self.db.execute(
+            "INSERT INTO cycles(id, started, ended, action, job_id, status, cpu_seconds, wall_seconds, value, "
+            "reward, detail) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                rec.cycle,
+                started,
+                time.time(),
+                f"{rec.kind}" if rec.kind else rec.action,
+                rec.job_id,
+                rec.status,
+                rec.cpu,
+                rec.wall,
+                rec.value,
+                rec.reward,
+                detail,
+            ),
+        )
+
+    def _slow_step(self, kind: str, how: dict[str, float]) -> None:
+        """A slice that went long without a sign of life, or kept the agent busy for minutes, is recorded
+        (kv ``slow_steps``: the slowest per kind) and reported once a day (the caretaker's inbox: job-slow)."""
+        took, silent = float(how["took"]), float(how["silent"])
+        if not kind or (silent < SILENT_REPORT_S and took < SLOW_REPORT_S) or self.storage_lost:
+            return
+        try:
+            with self.db.transaction():
+                slow = dict(self.db.kv_get("slow_steps") or {})
+                old: dict[str, Any] = slow[kind] if isinstance(slow.get(kind), dict) else {}
+                slow[kind] = {"took": round(max(took, float(old.get("took") or 0)), 1),
+                              "silent": round(max(silent, float(old.get("silent") or 0)), 1),
+                              "n": int(old.get("n") or 0) + 1, "at": time.time()}  # fmt: skip
+                self.db.kv_set("slow_steps", dict(sorted(slow.items(), key=lambda kv: -kv[1]["silent"])[:30]))
+                why = (f"{kind} went {silent:.0f} s without a sign of life" if silent >= SILENT_REPORT_S
+                       else f"{kind} kept the agent busy for {took / 60:.1f} min in one step")  # fmt: skip
+                issues.report(self.db, "jobs", f"slow:{kind}", f"{why} (the vigil kept it from being restarted)",
+                              severity="info", every=86400.0)  # fmt: skip
+        except Exception:  # never let the record of a slow step stop the loop
+            log.exception("could not record a slow step", extra={"kind": kind})
+        log.warning("slow step", extra={"kind": kind, "took_s": round(took, 1), "silent_s": round(silent, 1)})
+
+    def _quiet_cycle(self, status: str, obs: Observation, reason: str) -> CycleRecord:
+        # Each commit writes at least a page; an idle agent cycling every 2 s would write ~350 MB a day just
+        # for this. The pulse file already proves it is alive, so the row is refreshed only when something
+        # changed or every QUIET_HEARTBEAT_EVERY seconds.
+        now = time.monotonic()
+        key = (status, reason if status == "paused" else "")
+        if key != self._quiet_last or now - self._quiet_at >= QUIET_HEARTBEAT_EVERY:
+            self._quiet_last, self._quiet_at = key, now
+            with self.db.transaction():
+                self._heartbeat(status)
+                if status == "paused":
+                    self.db.kv_set("paused_reason", reason)
+        else:
+            self._pulse()
+        self.vigil.enter("")
+        self.notifier.watchdog()
+        rec = CycleRecord(cycle=self.cycle_no, status=status, action=reason)
+        self.last = rec
+        return rec
+
+    def _finish(self, rec: CycleRecord, started: float, t0: float, c0: float) -> CycleRecord:
+        rec.wall = time.monotonic() - t0
+        rec.cpu = rec.cpu or (time.process_time() - c0)
+        self.last = rec
+        self._slow_step(rec.kind or "", self.vigil.section())
+        self.vigil.enter("")
+        self.notifier.watchdog()
+        if self.notifier.active:
+            self.notifier.status(f"cycle {rec.cycle}: {rec.kind} {rec.status}")
+        log.debug(
+            "cycle",
+            extra={
+                "cycle": rec.cycle,
+                "kind": rec.kind,
+                "status": rec.status,
+                "cpu": round(rec.cpu, 4),
+                "reward": round(rec.reward, 3),
+            },
+        )
+        return rec
